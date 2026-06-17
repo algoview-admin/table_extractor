@@ -2,8 +2,9 @@
 .env
 .env.local
 
-# Input data
+# Data
 # input_data/
+# project/
 
 # Python cache
 __pycache__/

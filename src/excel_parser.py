@@ -212,90 +212,81 @@ def _is_filled(value: Any) -> bool:
     return True
 
 
-def _passes_quality_filter(
-    df: "pd.DataFrame",
-    grid: List[List[Any]],
-    band_start: int,
-    band_end: int,
-    col_start: int,
-    col_end: int,
-    min_fill_rate: float = 0.20,
-    min_dense_rows: int = 2,
-    dense_row_threshold: float = 0.25,
-) -> bool:
-    """Return False for sparse/incomplete tables not suitable for data analysis.
+# Characters removed before numeric parsing (Japanese minus signs, thousand separators)
+_NUM_STRIP = str.maketrans("", "", ",、△▲")
 
-    Two independent signals are checked:
 
-    1. Fill rate of the raw grid region: the fraction of non-empty cells in the
-       entire rectangular area.  A selection menu, index list, or form skeleton
-       typically has a very low fill rate because most cells are blank.
-
-    2. Dense-row count: the number of DataFrame rows where at least
-       `dense_row_threshold` of the cells contain a value.  A table that is
-       essentially just a header row with one (or zero) data rows is not
-       useful for analysis.
-
-    A table is rejected when EITHER condition fails.
-    """
-    # --- Signal 1: fill rate across the raw grid region ---
-    raw_total = (band_end - band_start + 1) * (col_end - col_start + 1)
-    if raw_total == 0:
+def _cell_is_numeric(v: Any) -> bool:
+    """Return True when the cell value can be interpreted as a number."""
+    if isinstance(v, bool):
         return False
-    raw_filled = sum(
-        1
-        for r in range(band_start, band_end + 1)
-        for c in range(col_start, col_end + 1)
-        if _is_filled(grid[r][c])
-    )
-    fill_rate = raw_filled / raw_total
-    if fill_rate < min_fill_rate:
+    if isinstance(v, (int, float)):
+        return v == v  # exclude float NaN
+    try:
+        float(str(v).strip().translate(_NUM_STRIP))
+        return True
+    except (ValueError, TypeError):
         return False
 
-    # --- Signal 2: number of rows with meaningful content ---
-    if df.empty:
-        return False
-    n_cols = max(len(df.columns), 1)
-    dense_rows = sum(
-        1
-        for _, row in df.iterrows()
-        if sum(1 for v in row if v is not None and str(v).strip()) / n_cols
-        >= dense_row_threshold
-    )
-    if dense_rows < min_dense_rows:
-        return False
 
-    return True
+# ── Row-type constants ────────────────────────────────────────────────────────
+_RT_EMPTY   = "empty"    # no filled cells
+_RT_TITLE   = "title"    # 1 short text cell — table/section name candidate
+_RT_COL_HDR = "col_hdr"  # ≥2 text cells, few numbers — column-axis labels
+_RT_DATA    = "data"     # ≥55 % numeric — measurement rows
+_RT_MIXED   = "mixed"    # doesn't fit cleanly (e.g. row-header + numbers)
 
 
-def _find_row_bands(
-    grid: List[List[Any]], max_row: int, max_col: int, gap_threshold: int = 1
-) -> List[Tuple[int, int]]:
-    """Return (start_row, end_row) pairs for bands of non-empty rows."""
-    bands: List[Tuple[int, int]] = []
-    band_start: Optional[int] = None
-    empty_streak = 0
+def _row_content_profile(grid: List[List[Any]], r: int, max_col: int) -> Dict[str, Any]:
+    """Return a content profile dict for a single grid row."""
+    numeric = text = 0
+    col_min: Optional[int] = None
+    col_max: Optional[int] = None
+    texts: List[str] = []
 
-    for r in range(1, max_row + 1):
-        has_content = any(_is_filled(grid[r][c]) for c in range(1, max_col + 1))
-
-        if has_content:
-            if band_start is None:
-                band_start = r
-            empty_streak = 0
+    for c in range(1, max_col + 1):
+        v = grid[r][c]
+        if not _is_filled(v):
+            continue
+        col_min = c if col_min is None else min(col_min, c)
+        col_max = c
+        if _cell_is_numeric(v):
+            numeric += 1
         else:
-            if band_start is not None:
-                empty_streak += 1
-                if empty_streak >= gap_threshold:
-                    bands.append((band_start, r - empty_streak))
-                    band_start = None
-                    empty_streak = 0
+            text += 1
+            texts.append(str(v).strip())
 
-    if band_start is not None:
-        end = max_row - empty_streak if empty_streak else max_row
-        bands.append((band_start, end))
+    return {
+        "numeric": numeric,
+        "text": text,
+        "filled": numeric + text,
+        "col_min": col_min,
+        "col_max": col_max,
+        "texts": texts,
+    }
 
-    return bands
+
+def _classify_row(p: Dict[str, Any]) -> str:
+    """Classify a row profile into one of the _RT_* constants."""
+    filled = p["filled"]
+    if filled == 0:
+        return _RT_EMPTY
+
+    n_ratio = p["numeric"] / filled
+
+    # Mostly numeric → data row
+    if n_ratio >= 0.55:
+        return _RT_DATA
+
+    # Single short text cell → title candidate
+    if filled == 1 and p["text"] == 1:
+        return _RT_TITLE if (p["texts"] and len(p["texts"][0]) <= 40) else _RT_COL_HDR
+
+    # Multiple text cells, very few numbers → column-header row
+    if p["text"] >= 2 and n_ratio <= 0.30:
+        return _RT_COL_HDR
+
+    return _RT_MIXED
 
 
 def _find_column_groups(
@@ -305,7 +296,10 @@ def _find_column_groups(
     max_col: int,
     gap_threshold: int = 2,
 ) -> List[Tuple[int, int]]:
-    """Return (start_col, end_col) pairs within a row band, splitting on column gaps."""
+    """Return (start_col, end_col) pairs within a row span, splitting on column gaps.
+
+    Used to separate side-by-side tables that share the same row range.
+    """
     col_has_content = [False] * (max_col + 1)
     for r in range(start_row, end_row + 1):
         for c in range(1, max_col + 1):
@@ -339,6 +333,245 @@ def _find_column_groups(
     return groups
 
 
+def _detect_table_regions(
+    grid: List[List[Any]], max_row: int, max_col: int
+) -> List[Dict[str, Any]]:
+    """Detect candidate table regions using structural row-by-row analysis.
+
+    Algorithm
+    ---------
+    1. Classify every row as empty / title / col_hdr / data / mixed.
+    2. Run a state machine that accumulates rows into regions.  Key transition
+       rules that go beyond simple "empty row = table boundary":
+
+       • A col_hdr row appearing *after data rows* without an empty separator
+         signals a structural discontinuity (new table header) → flush the
+         current region and start a new one.
+
+       • A title row appearing after data rows also signals a new table.
+
+       • Up to 4 consecutive empty rows are tolerated between a title and the
+         header/data of its table.  More than 4 clears the pending title.
+
+    3. Within each region the actual column span is tracked from every
+       contributing row so that row-header columns to the left of the value
+       area are always included.
+
+    Returns a list of region dicts, each with:
+        band_start  – first row index of the region
+        band_end    – last row index
+        col_start   – leftmost non-empty column across all region rows
+        col_end     – rightmost non-empty column
+        title_rows  – [(row_idx, text)] for title rows in/above the region
+        header_rows – [row_idx] for col_hdr rows
+        data_rows   – [row_idx] for data/mixed rows
+    """
+    if max_row == 0 or max_col == 0:
+        return []
+
+    # ── Phase 1: classify all rows ──
+    profiles: Dict[int, Dict] = {}
+    row_types: Dict[int, str] = {}
+    for r in range(1, max_row + 1):
+        p = _row_content_profile(grid, r, max_col)
+        profiles[r] = p
+        row_types[r] = _classify_row(p)
+
+    # ── Phase 2: state machine ──
+    def _mk() -> Dict:
+        return {
+            "band_start": None,
+            "band_end": None,
+            "col_start": max_col + 1,
+            "col_end": 0,
+            "title_rows": [],   # [(row_idx, text)]
+            "header_rows": [],  # [row_idx]
+            "data_rows": [],    # [row_idx]
+        }
+
+    def _upd_cols(reg: Dict, r: int) -> None:
+        p = profiles[r]
+        if p["col_min"] is not None:
+            reg["col_start"] = min(reg["col_start"], p["col_min"])
+        if p["col_max"] is not None:
+            reg["col_end"] = max(reg["col_end"], p["col_max"])
+
+    def _flush(reg: Dict, last_row: int, regions: List) -> None:
+        if not (reg["data_rows"] or len(reg["header_rows"]) >= 2):
+            return
+        if reg["band_start"] is None or reg["col_end"] < reg["col_start"]:
+            return
+        reg["band_end"] = last_row
+        regions.append(reg)
+
+    regions: List[Dict] = []
+    cur = _mk()
+    pending_titles: List[Tuple[int, str]] = []  # title rows not yet attached
+    consec_empty = 0
+    last_filled = 0
+
+    for r in range(1, max_row + 1):
+        rt = row_types[r]
+
+        # ── empty row ──────────────────────────────────────────────────────
+        if rt == _RT_EMPTY:
+            consec_empty += 1
+            if cur["data_rows"] and consec_empty >= 1:
+                # Gap after data rows → close this table
+                _flush(cur, last_filled, regions)
+                cur = _mk()
+                pending_titles = []
+            elif consec_empty > 4:
+                # Long blank stretch → abandon pending titles
+                pending_titles = []
+            continue
+
+        consec_empty = 0
+        last_filled = r
+        p = profiles[r]
+
+        # ── title row ──────────────────────────────────────────────────────
+        if rt == _RT_TITLE:
+            if cur["data_rows"]:
+                # Title appearing after data rows → end current table
+                _flush(cur, r - 1, regions)
+                cur = _mk()
+                pending_titles = []
+            text = " ".join(p["texts"])
+            pending_titles.append((r, text))
+            continue
+
+        # ── column-header row ──────────────────────────────────────────────
+        if rt == _RT_COL_HDR:
+            if cur["data_rows"]:
+                # Header appearing after data without a blank row
+                # → structural discontinuity: close current, start fresh
+                _flush(cur, r - 1, regions)
+                cur = _mk()
+                # pending_titles may belong to this new table — keep them
+
+            if cur["band_start"] is None:
+                # Attach pending titles and open the region
+                for tr, tt in pending_titles:
+                    cur["title_rows"].append((tr, tt))
+                    _upd_cols(cur, tr)
+                pending_titles = []
+                cur["band_start"] = cur["title_rows"][0][0] if cur["title_rows"] else r
+
+            cur["header_rows"].append(r)
+            _upd_cols(cur, r)
+            continue
+
+        # ── data / mixed row ───────────────────────────────────────────────
+        if cur["band_start"] is None:
+            for tr, tt in pending_titles:
+                cur["title_rows"].append((tr, tt))
+                _upd_cols(cur, tr)
+            pending_titles = []
+            cur["band_start"] = cur["title_rows"][0][0] if cur["title_rows"] else r
+
+        cur["data_rows"].append(r)
+        _upd_cols(cur, r)
+
+    # Final flush
+    if cur["band_start"] is not None:
+        _flush(cur, last_filled, regions)
+
+    return regions
+
+
+def _classify_table_quality(
+    df: "pd.DataFrame",
+    grid: List[List[Any]],
+    band_start: int,
+    band_end: int,
+    col_start: int,
+    col_end: int,
+) -> str:
+    """Classify a detected rectangular region into one of three quality tiers.
+
+    Returns
+    -------
+    "ok"       — suitable for analysis
+    "metadata" — structured but not analytical (menus, index/TOC tables)
+    "discard"  — not a table (free-text paragraphs, notes, empty fragments)
+
+    Signal mapping
+    --------------
+    1. Fill rate < 20 %                       → discard
+    2. Fewer than 2 dense data rows           → discard
+    3. Wide + short + all-text (≤5 rows, ≥5 cols, 0 numeric) → discard
+    4. Long text (col header or cell > 80 ch, OR > 25 % of text cells > 40 ch)
+       • + zero numeric cells                 → discard (free-text block)
+       • + some numeric cells                 → discard (index/TOC table)
+    """
+    # Signal 1: raw fill rate
+    raw_total = (band_end - band_start + 1) * (col_end - col_start + 1)
+    if raw_total == 0:
+        return "discard"
+    raw_filled = sum(
+        1
+        for r in range(band_start, band_end + 1)
+        for c in range(col_start, col_end + 1)
+        if _is_filled(grid[r][c])
+    )
+    if raw_filled / raw_total < 0.20:
+        return "discard"
+
+    # Signal 2: dense rows (≥25 % of columns filled)
+    if df.empty:
+        return "discard"
+    n_cols = max(len(df.columns), 1)
+    dense_rows = sum(
+        1
+        for _, row in df.iterrows()
+        if sum(1 for v in row if v is not None and str(v).strip()) / n_cols >= 0.25
+    )
+    if dense_rows < 2:
+        return "discard"
+
+    # Signal 3: wide + short + all-text → selection menus / form grids
+    if df.shape[0] <= 5 and df.shape[1] >= 5:
+        num_ct = sum(
+            int(pd.to_numeric(df[c], errors="coerce").notna().sum()) for c in df.columns
+        )
+        if num_ct == 0:
+            return "discard"
+
+    # Signal 4: long-text content (check column headers AND cell values)
+    txt_ct = lng_ct = 0
+    max_len = 0
+
+    def _tally(raw: str) -> None:
+        nonlocal txt_ct, lng_ct, max_len
+        s = raw.strip()
+        if not s or s.lower() == "nan":
+            return
+        try:
+            float(s.translate(_NUM_STRIP))
+            return
+        except (ValueError, TypeError):
+            pass
+        txt_ct += 1
+        n = len(s)
+        if n > max_len:
+            max_len = n
+        if n > 40:
+            lng_ct += 1
+
+    for col_name in df.columns:
+        _tally(str(col_name))
+    for _, row in df.iterrows():
+        for v in row:
+            if not pd.isna(v):
+                _tally(str(v))
+
+    if max_len > 80 or (txt_ct >= 3 and lng_ct / txt_ct > 0.25):
+        return "discard"
+
+    return "ok"
+
+
 # ---------------------------------------------------------------------------
 # DataFrame extraction from grid region
 # ---------------------------------------------------------------------------
@@ -367,15 +600,27 @@ def _detect_header_rows(rows: List[List[Any]]) -> Tuple[int, int]:
             1 for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)
         )
 
-    # --- Step 1: skip leading title rows ---
+    # --- Step 1: skip leading title rows (and blank spacer rows between them) ---
     # A title row has exactly 1 non-empty cell (a string).
-    # We skip consecutive such rows as long as SOME later row in the region
-    # is wider (≥ 2 non-empty cells), meaning actual table content follows.
-    # This handles both single-title-row and multi-line description blocks
-    # that sit above a data table in the same band.
+    # All-empty rows that appear before the first wide row are treated as
+    # spacers within the title block and are also skipped, so that a column
+    # header row separated from its title by one or more blank rows is still
+    # recognised correctly (e.g. title in row 2, blank in row 3, headers in row 4).
     n_title = 0
     while n_title < len(rows) - 1:
         nn_curr = _nn(rows[n_title])
+
+        # All-empty row — skip as a spacer if a wider row still exists below
+        if not nn_curr:
+            has_wider_below = any(
+                len(_nn(rows[j])) >= 2 for j in range(n_title + 1, len(rows))
+            )
+            if has_wider_below:
+                n_title += 1
+                continue
+            else:
+                break
+
         if not (len(nn_curr) == 1 and isinstance(nn_curr[0], str)):
             break
         # Accept this row as a title only if a wider row exists further down
@@ -504,36 +749,6 @@ def _extract_dataframe(
 # ---------------------------------------------------------------------------
 
 
-def _find_section_titles(
-    grid: List[List[Any]], max_row: int, max_col: int, lookahead: int = 5
-) -> Dict[int, str]:
-    """
-    Pre-pass: scan every row for "section title" candidates.
-
-    A row qualifies when:
-    - It has exactly 1 non-empty cell that is a string, AND
-    - Within the next `lookahead` rows there is at least one row with
-      2+ non-empty cells (i.e. real table content follows soon).
-
-    Returns {row_index: title_text} for all qualifying rows.
-    """
-    titles: Dict[int, str] = {}
-
-    for r in range(1, max_row + 1):
-        filled = [grid[r][c] for c in range(1, max_col + 1) if _is_filled(grid[r][c])]
-        if len(filled) != 1 or not isinstance(filled[0], str):
-            continue
-
-        # Check whether a multi-cell row exists within the lookahead window
-        for r2 in range(r + 1, min(r + lookahead + 1, max_row + 1)):
-            multi = sum(1 for c in range(1, max_col + 1) if _is_filled(grid[r2][c]))
-            if multi >= 2:
-                titles[r] = str(filled[0]).strip()
-                break
-
-    return titles
-
-
 def _detect_tables_in_grid(
     grid: List[List[Any]],
     max_row: int,
@@ -541,18 +756,17 @@ def _detect_tables_in_grid(
     sheet_name: str,
     table_counter: Dict[str, int],
 ) -> List[DetectedTable]:
+    """Detect tables using structural row classification and state machine."""
     if max_row == 0 or max_col == 0:
         return []
 
-    # Pre-pass: build a map of section title rows so that titles separated
-    # from their table by empty rows (different bands) can still be associated.
-    section_titles = _find_section_titles(grid, max_row, max_col, lookahead=5)
-    used_title_rows: set = set()
-
-    row_bands = _find_row_bands(grid, max_row, max_col, gap_threshold=1)
+    regions = _detect_table_regions(grid, max_row, max_col)
     detected: List[DetectedTable] = []
 
-    for band_start, band_end in row_bands:
+    for reg in regions:
+        band_start = reg["band_start"]
+        band_end = reg["band_end"]
+
         col_groups = _find_column_groups(
             grid, band_start, band_end, max_col, gap_threshold=2
         )
@@ -567,32 +781,15 @@ def _detect_tables_in_grid(
             if df.empty or len(df) == 0:
                 continue
 
-            # Single-column regions with few data rows are almost always free-text
-            # notes or description blocks, not structured data tables.
-            # Require ≥ 4 data rows for single-column regions to be treated as tables.
-            if df.shape[1] == 1 and len(df) < 4:
-                continue
-
-            # Reject sparse/incomplete tables (e.g. selection menus, index pages).
-            if not _passes_quality_filter(
+            quality = _classify_table_quality(
                 df, grid, band_start, band_end, col_start, col_end
-            ):
+            )
+            if quality != "ok":
                 continue
 
-            # --- Title resolution (priority: within-band > look-back pre-pass) ---
             effective_title = inner_title
-
-            if effective_title is None:
-                # Collect all unused section title rows within `lookahead` rows above
-                # the band start and join them in order (handles multi-line headings).
-                nearby = sorted(
-                    r
-                    for r in section_titles
-                    if 0 < band_start - r <= 5 and r not in used_title_rows
-                )
-                if nearby:
-                    effective_title = " / ".join(section_titles[r] for r in nearby)
-                    used_title_rows.update(nearby)
+            if effective_title is None and reg["title_rows"]:
+                effective_title = " / ".join(t for _, t in reg["title_rows"])
 
             safe = sheet_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
             table_counter[safe] = table_counter.get(safe, 0) + 1
