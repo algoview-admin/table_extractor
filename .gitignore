@@ -3,7 +3,7 @@
 .env.local
 
 # Input data
-input_data/
+# input_data/
 
 # Python cache
 __pycache__/
@@ -47,4 +47,5 @@ ENV/
 htmlcov/
 
 # Streamlit cache
-.streamlit/
+.streamlit/*.json
+.streamlit/secrets.toml

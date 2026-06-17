@@ -212,6 +212,62 @@ def _is_filled(value: Any) -> bool:
     return True
 
 
+def _passes_quality_filter(
+    df: "pd.DataFrame",
+    grid: List[List[Any]],
+    band_start: int,
+    band_end: int,
+    col_start: int,
+    col_end: int,
+    min_fill_rate: float = 0.20,
+    min_dense_rows: int = 2,
+    dense_row_threshold: float = 0.25,
+) -> bool:
+    """Return False for sparse/incomplete tables not suitable for data analysis.
+
+    Two independent signals are checked:
+
+    1. Fill rate of the raw grid region: the fraction of non-empty cells in the
+       entire rectangular area.  A selection menu, index list, or form skeleton
+       typically has a very low fill rate because most cells are blank.
+
+    2. Dense-row count: the number of DataFrame rows where at least
+       `dense_row_threshold` of the cells contain a value.  A table that is
+       essentially just a header row with one (or zero) data rows is not
+       useful for analysis.
+
+    A table is rejected when EITHER condition fails.
+    """
+    # --- Signal 1: fill rate across the raw grid region ---
+    raw_total = (band_end - band_start + 1) * (col_end - col_start + 1)
+    if raw_total == 0:
+        return False
+    raw_filled = sum(
+        1
+        for r in range(band_start, band_end + 1)
+        for c in range(col_start, col_end + 1)
+        if _is_filled(grid[r][c])
+    )
+    fill_rate = raw_filled / raw_total
+    if fill_rate < min_fill_rate:
+        return False
+
+    # --- Signal 2: number of rows with meaningful content ---
+    if df.empty:
+        return False
+    n_cols = max(len(df.columns), 1)
+    dense_rows = sum(
+        1
+        for _, row in df.iterrows()
+        if sum(1 for v in row if v is not None and str(v).strip()) / n_cols
+        >= dense_row_threshold
+    )
+    if dense_rows < min_dense_rows:
+        return False
+
+    return True
+
+
 def _find_row_bands(
     grid: List[List[Any]], max_row: int, max_col: int, gap_threshold: int = 1
 ) -> List[Tuple[int, int]]:
@@ -515,6 +571,12 @@ def _detect_tables_in_grid(
             # notes or description blocks, not structured data tables.
             # Require ≥ 4 data rows for single-column regions to be treated as tables.
             if df.shape[1] == 1 and len(df) < 4:
+                continue
+
+            # Reject sparse/incomplete tables (e.g. selection menus, index pages).
+            if not _passes_quality_filter(
+                df, grid, band_start, band_end, col_start, col_end
+            ):
                 continue
 
             # --- Title resolution (priority: within-band > look-back pre-pass) ---
