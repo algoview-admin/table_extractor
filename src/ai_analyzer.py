@@ -1,7 +1,6 @@
 import json
-from typing import Any, Dict, List
-
-from openai import OpenAI
+import os
+from typing import Any, Dict, List, Tuple
 
 from .models import (
     AIAnalysisResult,
@@ -12,6 +11,33 @@ from .models import (
     TableAnalysisResult,
 )
 from .table_relations import detect_sum_relations, format_relation_facts
+
+
+def _make_client() -> Tuple[Any, str]:
+    """Return (client, model_or_deployment) based on OPENAI_API_TYPE env var.
+
+    Set OPENAI_API_TYPE=azure to use Azure OpenAI; omit or set to "openai" for
+    the standard OpenAI API.  All credentials are read from environment variables
+    so no secrets need to be passed through function arguments.
+    """
+    api_type = os.getenv("OPENAI_API_TYPE", "openai").strip().lower()
+
+    if api_type == "azure":
+        from openai import AzureOpenAI
+
+        client = AzureOpenAI(
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
+        )
+        model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+    else:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+
+    return client, model
 
 SYSTEM_PROMPT = """あなたはExcelデータ構造の分析専門家です。
 Excelファイルから自動検出されたテーブル情報を精密に分析し、
@@ -215,11 +241,9 @@ def _format_table_detail(t: DetectedTable) -> str:
 def analyze_tables(
     tables: List[DetectedTable],
     sheet_names: List[str],
-    api_key: str,
-    model: str = "gpt-4o",
 ) -> AIAnalysisResult:
-    """Send detected table metadata to GPT-4 and return structured analysis."""
-    client = OpenAI(api_key=api_key)
+    """Analyze table relationships using OpenAI or Azure OpenAI (via OPENAI_API_TYPE env var)."""
+    client, model = _make_client()
 
     sheet_list = "\n".join(f"- {name}" for name in sheet_names)
     table_details = "\n\n".join(_format_table_detail(t) for t in tables)

@@ -529,19 +529,47 @@ def _render_header():
 # ---------------------------------------------------------------------------
 
 
+def _check_api_config() -> tuple:
+    """Validate API credentials from env vars.
+
+    Returns (is_valid: bool, label: str, error_msg: str, hint_code: str).
+    """
+    api_type = os.getenv("OPENAI_API_TYPE", "openai").strip().lower()
+
+    if api_type == "azure":
+        missing = []
+        if not os.getenv("AZURE_OPENAI_API_KEY", "").strip():
+            missing.append("AZURE_OPENAI_API_KEY")
+        if not os.getenv("AZURE_OPENAI_ENDPOINT", "").strip():
+            missing.append("AZURE_OPENAI_ENDPOINT")
+        if not os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip():
+            missing.append("AZURE_OPENAI_DEPLOYMENT")
+        if missing:
+            hint = "\n".join(f"{k}=..." for k in missing)
+            return False, "", f"Azure OpenAI の設定が不足しています: {', '.join(missing)}", hint
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+        return True, f"Azure OpenAI / {deployment}", "", ""
+    else:
+        key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not key:
+            return False, "", "OPENAI_API_KEY が未設定です。", "OPENAI_API_KEY=sk-..."
+        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        return True, f"OpenAI / {model}", "", ""
+
+
 def step1():
     st.header("📂 ステップ 1 : ファイルを選択")
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    is_valid, label, error_msg, hint_code = _check_api_config()
+    if not is_valid:
         st.error(
-            "⚠️ **OPENAI_API_KEY** が未設定です。"
-            "プロジェクトルートに `.env` ファイルを作成し、キーを設定してください。"
+            f"⚠️ **{error_msg}**  "
+            "プロジェクトルートの `.env` ファイルを確認してください。"
         )
-        st.code("OPENAI_API_KEY=sk-...", language="bash")
+        st.code(hint_code, language="bash")
         return
 
-    st.success("✅ API キー確認済み")
+    st.success(f"✅ API キー確認済み ({label})")
 
     uploaded = st.file_uploader(
         "Excel または CSV ファイルを選択してください",
@@ -662,8 +690,6 @@ def step3():
                 result = analyze_tables(
                     st.session_state.detected_tables,
                     st.session_state.sheet_names,
-                    api_key=os.getenv("OPENAI_API_KEY"),
-                    model=os.getenv("OPENAI_MODEL", "gpt-4o"),
                 )
                 st.session_state.ai_analysis = result
             except Exception as e:
