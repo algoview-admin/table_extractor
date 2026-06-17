@@ -193,6 +193,19 @@ def _reset():
     st.rerun()
 
 
+def _go_to(step: int, stop_auto: bool = True) -> None:
+    """Navigation callback — runs before the next render, so the header
+    always shows the correct active tab on the very first rerun after a click."""
+    if stop_auto:
+        st.session_state.auto_processing = False
+    st.session_state.step = step
+
+
+def _build_and_go_step5() -> None:
+    _build_final_tables()
+    st.session_state.step = 5
+
+
 # ---------------------------------------------------------------------------
 # Project save / load
 # ---------------------------------------------------------------------------
@@ -589,16 +602,22 @@ def _render_header():
                 )
             elif is_done:
                 # Completed step — clickable; stop auto-processing when navigating back
-                if col.button(f"✅ {label}", key=f"nav_{i}", use_container_width=True):
-                    st.session_state.auto_processing = False
-                    st.session_state.step = i
-                    st.rerun()
+                col.button(
+                    f"✅ {label}",
+                    key=f"nav_{i}",
+                    on_click=_go_to,
+                    args=(i,),
+                    use_container_width=True,
+                )
             elif accessible:
                 # Future step with data available — clickable
-                if col.button(f"○ {label}", key=f"nav_{i}", use_container_width=True):
-                    st.session_state.auto_processing = False
-                    st.session_state.step = i
-                    st.rerun()
+                col.button(
+                    f"○ {label}",
+                    key=f"nav_{i}",
+                    on_click=_go_to,
+                    args=(i,),
+                    use_container_width=True,
+                )
             else:
                 # Future step, data not yet available — disabled
                 st.button(
@@ -774,20 +793,26 @@ def step1():
                 "semiauto": "セミオートで開始",
                 "fullauto": "フルオートで開始",
             }
-            if st.button(
-                btn_labels[selected_mode], type="primary", use_container_width=True
-            ):
-                st.session_state.file_content = content
-                st.session_state.filename = uploaded.name
-                st.session_state.file_ext = ext
-                st.session_state.detected_tables = []  # force re-parse
+
+            def _start_file(c, name, e, mode):
+                st.session_state.file_content = c
+                st.session_state.filename = name
+                st.session_state.file_ext = e
+                st.session_state.detected_tables = []
                 st.session_state.ai_analysis = None
                 st.session_state.final_tables = {}
                 st.session_state.selected_ids = set()
-                st.session_state.auto_processing = selected_mode != "manual"
+                st.session_state.auto_processing = mode != "manual"
                 st.session_state.source_mode = "new_file"
                 st.session_state.step = 2
-                st.rerun()
+
+            st.button(
+                btn_labels[selected_mode],
+                type="primary",
+                use_container_width=True,
+                on_click=_start_file,
+                args=(content, uploaded.name, ext, selected_mode),
+            )
 
     # ── Tab 2: Load project (プロジェクト読込) ────────────────────────────────
     with tab_load:
@@ -928,21 +953,18 @@ def step2():
 
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("← 戻る"):
-            st.session_state.auto_processing = False
-            st.session_state.step = 1
-            st.rerun()
+        st.button("← 戻る", on_click=_go_to, args=(1,))
     with c2:
         if not tables:
             st.warning("テーブルが検出されませんでした。別のファイルをお試しください。")
         else:
-            if st.button(
+            st.button(
                 "次へ：テーブル関係分析を開始 →",
                 type="primary",
                 use_container_width=True,
-            ):
-                st.session_state.step = 3
-                st.rerun()
+                on_click=_go_to,
+                args=(3,),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1084,16 +1106,15 @@ def step3():
 
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("← 戻る"):
-            st.session_state.auto_processing = False
-            st.session_state.step = 2
-            st.rerun()
+        st.button("← 戻る", on_click=_go_to, args=(2,))
     with c2:
-        if st.button(
-            "次へ：新規テーブル確認 →", type="primary", use_container_width=True
-        ):
-            st.session_state.step = 4
-            st.rerun()
+        st.button(
+            "次へ：新規テーブル確認 →",
+            type="primary",
+            use_container_width=True,
+            on_click=_go_to,
+            args=(4,),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1321,17 +1342,14 @@ def step4():
         st.info("新規テーブルの生成推奨はありません。このステップはスキップします。")
         c1, c2 = st.columns([1, 4])
         with c1:
-            if st.button("← 戻る"):
-                st.session_state.auto_processing = False
-                st.session_state.step = 3
-                st.rerun()
+            st.button("← 戻る", on_click=_go_to, args=(3,))
         with c2:
-            if st.button(
-                "次へ：テーブル選択 →", type="primary", use_container_width=True
-            ):
-                _build_final_tables()
-                st.session_state.step = 5
-                st.rerun()
+            st.button(
+                "次へ：テーブル選択 →",
+                type="primary",
+                use_container_width=True,
+                on_click=_build_and_go_step5,
+            )
         return
 
     # ── Section 1: Integration recommendations ──────────────────────────────
@@ -1511,15 +1529,14 @@ def step4():
     st.divider()
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("← 戻る"):
-            st.session_state.auto_processing = False
-            st.session_state.step = 3
-            st.rerun()
+        st.button("← 戻る", on_click=_go_to, args=(3,))
     with c2:
-        if st.button("次へ：テーブル選択 →", type="primary", use_container_width=True):
-            _build_final_tables()
-            st.session_state.step = 5
-            st.rerun()
+        st.button(
+            "次へ：テーブル選択 →",
+            type="primary",
+            use_container_width=True,
+            on_click=_build_and_go_step5,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1757,9 +1774,7 @@ def step5():
 
     if not final:
         st.warning("表示できるテーブルがありません")
-        if st.button("← 戻る"):
-            st.session_state.step = 4
-            st.rerun()
+        st.button("← 戻る", on_click=_go_to, args=(4,))
         return
 
     # Auto-processing terminates at step 5
@@ -1885,22 +1900,19 @@ def step5():
     st.divider()
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("← 戻る"):
-            st.session_state.auto_processing = False
-            st.session_state.step = 4
-            st.rerun()
+        st.button("← 戻る", on_click=_go_to, args=(4,))
     with c2:
         n = len(st.session_state.selected_ids)
         if n == 0:
             st.warning("テーブルを 1 件以上選択してください")
         else:
-            if st.button(
+            st.button(
                 f"📥 選択した {n} テーブルをエクスポート →",
                 type="primary",
                 use_container_width=True,
-            ):
-                st.session_state.step = 6
-                st.rerun()
+                on_click=_go_to,
+                args=(6,),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1918,10 +1930,7 @@ def step6():
 
     if not selected:
         st.warning("エクスポート対象のテーブルが選択されていません")
-        if st.button("← テーブル選択に戻る"):
-            st.session_state.auto_processing = False
-            st.session_state.step = 5
-            st.rerun()
+        st.button("← テーブル選択に戻る", on_click=_go_to, args=(5,))
         return
 
     st.success(f"✅ **{len(selected)} テーブル** のエクスポート準備が完了しました")
