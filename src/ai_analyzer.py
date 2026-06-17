@@ -101,6 +101,28 @@ Excelデータは複数の独立した集計軸を同時に持つことがある
 5. 上位テーブルの parent_table_ids=[], child_table_ids=[下位テーブルIDリスト]
    下位テーブルの parent_table_ids=[上位テーブルID], child_table_ids=[]
 
+【数値検証で捕捉できない関係の補完判定】
+「事前検証済み：数値合計関係」に含まれない表間関係は、以下2つの観点で補完的に判定すること。
+数値検証済みの関係と矛盾しない範囲でのみ適用する。
+
+▼ 判定A：名称関連性
+- シート名・セクションタイトルに集計を示す語（「合計」「総計」「小計」「計」「全体」「全社」「部門計」等）がある表は上位集計の候補
+- 別の表タイトルの上位概念・集約を示すシート名や接頭辞の差（例：「月次」→「四半期」→「年次」、「詳細」→「サマリー」）
+
+▼ 判定B：構造整合性
+- 行見出し・列見出し（期間軸・指標等）の構造が対応している表は同一系列の候補
+- 上位表の行が下位表の「計」「小計」「合計」行に対応する場合、上下関係として採用する
+- 下位表は上位表より見出し階層が深い（追加の分類軸・区分が存在する）
+- 下位表にのみ存在する追加軸を集約すると上位表の構造になる場合、集計元→集計結果とみなす
+
+▼ 見出し比較時の正規化指針（構造差を吸収し、見落としを防ぐ）
+表間の関係判定では、見出し文字列の形式的な差異だけで関係を否定しないこと。以下を考慮して意味的な対応を判断する:
+- 空白セルの見出し継承：上行・左列から値を引き継ぐ（マージセル展開後として解釈）
+- 省略された上位・中間階層の補完：上位カテゴリが省略されていても同一系列と判断できる場合がある
+- 計・小計行の有無：下位表の「計」行が上位表の対応行に集約されている構造は親子関係の根拠になる
+- 見出し階層の深さの違い：下位表が多段階見出しを持ち、上位表が1段階に集約される場合も親子関係
+- 追加分類軸の集約：下位表にのみ存在する分類軸を集約した場合に上位表が再現されるなら集計元
+
 【similar_table_idsとintegration_recommendationsのルール（最重要）】
 - similar_table_ids には「同一階層レベル」のテーブルのみを含める
   ✅ 正例: 同じ階層単位（例: 同レベルの複数拠点・複数月・複数商品）→ 互いにsimilar
@@ -165,12 +187,26 @@ def _format_table_detail(t: DetectedTable) -> str:
 
     title_line = f"  セクションタイトル: {s['title']}\n" if s.get("title") else ""
 
+    # Flag rows that appear to be total/subtotal rows so the AI can use them for
+    # structural consistency checks (判定B) when comparing tables.
+    total_line = ""
+    if t.df is not None and not t.df.empty:
+        _TOTAL_MARKERS = ("計", "合計", "総計", "小計", "Total", "total", "SUM", "sum")
+        total_labels = []
+        for _, row in t.df.iterrows():
+            row_head = " ".join(str(v) for v in list(row)[:3] if v is not None and str(v).strip())
+            if any(m in row_head for m in _TOTAL_MARKERS):
+                total_labels.append(row_head[:20])
+        if total_labels:
+            total_line = f"  計・合計行の見出し例: {', '.join(dict.fromkeys(total_labels))}\n"
+
     return (
         f"[{s['table_id']}]\n"
         f"  シート: {s['sheet_name']}  位置: {s.get('position', '不明')}\n"
         f"{title_line}"
         f"  サイズ: {s['row_count']}行 × {s['col_count']}列\n"
         f"  列名: {cols_str}\n"
+        f"{total_line}"
         f"{sample_lines}"
         f"{tail_lines}"
     )
