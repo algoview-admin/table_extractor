@@ -1403,13 +1403,15 @@ def step4():
                 _splitter_marker(f"s4-ir-{ir.recommendation_id}")
                 c_prev, c_info = st.columns([1, 1])
                 with c_prev:
-                    st.caption("統合後プレビュー（先頭 2 テーブル × 2 行）")
+                    st.caption(
+                        f"統合後プレビュー（全 {len(ir.table_ids)} テーブル × 2 行）"
+                    )
                     _pv_col_names = getattr(ir, "new_column_names", []) or [
                         ir.new_column_name
                     ]
                     _pv_multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
                     preview_frames = []
-                    for tid in ir.table_ids[:2]:
+                    for tid in ir.table_ids:
                         t = tables_dict.get(tid)
                         if t and t.df is not None:
                             row = t.df.head(2).copy()
@@ -1427,11 +1429,10 @@ def step4():
                                 combined_prev.astype(str),
                                 use_container_width=True,
                                 hide_index=True,
+                                height=350,
                             )
                         except Exception:
                             st.caption("（プレビュー生成不可）")
-                    if len(ir.table_ids) > 2:
-                        st.caption(f"他 {len(ir.table_ids) - 2} テーブルも統合されます")
 
                 with c_info:
                     st.markdown(f"**対象テーブル**: {', '.join(ir.table_ids)}")
