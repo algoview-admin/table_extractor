@@ -84,12 +84,18 @@ class IntegrationRecommendation:
     group_name: str
     description: str
     table_ids: List[str]
-    new_column_name: str
-    new_column_values: Dict[str, str]
+    new_column_name: str          # kept for backward compat (= new_column_names[0])
+    new_column_values: Dict[str, str]  # kept for backward compat (first axis only)
     reasoning: str
-    parent_table_id: Optional[str] = None      # summary table that rolls up these children
-    parent_label_column: Optional[str] = None  # column name for the parent level in auto-generated master
+    parent_table_id: Optional[str] = None
+    parent_label_column: Optional[str] = None
     user_decision: Optional[bool] = None
+    # Multi-axis support: if populated these take precedence over the single-axis fields above
+    new_column_names: List[str] = field(default_factory=list)
+    new_column_multi_values: Dict[str, List[str]] = field(default_factory=dict)
+    # Per-axis parent info: index corresponds to new_column_names index
+    axis_parent_table_ids: List[Optional[str]] = field(default_factory=list)
+    axis_parent_label_columns: List[Optional[str]] = field(default_factory=list)
 
 
 @dataclass
