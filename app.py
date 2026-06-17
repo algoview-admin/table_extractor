@@ -11,7 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
-from src.ai_analyzer import analyze_tables
+from src.relation_analyzer import analyze_tables
 from src.excel_parser import parse_csv, parse_excel
 from src.models import AIAnalysisResult, DetectedTable
 

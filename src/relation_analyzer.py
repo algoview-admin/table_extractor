@@ -10,7 +10,7 @@ from .models import (
     SheetClassification,
     TableAnalysisResult,
 )
-from .table_relations import detect_sum_relations, format_relation_facts
+from .aggregation_detector import detect_sum_relations, format_relation_facts
 
 
 def _make_client() -> Tuple[Any, str]:
@@ -30,12 +30,12 @@ def _make_client() -> Tuple[Any, str]:
             azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
             api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
         )
-        model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+        model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4")
     else:
         from openai import OpenAI
 
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        model = os.getenv("OPENAI_MODEL", "gpt-5.4")
 
     return client, model
 
