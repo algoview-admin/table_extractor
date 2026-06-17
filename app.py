@@ -515,6 +515,34 @@ def _inject_splitter_js() -> None:
             [0, 80, 250, 600, 1400].forEach(function (ms) {
                 setTimeout(init, ms);
             });
+
+            /* ── MutationObserver: keep portal in sync whenever srcHdr changes ──
+               Without this, navigating while a long step (e.g. Step 3 AI call) is
+               running leaves the portal showing the previous step until the next
+               _inject_splitter_js() call fires at the very end of main().
+               Debounced at 50 ms so rapid DOM mutations batch into one sync. */
+            function connectObserver() {
+                var sentinel = pdoc.querySelector('.app-hdr-sentinel');
+                if (!sentinel) return;
+                var node = sentinel.closest('[data-testid="stVerticalBlock"]');
+                if (!node || win._hdrObservedNode === node) return;
+                if (win._hdrObserver) win._hdrObserver.disconnect();
+                win._hdrObservedNode = node;
+                win._hdrObserver = new MutationObserver(function () {
+                    clearTimeout(win._hdrSyncTimer);
+                    win._hdrSyncTimer = setTimeout(function () {
+                        buildFixedHeader();
+                        animateProgress();
+                    }, 50);
+                });
+                win._hdrObserver.observe(node, {
+                    childList: true, subtree: true,
+                    attributes: true, characterData: true
+                });
+            }
+            [0, 80, 250, 600, 1400].forEach(function (ms) {
+                setTimeout(connectObserver, ms);
+            });
         })();
         </script>
         """,
@@ -2022,6 +2050,11 @@ def main():
 
     with st.container():
         _render_header()
+
+    # Fire portal-sync before step functions so the header updates immediately,
+    # even during long operations like the Step 3 AI call (which sends intermediate
+    # state via st.spinner before _inject_splitter_js at the end of main() runs).
+    _inject_splitter_js()
 
     step = st.session_state.step
     if step == 1:
