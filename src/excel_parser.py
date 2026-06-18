@@ -461,6 +461,26 @@ def _detect_table_regions(
         # ── column-header row ──────────────────────────────────────────────
         if rt == _RT_COL_HDR:
             if cur["data_rows"]:
+                # Before flushing, check if this is a subtotal/summary row
+                # that only appears to be a column header.  This happens when
+                # a row has text labels in the leftmost key columns and None
+                # in the numeric columns because its SUM formulas could not be
+                # evaluated (file saved without recalculation).
+                # Key signal: the row's filled-column span is much narrower
+                # than the established table width.  If the span is < 50 % of
+                # the table width, treat the row as a data/subtotal row and
+                # keep it in the current region instead of starting a new one.
+                tbl_width = cur["col_end"] - cur["col_start"] + 1
+                row_width = (
+                    p["col_max"] - p["col_min"] + 1
+                    if p["col_min"] is not None and p["col_max"] is not None
+                    else 0
+                )
+                if tbl_width > 0 and row_width / tbl_width < 0.5:
+                    cur["data_rows"].append(r)
+                    _upd_cols(cur, r)
+                    continue
+
                 # Header appearing after data without a blank row
                 # → structural discontinuity: close current, start fresh
                 _flush(cur, r - 1, regions)
