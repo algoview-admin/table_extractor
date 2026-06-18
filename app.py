@@ -22,7 +22,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Excel テーブル抽出 AI エージェント",
+    page_title="テーブル抽出アプリ",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -61,8 +61,23 @@ st.markdown(
     #MainMenu { visibility: hidden !important; }
     footer    { visibility: hidden !important; }
 
-    /* ── Remove default top padding ── */
-    .block-container { padding-top: 0 !important; }
+    /* ── Remove default top padding (both old and new Streamlit selectors) ── */
+    .block-container,
+    [data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
+
+    /* Hidden splitter iframes: keep JS alive but remove from flex layout so
+       they do not contribute gap spacing below the fixed header.
+       position:absolute takes them out of the normal flow while allowing
+       the iframe JS to keep running (unlike display:none). */
+    .element-container:has(iframe[height="42"]),
+    div[data-testid="stCustomComponentV1"]:has(iframe[height="42"]) {
+        position: absolute !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
 
     /* ── Custom progress bar ── */
     .app-progress-wrap  { margin-top: 1rem; }
@@ -455,12 +470,29 @@ def _inject_splitter_js() -> None:
                     e.preventDefault();
                 };
 
-                /* ── 4. Collapse srcHdr (keeps it in DOM for Streamlit state) ── */
+                /* ── 4. Remove srcHdr from flex flow (keeps it in DOM for
+                   Streamlit state so button on_click callbacks still fire).
+                   position:fixed off-screen eliminates the flex gap that a
+                   height:0 in-flow element still contributes.  Buttons remain
+                   clickable via portal.onclick → realBtns[i].click(). ── */
+                srcHdr.style.setProperty('position',   'fixed',   'important');
+                srcHdr.style.setProperty('left',       '-9999px', 'important');
+                srcHdr.style.setProperty('top',        '-9999px', 'important');
+                srcHdr.style.setProperty('width',      '0',       'important');
+                srcHdr.style.setProperty('height',     '0',       'important');
                 srcHdr.style.setProperty('overflow',   'hidden',  'important');
-                srcHdr.style.setProperty('max-height', '0',       'important');
                 srcHdr.style.setProperty('padding',    '0',       'important');
                 srcHdr.style.setProperty('margin',     '0',       'important');
                 srcHdr.style.setProperty('visibility', 'hidden',  'important');
+
+                /* ── 4b. Force-clear outer container top-offset in JS too ──
+                   CSS alone may not win the specificity race in all
+                   Streamlit versions. */
+                ['[data-testid="stMainBlockContainer"]', '.block-container']
+                    .forEach(function (s) {
+                        var el = pdoc.querySelector(s);
+                        if (el) el.style.setProperty('padding-top', '0', 'important');
+                    });
 
                 /* ── 5. Push rootBlock content below the portal header ── */
                 var ph = portal.getBoundingClientRect().height;
@@ -581,7 +613,7 @@ def _render_header():
     )
     title_col, save_col = st.columns([6, 1])
     with title_col:
-        st.title("📊 Table Extractor AI")
+        st.title("📊 Table Extractor")
         st.caption("Excel / CSV ファイルから分析対象とするテーブルを抽出します。")
     with save_col:
         if st.session_state.get("filename"):
