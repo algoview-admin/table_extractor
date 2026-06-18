@@ -282,6 +282,15 @@ def _classify_row(p: Dict[str, Any]) -> str:
     if filled == 1 and p["text"] == 1:
         return _RT_TITLE if (p["texts"] and len(p["texts"][0]) <= 40) else _RT_COL_HDR
 
+    # All filled cells share one unique text → merged cell spanning the row.
+    # Treat as a title row (short) or wide label (long); either way it is not
+    # a real column-header row.
+    if p["numeric"] == 0 and p["text"] >= 2:
+        unique = set(p["texts"])
+        if len(unique) == 1:
+            txt = next(iter(unique))
+            return _RT_TITLE if len(txt) <= 40 else _RT_COL_HDR
+
     # Multiple text cells, very few numbers → column-header row
     if p["text"] >= 2 and n_ratio <= 0.30:
         return _RT_COL_HDR
@@ -434,6 +443,14 @@ def _detect_table_regions(
         if rt == _RT_TITLE:
             if cur["data_rows"]:
                 # Title appearing after data rows → end current table
+                _flush(cur, r - 1, regions)
+                cur = _mk()
+                pending_titles = []
+            elif len(cur["header_rows"]) >= 2:
+                # 2+ COL_HDR rows before any data, then a TITLE → the preceding
+                # rows form an independent block (e.g. a navigation / index
+                # section above the real table).  Flush it so that quality
+                # filtering can discard it (Signal 3: short + all-text + wide).
                 _flush(cur, r - 1, regions)
                 cur = _mk()
                 pending_titles = []
