@@ -1856,6 +1856,8 @@ def _render_integration_before_after(
     ir,
     tables_dict: dict,
     compact: bool = False,
+    full_df_size: tuple = None,
+    source_ids: list = None,
 ) -> None:
     """Render a structured before → after integration preview.
 
@@ -1865,6 +1867,10 @@ def _render_integration_before_after(
     pills; the integrated table colors each axis column's cells by value.
     First 3 source tables are shown directly; additional tables are in an
     expander.
+
+    full_df_size: (n_rows, n_cols) of the actual full integrated table;
+                  shown at the bottom-right of the 統合後 preview.
+    source_ids:   list of source table IDs to display after the expander.
     """
     col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
     multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
@@ -1950,13 +1956,28 @@ def _render_integration_before_after(
                 with ex_cols[i % n_ex]:
                     _src_card(tid)
 
+    # ── 統合元テーブル一覧 (エクスパンダー下) ──────────────────────────────
+    if source_ids:
+        _INLINE_LIMIT = 4
+        if len(source_ids) <= _INLINE_LIMIT:
+            st.caption(f"🔗 統合元: {' ／ '.join(source_ids)}")
+        else:
+            with st.expander(
+                f"🔗 統合元 （{len(source_ids)} テーブル）", expanded=False
+            ):
+                n_sc = min(len(source_ids), 3)
+                sc_cols = st.columns(n_sc)
+                for i, sid in enumerate(source_ids):
+                    with sc_cols[i % n_sc]:
+                        st.caption(f"• {sid}")
+
     # ── 統合処理 separator ───────────────────────────────────────────────────
     st.markdown(
         '<div style="display:flex;align-items:center;gap:0;margin:22px 0 18px;">'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,transparent,rgba(39,174,96,.5));"></div>'
         '<div style="border:1.5px solid rgba(39,174,96,.7);border-radius:24px;'
-        'padding:6px 22px;margin:0 16px;font-size:0.82rem;font-weight:700;'
-        'color:#7FFFD4;letter-spacing:.14em;'
+        'padding:6px 22px;margin:0 16px;font-size:1.05rem;font-weight:800;'
+        'color:#7FFFD4;letter-spacing:.08em;'
         'background:linear-gradient(135deg,rgba(39,174,96,.12),rgba(26,188,156,.08));'
         'display:flex;align-items:center;gap:8px;white-space:nowrap;">'
         '↓&nbsp;&nbsp;統合処理'
@@ -2054,6 +2075,15 @@ def _render_integration_before_after(
             hide_index=True,
             height=min(n_data * 35 + 38, 200 if compact else 320),
         )
+        # Full integrated table size – shown bottom-right of the preview
+        if full_df_size:
+            n_rows, n_cols_full = full_df_size
+            st.markdown(
+                f'<div style="text-align:right;font-size:0.72rem;'
+                f'color:#7a8599;margin-top:2px;">'
+                f'📊 {n_rows:,} 行 × {n_cols_full} 列</div>',
+                unsafe_allow_html=True,
+            )
     except Exception:
         st.caption("（プレビュー生成不可）")
 
@@ -2099,19 +2129,17 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
             # what the integration does before seeing the table comparison.
             _splitter_marker(f"s5-{tid}")
             st.markdown(f"_{info['description']}_")
-            meta_cols = st.columns([2, 5])
-            with meta_cols[0]:
-                st.caption(f"📊 {len(df)} 行 × {len(df.columns)} 列")
-            with meta_cols[1]:
-                if info.get("source_ids") and len(info["source_ids"]) > 1:
-                    st.caption(f"🔗 統合元: {', '.join(info['source_ids'])}")
             if info.get("reasoning"):
                 st.caption(f"💡 {info['reasoning']}")
 
-            st.divider()
-
-            # Before/after view for integrated tables
-            _render_integration_before_after(ir, tables_dict, compact=True)
+            # Before/after view — source list and size are rendered inside
+            _render_integration_before_after(
+                ir,
+                tables_dict,
+                compact=True,
+                full_df_size=(len(df), len(df.columns)),
+                source_ids=info.get("source_ids") or list(ir.table_ids),
+            )
 
             st.divider()
             col_gap, col_btn = st.columns([4, 1])
