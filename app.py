@@ -1893,50 +1893,43 @@ def _render_integration_before_after(
         vi = vals_list.index(val) if val in vals_list else 0
         return family[vi % len(family)]
 
-    # ── Helpers: seamless header row (HTML) + interactive dataframes ────────
-    # Headers rendered as one HTML flex row → zero gap between cards.
-    # Dataframes rendered with st.dataframe() → scroll + fullscreen work.
+    # ── Helper: render one source table card (header + dataframe) ────────────
     import html as _html
 
-    def _src_header_row_html(tids: list) -> str:
-        cells = []
-        for j, tid in enumerate(tids):
-            vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
-            pills = "".join(
-                f'<span style="background:{_axis_color(ai, str(v))[0]};'
-                f'color:{_axis_color(ai, str(v))[1]};'
-                f'padding:2px 9px;border-radius:12px;font-size:0.72rem;font-weight:600;'
-                f'margin-right:4px;display:inline-block;margin-bottom:3px;">'
-                f'{_html.escape(cn)}:&nbsp;{_html.escape(str(v))}</span>'
-                for ai, (cn, v) in enumerate(zip(col_names, vals))
-            )
-            bl = "border-left:1px solid #2d3748;" if j > 0 else ""
-            cells.append(
-                f'<div style="flex:1;min-width:0;background:#161c2c;{bl}padding:7px 10px;">'
-                f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:4px;">'
-                f'📋&nbsp;{_html.escape(tid)}</div>{pills}</div>'
-            )
-        return (
-            '<div style="display:flex;border:1px solid #2d3748;'
-            'border-radius:6px 6px 0 0;overflow:hidden;margin-bottom:0;">'
-            + "".join(cells) + '</div>'
+    def _src_card(tid: str) -> None:
+        t = tables_dict.get(tid)
+        vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
+        pills = "".join(
+            f'<span style="background:{_axis_color(ai, str(v))[0]};'
+            f'color:{_axis_color(ai, str(v))[1]};'
+            f'padding:2px 9px;border-radius:12px;font-size:0.72rem;font-weight:600;'
+            f'margin-right:4px;display:inline-block;margin-bottom:3px;">'
+            f'{_html.escape(cn)}:&nbsp;{_html.escape(str(v))}</span>'
+            for ai, (cn, v) in enumerate(zip(col_names, vals))
         )
+        st.markdown(
+            f'<div style="background:#161c2c;border:1px solid #2d3748;'
+            f'border-radius:6px 6px 0 0;padding:7px 10px;margin-bottom:0;">'
+            f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:4px;">'
+            f'📋&nbsp;{_html.escape(tid)}</div>{pills}</div>',
+            unsafe_allow_html=True,
+        )
+        if t is not None and t.df is not None and not t.df.empty:
+            prev = t.df.head(n_preview)
+            st.dataframe(
+                prev.astype(str),
+                use_container_width=True,
+                hide_index=True,
+                height=min(len(prev) * 35 + 38, 128),
+            )
+        else:
+            st.caption("（データなし）")
 
-    def _src_dataframe_row(tids: list) -> None:
+    def _src_card_grid(tids: list) -> None:
         cols = st.columns(len(tids), gap="small")
         for i, tid in enumerate(tids):
-            t = tables_dict.get(tid)
             with cols[i]:
-                if t is not None and t.df is not None and not t.df.empty:
-                    prev = t.df.head(n_preview)
-                    st.dataframe(
-                        prev.astype(str),
-                        use_container_width=True,
-                        hide_index=True,
-                        height=min(len(prev) * 35 + 38, 128),
-                    )
-                else:
-                    st.caption("（データなし）")
+                _src_card(tid)
 
     # ════════════════════════════════════════════════════════════════════════
     # 統合前
@@ -1955,16 +1948,13 @@ def _render_integration_before_after(
     extra_tids = ir.table_ids[SAMPLE_LIMIT:]
 
     if preview_tids:
-        st.markdown(_src_header_row_html(preview_tids), unsafe_allow_html=True)
-        _src_dataframe_row(preview_tids)
+        _src_card_grid(preview_tids)
 
     if extra_tids:
         with st.expander(f"他 {len(extra_tids)} テーブルを見る", expanded=False):
             n_ex = min(len(extra_tids), 3)
             for start in range(0, len(extra_tids), n_ex):
-                chunk = extra_tids[start:start + n_ex]
-                st.markdown(_src_header_row_html(chunk), unsafe_allow_html=True)
-                _src_dataframe_row(chunk)
+                _src_card_grid(extra_tids[start:start + n_ex])
 
     # ── 統合元テーブル一覧 (エクスパンダー下) ──────────────────────────────
     # Avoid st.columns() inside the expander — nested columns in the same
