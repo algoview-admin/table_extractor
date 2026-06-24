@@ -375,25 +375,27 @@ def _format_table_light(
 
 
 # ---------------------------------------------------------------------------
-# Per-sheet batch helper (Phase 1 in chunked mode)
+# Per-batch helper (Phase 1 in chunked mode)
+# Caller ensures len(batch_tables) ≤ _MAX_TABLES_PER_BATCH so output always
+# fits within GPT-4o's 16 384-token output ceiling.
 # ---------------------------------------------------------------------------
 
 def _analyze_sheet_batch(
     client: Any,
     model: str,
-    sheet_tables: List[DetectedTable],
+    batch_tables: List[DetectedTable],
     sheet_names: List[str],
     relation_facts: str,
 ) -> Dict[str, Any]:
-    """Analyze one sheet's tables. Returns the raw JSON dict from the AI."""
-    n = len(sheet_tables)
-    max_sample = 3 if n > 20 else 5
-    max_tail   = 2 if n > 20 else 3
+    """Analyze a single sub-batch of tables. Returns the raw JSON dict."""
+    n = len(batch_tables)
+    max_sample = 3 if n > 7 else 5
+    max_tail   = 2 if n > 7 else 3
 
     sheet_list = "\n".join(f"- {name}" for name in sheet_names)
     table_details = "\n\n".join(
         _format_table_detail(t, max_sample=max_sample, max_tail=max_tail)
-        for t in sheet_tables
+        for t in batch_tables
     )
 
     user_msg = USER_PROMPT.format(
@@ -402,21 +404,22 @@ def _analyze_sheet_batch(
         relation_facts=relation_facts,
     )
 
-    completion_tokens = min(16384, max(4096, n * 400))
+    # Always request the maximum output tokens because ≤ 10 tables generate
+    # roughly 3 000–6 000 output tokens — well within 16 384 limit.
     content = _call_api(
         client, model,
         [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": user_msg},
         ],
-        max_completion_tokens=completion_tokens,
+        max_completion_tokens=16384,
     )
 
     try:
         return json.loads(content)
     except json.JSONDecodeError as e:
         raise ValueError(
-            f"シート分析レスポンスが不正な JSON です: {e}\n先頭300文字: {content[:300]}"
+            f"バッチ分析レスポンスが不正な JSON です: {e}\n先頭300文字: {content[:300]}"
         ) from e
 
 
@@ -466,8 +469,11 @@ def _merge_raws(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-# Tables per batch that fits comfortably in one API call (input + output)
+# ≤ _SINGLE_CALL_LIMIT tables → single API call (legacy path)
 _SINGLE_CALL_LIMIT = 50
+# Each sub-batch in chunked mode must not exceed this.
+# 10 tables ≈ 3 000–6 000 output tokens << GPT-4o 16 384-token output limit.
+_MAX_TABLES_PER_BATCH = 10
 
 
 def analyze_tables(
@@ -550,37 +556,42 @@ def _analyze_chunked(
 ) -> "AIAnalysisResult":
     """Two-phase chunked path for large table sets.
 
-    Phase 1: Parallel per-sheet API calls (3 concurrent workers).
-    Phase 2: Single cross-sheet synthesis call.
+    Phase 1: Tables are grouped by sheet and each sheet is split into
+             sub-batches of _MAX_TABLES_PER_BATCH (≤ 10).  All sub-batches
+             run in parallel with 3 concurrent workers.
+    Phase 2: A single lightweight cross-sheet synthesis call uses one-line
+             summaries (not full table data) to produce integration
+             recommendations that span multiple sheets.
     """
-    # Group tables by sheet, preserving original order
+    # Group tables by sheet, then split each sheet into sub-batches
     by_sheet: Dict[str, List[DetectedTable]] = {}
     for t in tables:
         by_sheet.setdefault(t.sheet_name, []).append(t)
 
-    sheet_items = list(by_sheet.items())
-    phase1_raws: List[Optional[Dict[str, Any]]] = [None] * len(sheet_items)
+    batches: List[List[DetectedTable]] = []
+    for sheet_tables in by_sheet.values():
+        for i in range(0, len(sheet_tables), _MAX_TABLES_PER_BATCH):
+            batches.append(sheet_tables[i : i + _MAX_TABLES_PER_BATCH])
 
-    def _process(idx_item: Tuple[int, Any]) -> Tuple[int, Dict[str, Any]]:
-        idx, (_, sheet_tables) = idx_item
-        raw = _analyze_sheet_batch(
-            client, model, sheet_tables, sheet_names, relation_facts
-        )
+    batch_raws: List[Optional[Dict[str, Any]]] = [None] * len(batches)
+
+    def _run_batch(args: Tuple[int, List[DetectedTable]]) -> Tuple[int, Dict[str, Any]]:
+        idx, batch_tables = args
+        raw = _analyze_sheet_batch(client, model, batch_tables, sheet_names, relation_facts)
         return idx, raw
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {
-            executor.submit(_process, (i, item)): i
-            for i, item in enumerate(sheet_items)
+            executor.submit(_run_batch, (i, batch)): i
+            for i, batch in enumerate(batches)
         }
         for future in as_completed(futures):
             idx, raw = future.result()
-            phase1_raws[idx] = raw
+            batch_raws[idx] = raw
 
     # ── Phase 2: cross-sheet synthesis ────────────────────────────────────────
-    # Build a one-line summary per table, annotated with Phase 1 classifications
     ta_by_id: Dict[str, Dict] = {}
-    for raw in phase1_raws:
+    for raw in batch_raws:
         if raw is None:
             continue
         for ta in raw.get("table_analyses", []):
@@ -595,9 +606,8 @@ def _analyze_chunked(
         for t in tables
     )
 
-    # Brief intra-sheet integration recap for context
     intra_recs: List[Dict] = []
-    for raw in phase1_raws:
+    for raw in batch_raws:
         if raw:
             intra_recs.extend(raw.get("integration_recommendations", []))
 
@@ -616,8 +626,6 @@ def _analyze_chunked(
         relation_facts=relation_facts,
     )
 
-    cs_completion = min(32768, max(16384, len(tables) * 80))
-
     try:
         cs_content = _call_api(
             client, model,
@@ -625,14 +633,14 @@ def _analyze_chunked(
                 {"role": "system", "content": CROSS_SHEET_SYSTEM},
                 {"role": "user",   "content": cs_user},
             ],
-            max_completion_tokens=cs_completion,
+            max_completion_tokens=16384,
         )
         phase2_raw: Dict[str, Any] = json.loads(cs_content)
     except Exception:
-        # Cross-sheet synthesis is best-effort; fall back to intra-sheet only
+        # Cross-sheet synthesis is best-effort; fall back to sub-batch results only
         phase2_raw = {"integration_recommendations": []}
 
-    return _merge_raws(phase1_raws, phase2_raw, tables)
+    return _merge_raws(batch_raws, phase2_raw, tables)
 
 
 def _parse_response(raw: Dict[str, Any], tables: List[DetectedTable]) -> AIAnalysisResult:
