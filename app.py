@@ -1745,6 +1745,36 @@ _COL_PALETTES = [
     ("#f0d5f8", "#5b0f7f", "#9b4fc4", "#ffffff"),  # purple
 ]
 
+# Per-axis color families for integration previews.
+# Each family has 4 shades: (hdr_bg, hdr_fg, cell_bg, cell_fg)
+# Axis 0 = green, Axis 1 = blue, Axis 2 = purple, Axis 3 = orange
+_AXIS_FAMILIES: list = [
+    [  # axis-0: green
+        ("#27ae60", "#fff", "#d5f5e3", "#0b3c2e"),
+        ("#1e8449", "#fff", "#a9dfbf", "#07291e"),
+        ("#117a65", "#fff", "#d1f2eb", "#07291e"),
+        ("#0e6640", "#fff", "#c3e8d2", "#07291e"),
+    ],
+    [  # axis-1: blue
+        ("#2980b9", "#fff", "#d6eaf8", "#0d2f6e"),
+        ("#1a5276", "#fff", "#aed6f1", "#0a2050"),
+        ("#2471a3", "#fff", "#d0e8f5", "#0a2050"),
+        ("#1b4f72", "#fff", "#c8e1ef", "#0a2050"),
+    ],
+    [  # axis-2: purple
+        ("#8e44ad", "#fff", "#f4ecf7", "#4a1a72"),
+        ("#6c3483", "#fff", "#e8daef", "#3b1260"),
+        ("#7d3c98", "#fff", "#f0e6f8", "#3b1260"),
+        ("#5b2c6f", "#fff", "#e4d5ee", "#3b1260"),
+    ],
+    [  # axis-3: orange
+        ("#d35400", "#fff", "#fdebd0", "#7a3a0a"),
+        ("#b7770d", "#fff", "#fad7a0", "#5f2d04"),
+        ("#ca6f1e", "#fff", "#f8e6c0", "#5f2d04"),
+        ("#9c640c", "#fff", "#f5d5a0", "#5f2d04"),
+    ],
+]
+
 
 def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Styler":
     """Return a Pandas Styler with new_cols highlighted; each column gets a distinct palette,
@@ -1808,67 +1838,114 @@ def _render_integration_before_after(
     tables_dict: dict,
     compact: bool = False,
 ) -> None:
-    """Render a colored before → after integration preview.
+    """Render a structured before → after integration preview.
 
-    Source tables appear on top with palette-coloured headers; the integrated
-    table below colours each row's axis cells to match its origin table,
-    making the before/after relationship immediately visible.
+    Multi-axis coloring: each axis dimension gets a distinct color family
+    (green / blue / purple / orange). Within each family, unique axis values
+    each receive a distinct shade. Source table cards show per-axis colored
+    pills; the integrated table colors each axis column's cells by value.
+    First 3 source tables are shown directly; additional tables are in an
+    expander.
     """
     col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
     multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
     n_preview = 2 if compact else 3
 
-    # Source table i → palette[i]
-    tid_pal = {
-        tid: _COL_PALETTES[i % len(_COL_PALETTES)]
-        for i, tid in enumerate(ir.table_ids)
-    }
-    # Axis key → palette  (used for per-row colouring in the integrated table)
-    key_to_pal: dict = {}
+    # ── Build per-axis unique-value order ───────────────────────────────────
+    axis_val_order: list = [[] for _ in col_names]
     for tid in ir.table_ids:
         vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
-        k = str(vals[0]) if len(vals) == 1 else tuple(str(v) for v in vals)
-        key_to_pal[k] = tid_pal[tid]
+        for ai, v in enumerate(vals):
+            if ai < len(axis_val_order):
+                sv = str(v)
+                if sv not in axis_val_order[ai]:
+                    axis_val_order[ai].append(sv)
 
-    # ── 統合前 ──────────────────────────────────────────────────────────────
-    n = len(ir.table_ids)
-    src_cols = st.columns(min(n, 4)) if n > 0 else []
+    def _axis_color(ai: int, val: str) -> tuple:
+        """Return (hdr_bg, hdr_fg, cell_bg, cell_fg) for the given axis+value."""
+        family = _AXIS_FAMILIES[ai % len(_AXIS_FAMILIES)]
+        vals_list = axis_val_order[ai] if ai < len(axis_val_order) else []
+        vi = vals_list.index(val) if val in vals_list else 0
+        return family[vi % len(family)]
 
-    for i, tid in enumerate(ir.table_ids):
-        pal = tid_pal[tid]
+    # ── Helper: render one source table card ────────────────────────────────
+    def _src_card(tid: str) -> None:
         t = tables_dict.get(tid)
-        with src_cols[i % len(src_cols)]:
-            vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
-            axis_html = " &nbsp;/&nbsp; ".join(
-                f"{cn}&nbsp;=&nbsp;<b>{v}</b>" for cn, v in zip(col_names, vals)
+        vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
+        pills = "".join(
+            '<span style="'
+            f'background:{_axis_color(ai, str(v))[0]};'
+            f'color:{_axis_color(ai, str(v))[1]};'
+            'padding:2px 9px;border-radius:12px;'
+            'font-size:0.72rem;font-weight:600;'
+            'margin-right:4px;display:inline-block;margin-bottom:3px;">'
+            f'{cn}:&nbsp;{v}</span>'
+            for ai, (cn, v) in enumerate(zip(col_names, vals))
+        )
+        st.markdown(
+            f'<div style="background:#161c2c;border:1px solid #2d3748;'
+            f'border-radius:8px 8px 0 0;padding:7px 10px;margin-bottom:0;">'
+            f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:5px;">'
+            f'📋&nbsp;{tid}</div>'
+            f'{pills}</div>',
+            unsafe_allow_html=True,
+        )
+        if t is not None and t.df is not None and not t.df.empty:
+            prev = t.df.head(n_preview)
+            st.dataframe(
+                prev.astype(str),
+                use_container_width=True,
+                hide_index=True,
+                height=min(len(prev) * 35 + 38, 128),
             )
-            st.markdown(
-                f'<div style="background:{pal[2]};color:{pal[3]};'
-                f'padding:5px 10px;border-radius:6px 6px 0 0;'
-                f'font-size:0.78rem;font-weight:600;line-height:1.5;'
-                f'margin-bottom:-1px;">'
-                f'📋&nbsp;{tid}<br>{axis_html}</div>',
-                unsafe_allow_html=True,
-            )
-            if t is not None and t.df is not None and not t.df.empty:
-                prev = t.df.head(n_preview)
-                st.dataframe(
-                    prev.astype(str),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(len(prev) * 35 + 38, 130),
-                )
-            else:
-                st.caption("（データなし）")
+        else:
+            st.caption("（データなし）")
 
-    # ── 矢印 ────────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # 統合前
+    # ════════════════════════════════════════════════════════════════════════
     st.markdown(
-        '<div style="text-align:center;font-size:1rem;color:#7FFFD4;'
-        'margin:8px 0 2px;letter-spacing:.05em;">↓ &nbsp;統合</div>',
+        '<p style="font-weight:700;font-size:0.8rem;color:#9aa5b4;'
+        'letter-spacing:.1em;text-transform:uppercase;'
+        'border-left:3px solid #4a7de0;padding-left:8px;margin:6px 0 10px;">統合前</p>',
         unsafe_allow_html=True,
     )
 
-    # ── 統合後 ──────────────────────────────────────────────────────────────
+    SAMPLE_LIMIT = 3
+    preview_tids = ir.table_ids[:SAMPLE_LIMIT]
+    extra_tids = ir.table_ids[SAMPLE_LIMIT:]
+
+    if preview_tids:
+        cols = st.columns(len(preview_tids))
+        for i, tid in enumerate(preview_tids):
+            with cols[i]:
+                _src_card(tid)
+
+    if extra_tids:
+        with st.expander(f"他 {len(extra_tids)} テーブルを見る", expanded=False):
+            n_ex = min(len(extra_tids), 3)
+            ex_cols = st.columns(n_ex)
+            for i, tid in enumerate(extra_tids):
+                with ex_cols[i % n_ex]:
+                    _src_card(tid)
+
+    # ── Arrow ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="text-align:center;font-size:1.1rem;color:#7FFFD4;'
+        'margin:14px 0 8px;letter-spacing:.06em;">↓ &nbsp;統合</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ════════════════════════════════════════════════════════════════════════
+    # 統合後
+    # ════════════════════════════════════════════════════════════════════════
+    st.markdown(
+        '<p style="font-weight:700;font-size:0.8rem;color:#9aa5b4;'
+        'letter-spacing:.1em;text-transform:uppercase;'
+        'border-left:3px solid #27ae60;padding-left:8px;margin:6px 0 10px;">統合後</p>',
+        unsafe_allow_html=True,
+    )
+
     frames = []
     for tid in ir.table_ids:
         t = tables_dict.get(tid)
@@ -1889,29 +1966,28 @@ def _render_integration_before_after(
         df_str = combined.astype(str)
         valid_cols = [c for c in col_names if c in df_str.columns]
 
+        # Color each axis cell by its VALUE within that axis's color family
         def _color_row(row):
             s = pd.Series("", index=row.index)
-            k = (
-                str(row[valid_cols[0]])
-                if len(valid_cols) == 1
-                else tuple(str(row[c]) for c in valid_cols)
-            )
-            pal = key_to_pal.get(k)
-            if pal:
-                for c in valid_cols:
-                    s[c] = f"background-color:{pal[0]};color:{pal[1]};"
+            for ai, c in enumerate(valid_cols):
+                if c in row.index:
+                    _, _, cbg, cfg = _axis_color(ai, str(row[c]))
+                    s[c] = f"background-color:{cbg};color:{cfg};"
             return s
 
         styler = df_str.style.apply(_color_row, axis=1) if valid_cols else df_str.style
 
-        # Axis column headers: dark accent so they stand out
-        _H_BG, _H_FG = "#1a5c42", "#ffffff"
-
+        # Axis column headers: use each axis family's base (shade 0) header color
         def _hdr_fn(idx):
-            return [
-                f"background-color:{_H_BG};color:{_H_FG};" if c in valid_cols else ""
-                for c in idx
-            ]
+            out = []
+            for c in idx:
+                if c in valid_cols:
+                    ai = valid_cols.index(c)
+                    hbg, hfg = _AXIS_FAMILIES[ai % len(_AXIS_FAMILIES)][0][:2]
+                    out.append(f"background-color:{hbg};color:{hfg};font-weight:bold;")
+                else:
+                    out.append("")
+            return out
 
         try:
             styler = styler.apply_index(_hdr_fn, axis="columns")
@@ -1922,11 +1998,13 @@ def _render_integration_before_after(
         for c in valid_cols:
             try:
                 ci = list(df_str.columns).index(c)
+                ai = valid_cols.index(c)
+                hbg, hfg = _AXIS_FAMILIES[ai % len(_AXIS_FAMILIES)][0][:2]
                 tbl_styles.append({
                     "selector": f"th.col_heading.col{ci}",
                     "props": (
-                        f"background-color:{_H_BG} !important;"
-                        f"color:{_H_FG} !important;font-weight:bold !important;"
+                        f"background-color:{hbg} !important;"
+                        f"color:{hfg} !important;font-weight:bold !important;"
                     ),
                 })
             except ValueError:
@@ -1942,7 +2020,7 @@ def _render_integration_before_after(
             styler,
             use_container_width=True,
             hide_index=True,
-            height=min(n_data * 35 + 38, 200 if compact else 300),
+            height=min(n_data * 35 + 38, 200 if compact else 320),
         )
     except Exception:
         st.caption("（プレビュー生成不可）")
