@@ -7,6 +7,7 @@ These relationships are detected algorithmically and injected into the AI prompt
 as verified facts, so the AI does not need to infer them from keywords or names.
 """
 
+import math
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
@@ -123,16 +124,24 @@ def _match_ratio(parent: DetectedTable, children: List[DetectedTable], tol: floa
 
 
 def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
+    """Find all sum relationships within a set of structurally identical tables.
+
+    Performance guards to prevent combinatorial explosion in large groups:
+    - MAX_SMALLER: cap candidate children per parent to the MAX_SMALLER tables
+      with the largest totals (direct children almost always have large sub-totals)
+    - MAX_K: real-world aggregation chains rarely exceed MAX_K direct children
+    - COMBO_CAP: dynamically reduce max_k if the search space still exceeds this
     """
-    Find all sum relationships within a set of structurally identical tables.
-    A parent must be numerically larger than any single child.
-    """
+    MAX_SMALLER = 14    # at most 14 child candidates per parent
+    MAX_K = 9           # rarely more than 9 direct children in practice
+    COMBO_CAP = 50_000  # combinations cap per parent; reduce max_k if exceeded
+
     totals = {t.table_id: _total(t) for t in group}
     sorted_group = sorted(group, key=lambda t: totals[t.table_id])
     n = len(sorted_group)
     relations: List[Dict] = []
 
-    for i in range(2, n):  # candidate parent must have at least 2 smaller tables
+    for i in range(2, n):
         parent = sorted_group[i]
         p_total = totals[parent.table_id]
         if p_total < 1.0:
@@ -142,14 +151,28 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
         if len(smaller) < 2:
             continue
 
-        max_k = min(len(smaller), 8)
+        # Limit candidate pool: keep the MAX_SMALLER tables with the largest
+        # totals. Direct children are almost always among the largest sub-tables,
+        # so this preserves relevant candidates while bounding search complexity.
+        if len(smaller) > MAX_SMALLER:
+            smaller = sorted(smaller, key=lambda t: totals[t.table_id], reverse=True)[:MAX_SMALLER]
+
+        max_k = min(len(smaller), MAX_K)
+
+        # Reduce max_k dynamically until the total combination count fits COMBO_CAP.
+        while max_k > 2:
+            n_combos = sum(math.comb(len(smaller), k) for k in range(2, max_k + 1))
+            if n_combos <= COMBO_CAP:
+                break
+            max_k -= 1
+
         found_sets: List[Tuple[frozenset, float]] = []
 
         for k in range(2, max_k + 1):
             for subset in combinations(smaller, k):
                 s_total = sum(totals[t.table_id] for t in subset)
-                # Fast total-level pruning before expensive cell-level check
-                if s_total > p_total * 1.20 or s_total < p_total * 0.55:
+                # Fast total-level pruning (tighter window than before)
+                if s_total > p_total * 1.15 or s_total < p_total * 0.72:
                     continue
                 ratio = _match_ratio(parent, list(subset))
                 if ratio >= 0.88:

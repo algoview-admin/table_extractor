@@ -212,8 +212,12 @@ USER_PROMPT = """以下のExcelファイルから検出されたテーブルを�
 上記を踏まえ、指定のJSON形式で分析結果を返してください。"""
 
 
-def _format_table_detail(t: DetectedTable) -> str:
-    s = t.to_summary_dict(max_sample_rows=5)
+def _format_table_detail(
+    t: DetectedTable,
+    max_sample: int = 5,
+    max_tail: int = 3,
+) -> str:
+    s = t.to_summary_dict(max_sample_rows=max_sample)
     cols_str = "、".join(s["columns"])
     if s.get("columns_truncated"):
         cols_str += f"  ほか{t.col_count - 20}列"
@@ -225,8 +229,8 @@ def _format_table_detail(t: DetectedTable) -> str:
 
     # Include tail rows so the AI can compare totals across tables
     tail_lines = ""
-    if t.df is not None and len(t.df) > 5:
-        tail = t.df.tail(3).copy()
+    if t.df is not None and len(t.df) > max_sample:
+        tail = t.df.tail(max_tail).copy()
         for i, (_, row) in enumerate(tail.iterrows(), 1):
             items = "、".join(
                 f"{k}={v}" for k, v in list(row.items())[:10] if v is not None and str(v).strip()
@@ -267,8 +271,16 @@ def analyze_tables(
     """Analyze table relationships using OpenAI or Azure OpenAI (via OPENAI_API_TYPE env var)."""
     client, model = _make_client()
 
+    # Scale down per-table detail verbosity for large table sets so the prompt
+    # stays manageable.  The AI still gets enough structure to classify tables.
+    n = len(tables)
+    max_sample = 3 if n > 25 else (4 if n > 15 else 5)
+    max_tail   = 2 if n > 25 else 3
+
     sheet_list = "\n".join(f"- {name}" for name in sheet_names)
-    table_details = "\n\n".join(_format_table_detail(t) for t in tables)
+    table_details = "\n\n".join(
+        _format_table_detail(t, max_sample=max_sample, max_tail=max_tail) for t in tables
+    )
 
     relations = detect_sum_relations(tables)
     relation_facts = format_relation_facts(relations, tables)
@@ -279,6 +291,9 @@ def analyze_tables(
         relation_facts=relation_facts,
     )
 
+    # Scale completion token budget: larger files may produce larger JSON responses.
+    completion_tokens = min(16384, max(8192, n * 300))
+
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -287,7 +302,8 @@ def analyze_tables(
         ],
         response_format={"type": "json_object"},
         temperature=0.1,
-        max_completion_tokens=16384,
+        max_completion_tokens=completion_tokens,
+        timeout=360.0,  # 6-minute hard limit; prevents indefinite hangs
     )
 
     choice = response.choices[0]
