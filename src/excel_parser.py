@@ -235,6 +235,13 @@ _RT_TITLE   = "title"    # 1 short text cell — table/section name candidate
 _RT_COL_HDR = "col_hdr"  # ≥2 text cells, few numbers — column-axis labels
 _RT_DATA    = "data"     # ≥55 % numeric — measurement rows
 _RT_MIXED   = "mixed"    # doesn't fit cleanly (e.g. row-header + numbers)
+_RT_NOTE    = "note"     # annotation / footnote outside the table boundary
+
+# Prefixes that unambiguously mark a cell as an annotation / footnote
+_NOTE_PREFIXES: Tuple[str, ...] = (
+    "※", "＊", "*", "注）", "注)", "（注", "(注", "注意", "＜注", "<注",
+    "note:", "NOTE:", "＊注", "*注",
+)
 
 
 def _row_content_profile(grid: List[List[Any]], r: int, max_col: int) -> Dict[str, Any]:
@@ -278,18 +285,31 @@ def _classify_row(p: Dict[str, Any]) -> str:
     if n_ratio >= 0.55:
         return _RT_DATA
 
-    # Single short text cell → title candidate
+    # Single text cell — distinguish title, annotation/footnote, and column header
     if filled == 1 and p["text"] == 1:
-        return _RT_TITLE if (p["texts"] and len(p["texts"][0]) <= 40) else _RT_COL_HDR
+        txt = p["texts"][0] if p["texts"] else ""
+        # Annotation markers or very long sentence → footnote/note outside the table
+        if txt.startswith(_NOTE_PREFIXES) or len(txt) > 60:
+            return _RT_NOTE
+        return _RT_TITLE
 
     # All filled cells share one unique text → merged cell spanning the row.
-    # Treat as a title row (short) or wide label (long); either way it is not
-    # a real column-header row.
+    # In Excel, merged cells propagate the master cell value to all columns in
+    # the range.  If the text looks like an annotation (note prefix OR > 60 chars),
+    # classify as _RT_NOTE so the state machine excludes it from any table region.
     if p["numeric"] == 0 and p["text"] >= 2:
         unique = set(p["texts"])
         if len(unique) == 1:
             txt = next(iter(unique))
+            if txt.startswith(_NOTE_PREFIXES) or len(txt) > 60:
+                return _RT_NOTE
             return _RT_TITLE if len(txt) <= 40 else _RT_COL_HDR
+
+    # Row that contains a very long text cell alongside low numeric content →
+    # annotation/note.  Catches notes in merged cells that are adjacent to a
+    # small value in another column (so the "unique text" path above fails).
+    if p["texts"] and max(len(t) for t in p["texts"]) > 80 and n_ratio <= 0.30:
+        return _RT_NOTE
 
     # Multiple text cells, very few numbers → column-header row
     if p["text"] >= 2 and n_ratio <= 0.30:
@@ -393,9 +413,10 @@ def _detect_table_regions(
             "band_end": None,
             "col_start": max_col + 1,
             "col_end": 0,
-            "title_rows": [],   # [(row_idx, text)]
-            "header_rows": [],  # [row_idx]
-            "data_rows": [],    # [row_idx]
+            "title_rows": [],      # [(row_idx, text)]
+            "header_rows": [],     # [row_idx]
+            "data_rows": [],       # [row_idx]
+            "trailing_notes": [],  # note texts that trail this table
         }
 
     def _upd_cols(reg: Dict, r: int) -> None:
@@ -425,8 +446,13 @@ def _detect_table_regions(
         # ── empty row ──────────────────────────────────────────────────────
         if rt == _RT_EMPTY:
             consec_empty += 1
-            if cur["data_rows"] and consec_empty >= 1:
-                # Gap after data rows → close this table
+            if cur["data_rows"] and consec_empty >= 2:
+                # Two consecutive empty rows after data → definite table boundary.
+                # A single empty row is tolerated: complex tables often have
+                # blank sub-rows (e.g. sparse 住宅用 / 学校向け rows) that would
+                # incorrectly split the table with a threshold of 1.
+                # Note: a single empty row followed by a new title/wide-header
+                # still closes the table via the _RT_TITLE / _RT_COL_HDR handlers.
                 _flush(cur, last_filled, regions)
                 cur = _mk()
                 pending_titles = []
@@ -462,21 +488,32 @@ def _detect_table_regions(
         if rt == _RT_COL_HDR:
             if cur["data_rows"]:
                 # Before flushing, check if this is a subtotal/summary row
-                # that only appears to be a column header.  This happens when
-                # a row has text labels in the leftmost key columns and None
-                # in the numeric columns because its SUM formulas could not be
-                # evaluated (file saved without recalculation).
-                # Key signal: the row's filled-column span is much narrower
-                # than the established table width.  If the span is < 50 % of
-                # the table width, treat the row as a data/subtotal row and
-                # keep it in the current region instead of starting a new one.
+                # that only appears to be a column header.
+                # Two keep-in-table signals:
+                # (a) Span < 50 % of the table width (narrow subtotal label).
+                # (b) Very sparse fill within the table's column bounds — a data
+                #     row whose label columns are at the left and a single value
+                #     is far to the right can look "wide" by span but is actually
+                #     a sparse data row (e.g. "住宅用 | … | 1 | … | blank").
                 tbl_width = cur["col_end"] - cur["col_start"] + 1
                 row_width = (
                     p["col_max"] - p["col_min"] + 1
                     if p["col_min"] is not None and p["col_max"] is not None
                     else 0
                 )
-                if tbl_width > 0 and row_width / tbl_width < 0.5:
+                filled_in_span = (
+                    sum(
+                        1 for c in range(cur["col_start"], cur["col_end"] + 1)
+                        if _is_filled(grid[r][c])
+                    )
+                    if tbl_width > 0
+                    else 0
+                )
+                fill_density = filled_in_span / tbl_width if tbl_width > 0 else 0
+
+                if tbl_width > 0 and (
+                    row_width / tbl_width < 0.5 or fill_density < 0.30
+                ):
                     cur["data_rows"].append(r)
                     _upd_cols(cur, r)
                     continue
@@ -497,6 +534,27 @@ def _detect_table_regions(
 
             cur["header_rows"].append(r)
             _upd_cols(cur, r)
+            continue
+
+        # ── annotation / footnote row ─────────────────────────────────────
+        if rt == _RT_NOTE:
+            # Deduplicate: merged cells propagate the same text to every column
+            unique_note_texts = list(dict.fromkeys(profiles[r]["texts"]))
+            note_text = unique_note_texts[0] if unique_note_texts else ""
+            if note_text:
+                if cur["data_rows"]:
+                    # Note trails the current table → flush the table first,
+                    # then attach note so the region boundary ends BEFORE the note.
+                    _flush(cur, r - 1, regions)
+                    if regions:
+                        regions[-1]["trailing_notes"].append(note_text)
+                    cur = _mk()
+                    pending_titles = []
+                elif cur["band_start"] is None and regions:
+                    # No new table started yet — consecutive note rows trailing
+                    # the previously flushed table.
+                    regions[-1]["trailing_notes"].append(note_text)
+                # else: note before any table (no prior region) — skip
             continue
 
         # ── data / mixed row ───────────────────────────────────────────────
@@ -604,7 +662,18 @@ def _classify_table_quality(
                 _tally(str(v))
 
     if max_len > 80 or (txt_ct >= 3 and lng_ct / txt_ct > 0.25):
-        return "discard"
+        # Guard: a data-rich table must not be discarded just because a stray
+        # annotation row was carried into the region boundary.  Keep the table
+        # when EITHER the absolute numeric count is large enough OR the numeric
+        # density (fraction of region cells that are numeric) is meaningful —
+        # the density check rescues small tables where absolute count < 10.
+        total_numeric = sum(
+            int(pd.to_numeric(df[c], errors="coerce").notna().sum())
+            for c in df.columns
+        )
+        numeric_density = total_numeric / raw_total if raw_total > 0 else 0
+        if total_numeric < 10 and numeric_density < 0.15:
+            return "discard"
 
     return "ok"
 
@@ -842,6 +911,7 @@ def _detect_tables_in_grid(
                     end_col=col_end,
                     df=df,
                     title=effective_title,
+                    notes=reg.get("trailing_notes", []),
                 )
             )
 

@@ -13,6 +13,7 @@ class DetectedTable:
     end_col: int
     df: Optional[pd.DataFrame] = field(default=None, repr=False)
     title: Optional[str] = None  # Section title row detected immediately above the table
+    notes: List[str] = field(default_factory=list)  # annotation/footnote rows trailing the table
 
     @property
     def row_count(self) -> int:
@@ -50,6 +51,7 @@ class DetectedTable:
             "columns": columns[:20],
             "columns_truncated": len(self.df.columns) > 20,
             "sample_data": sample.to_dict(orient="records"),
+            "notes": self.notes,
         }
 
 
