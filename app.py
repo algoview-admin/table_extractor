@@ -1893,60 +1893,50 @@ def _render_integration_before_after(
         vi = vals_list.index(val) if val in vals_list else 0
         return family[vi % len(family)]
 
-    # ── Helper: build one source table card as an HTML string ───────────────
-    # Pure HTML avoids st.columns() which always adds Streamlit's column gap.
-    def _src_card_html(tid: str) -> str:
-        import html as _html
-        t = tables_dict.get(tid)
-        vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
-        pills = "".join(
-            f'<span style="background:{_axis_color(ai, str(v))[0]};'
-            f'color:{_axis_color(ai, str(v))[1]};'
-            f'padding:2px 9px;border-radius:12px;font-size:0.72rem;font-weight:600;'
-            f'margin-right:4px;display:inline-block;margin-bottom:3px;">'
-            f'{_html.escape(cn)}:&nbsp;{_html.escape(str(v))}</span>'
-            for ai, (cn, v) in enumerate(zip(col_names, vals))
-        )
-        hdr = (
-            f'<div style="background:#161c2c;border-bottom:1px solid #2d3748;padding:7px 10px;">'
-            f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:5px;">'
-            f'📋&nbsp;{_html.escape(tid)}</div>{pills}</div>'
-        )
-        if t is not None and t.df is not None and not t.df.empty:
-            th_s = ('background:#1e2433;color:#9aa5b4;padding:4px 8px;text-align:left;'
-                    'border-bottom:1px solid #2d3748;font-size:0.72rem;white-space:nowrap;'
-                    'font-weight:600;position:sticky;top:0;')
-            td_s = ('padding:4px 8px;color:#c8d4e8;border-bottom:1px solid #2d3748;'
-                    'font-size:0.72rem;white-space:nowrap;')
-            df_str = t.df.astype(str)
-            ths = "".join(f'<th style="{th_s}">{_html.escape(c)}</th>' for c in df_str.columns)
-            trs = "".join(
-                '<tr>' + "".join(f'<td style="{td_s}">{_html.escape(v)}</td>'
-                                  for v in row) + '</tr>'
-                for row in df_str.values
-            )
-            tbl = (f'<table style="border-collapse:collapse;width:100%;">'
-                   f'<thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>')
-            body = (f'<div style="overflow:auto;max-height:{n_preview * 35 + 38}px;'
-                    f'background:#0e1117;">{tbl}</div>')
-        else:
-            body = '<p style="color:#666;font-size:0.72rem;padding:8px 10px;">（データなし）</p>'
-        return hdr + body
+    # ── Helpers: seamless header row (HTML) + interactive dataframes ────────
+    # Headers rendered as one HTML flex row → zero gap between cards.
+    # Dataframes rendered with st.dataframe() → scroll + fullscreen work.
+    import html as _html
 
-    def _src_grid_html(tids: list) -> str:
-        """Render multiple source table cards flush side-by-side in one HTML block."""
+    def _src_header_row_html(tids: list) -> str:
         cells = []
         for j, tid in enumerate(tids):
+            vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
+            pills = "".join(
+                f'<span style="background:{_axis_color(ai, str(v))[0]};'
+                f'color:{_axis_color(ai, str(v))[1]};'
+                f'padding:2px 9px;border-radius:12px;font-size:0.72rem;font-weight:600;'
+                f'margin-right:4px;display:inline-block;margin-bottom:3px;">'
+                f'{_html.escape(cn)}:&nbsp;{_html.escape(str(v))}</span>'
+                for ai, (cn, v) in enumerate(zip(col_names, vals))
+            )
             bl = "border-left:1px solid #2d3748;" if j > 0 else ""
             cells.append(
-                f'<div style="flex:1;min-width:0;overflow:hidden;{bl}">'
-                f'{_src_card_html(tid)}</div>'
+                f'<div style="flex:1;min-width:0;background:#161c2c;{bl}padding:7px 10px;">'
+                f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:4px;">'
+                f'📋&nbsp;{_html.escape(tid)}</div>{pills}</div>'
             )
         return (
             '<div style="display:flex;border:1px solid #2d3748;'
-            'border-radius:6px;overflow:hidden;margin-bottom:4px;">'
+            'border-radius:6px 6px 0 0;overflow:hidden;margin-bottom:0;">'
             + "".join(cells) + '</div>'
         )
+
+    def _src_dataframe_row(tids: list) -> None:
+        cols = st.columns(len(tids), gap="small")
+        for i, tid in enumerate(tids):
+            t = tables_dict.get(tid)
+            with cols[i]:
+                if t is not None and t.df is not None and not t.df.empty:
+                    prev = t.df.head(n_preview)
+                    st.dataframe(
+                        prev.astype(str),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=min(len(prev) * 35 + 38, 128),
+                    )
+                else:
+                    st.caption("（データなし）")
 
     # ════════════════════════════════════════════════════════════════════════
     # 統合前
@@ -1965,14 +1955,16 @@ def _render_integration_before_after(
     extra_tids = ir.table_ids[SAMPLE_LIMIT:]
 
     if preview_tids:
-        st.markdown(_src_grid_html(preview_tids), unsafe_allow_html=True)
+        st.markdown(_src_header_row_html(preview_tids), unsafe_allow_html=True)
+        _src_dataframe_row(preview_tids)
 
     if extra_tids:
         with st.expander(f"他 {len(extra_tids)} テーブルを見る", expanded=False):
             n_ex = min(len(extra_tids), 3)
             for start in range(0, len(extra_tids), n_ex):
                 chunk = extra_tids[start:start + n_ex]
-                st.markdown(_src_grid_html(chunk), unsafe_allow_html=True)
+                st.markdown(_src_header_row_html(chunk), unsafe_allow_html=True)
+                _src_dataframe_row(chunk)
 
     # ── 統合元テーブル一覧 (エクスパンダー下) ──────────────────────────────
     # Avoid st.columns() inside the expander — nested columns in the same
@@ -2145,7 +2137,6 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
         if info["is_integrated"] and ir is not None and tables_dict is not None:
             # Description block ABOVE the before/after preview so users read
             # what the integration does before seeing the table comparison.
-            _splitter_marker(f"s5-{tid}")
             st.markdown(f"_{info['description']}_")
             if info.get("reasoning"):
                 st.caption(f"💡 {info['reasoning']}")
