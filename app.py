@@ -463,36 +463,45 @@ def _inject_splitter_js() -> None:
                     var realBtns = Array.from(srcHdr.querySelectorAll('button'));
                     for (var i = 0; i < realBtns.length; i++) {
                         if (realBtns[i].textContent.trim() === txt) {
-                            realBtns[i].click();
+                            /* Use dispatchEvent so React's synthetic event system
+                               receives a properly formed MouseEvent even when the
+                               target lives off-screen at position: fixed / left:-9999px.
+                               composed:true lets it cross any shadow-DOM boundaries. */
+                            realBtns[i].dispatchEvent(
+                                new MouseEvent('click', {
+                                    bubbles: true, cancelable: true,
+                                    view: window.parent, composed: true
+                                })
+                            );
                             break;
                         }
                     }
                     e.preventDefault();
                 };
 
-                /* ── 4. Remove srcHdr from flex flow (keeps it in DOM for
-                   Streamlit state so button on_click callbacks still fire).
-                   position:fixed off-screen eliminates the flex gap that a
-                   height:0 in-flow element still contributes.  Buttons remain
-                   clickable via portal.onclick → realBtns[i].click(). ── */
-                srcHdr.style.setProperty('position',   'fixed',   'important');
-                srcHdr.style.setProperty('left',       '-9999px', 'important');
-                srcHdr.style.setProperty('top',        '-9999px', 'important');
-                srcHdr.style.setProperty('width',      '0',       'important');
-                srcHdr.style.setProperty('height',     '0',       'important');
-                srcHdr.style.setProperty('overflow',   'hidden',  'important');
-                srcHdr.style.setProperty('padding',    '0',       'important');
-                srcHdr.style.setProperty('margin',     '0',       'important');
-                srcHdr.style.setProperty('visibility', 'hidden',  'important');
+                /* ── 4. Remove srcHdr from flex flow.
+                   position:fixed is enough to take it out of flow entirely —
+                   the element stays off-screen at -9999px and its buttons
+                   remain full-size and interactable so JS .click() reliably
+                   triggers Streamlit's React event system.
+                   IMPORTANT: do NOT set width/height/overflow/visibility here —
+                   those collapse the button hit-areas and break programmatic
+                   click dispatch on the hidden real buttons. ── */
+                srcHdr.style.setProperty('position', 'fixed',   'important');
+                srcHdr.style.setProperty('left',     '-9999px', 'important');
+                srcHdr.style.setProperty('top',      '-9999px', 'important');
 
-                /* ── 4b. Force-clear outer container top-offset in JS too ──
-                   CSS alone may not win the specificity race in all
-                   Streamlit versions. */
-                ['[data-testid="stMainBlockContainer"]', '.block-container']
-                    .forEach(function (s) {
-                        var el = pdoc.querySelector(s);
-                        if (el) el.style.setProperty('padding-top', '0', 'important');
-                    });
+                /* ── 4b. Walk every ancestor of rootBlock up to <body> and zero
+                   out padding-top + margin-top.  This works regardless of which
+                   CSS class or data-testid Streamlit uses for the main container
+                   in any given version — no selector guessing required. ── */
+                var anc = rootBlock.parentElement;
+                while (anc && anc !== pdoc.body && anc !== pdoc.documentElement) {
+                    anc.style.setProperty('padding-top', '0', 'important');
+                    anc.style.setProperty('margin-top',  '0', 'important');
+                    anc = anc.parentElement;
+                }
+                rootBlock.style.setProperty('margin-top', '0', 'important');
 
                 /* ── 5. Push rootBlock content below the portal header ── */
                 var ph = portal.getBoundingClientRect().height;
@@ -618,19 +627,19 @@ def _render_header():
     with save_col:
         if st.session_state.get("filename"):
             has_data = bool(st.session_state.get("detected_tables"))
+
+            def _on_save():
+                st.session_state["_save_result"] = _save_project_to_disk()
+
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button(
+            st.button(
                 "💾 Save",
                 key="hdr_save_btn",
                 use_container_width=True,
                 disabled=not has_data,
+                on_click=_on_save,
                 help=f"現在の解析状態を {_PROJECT_DIR} に保存します。",
-            ):
-                msg = _save_project_to_disk()
-                if msg.startswith("✅"):
-                    st.toast(msg, icon="💾")
-                else:
-                    st.toast(msg, icon="❌")
+            )
 
     current = st.session_state.step
     cols = st.columns(len(STEP_LABELS))
@@ -1458,7 +1467,7 @@ def step4():
                         try:
                             combined_prev = pd.concat(preview_frames, ignore_index=True)
                             st.dataframe(
-                                combined_prev.astype(str),
+                                _styled_df(combined_prev, _pv_col_names),
                                 use_container_width=True,
                                 hide_index=True,
                                 height=350,
@@ -1661,6 +1670,7 @@ def _build_final_tables():
             "granularity": src_ta.granularity_level if src_ta else "detail",
             "is_minimum": src_ta.is_minimum_granularity_candidate if src_ta else False,
             "is_master": src_ta.is_master_table if src_ta else False,
+            "new_col_names": col_names,
         }
 
         # Auto-generate dimension masters for ALL axes that have a parent.
@@ -1752,6 +1762,52 @@ def _build_final_tables():
 # Step 5 – Table selection
 # ---------------------------------------------------------------------------
 
+# Each new column gets a distinct palette: (cell_bg, cell_fg, hdr_bg, hdr_fg)
+# hdr_bg is noticeably darker than cell_bg for visual contrast.
+_COL_PALETTES = [
+    ("#d0faf0", "#0d4b36", "#2aab87", "#ffffff"),  # teal
+    ("#fdebd0", "#7a3a0a", "#d4793a", "#ffffff"),  # orange
+    ("#d8e8fd", "#0d2f7f", "#4a7de0", "#ffffff"),  # blue
+    ("#f0d5f8", "#5b0f7f", "#9b4fc4", "#ffffff"),  # purple
+]
+
+
+def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Styler":
+    """Return a Pandas Styler with new_cols highlighted; each column gets a distinct palette,
+    with the column header rendered darker than the cell background."""
+    df_str = df.astype(str)
+    valid = [c for c in new_cols if c in df_str.columns]
+    styler = df_str.style
+
+    if not valid:
+        return styler
+
+    col_pal = {c: _COL_PALETTES[i % len(_COL_PALETTES)] for i, c in enumerate(valid)}
+
+    # ── Cell background ──
+    for col, (cbg, cfg, _, _) in col_pal.items():
+        styler = styler.set_properties(
+            subset=[col], **{"background-color": cbg, "color": cfg}
+        )
+
+    # ── Column header background (Streamlit supports apply_index axis="columns") ──
+    def _hdr(idx: "pd.Index") -> list:
+        out = []
+        for c in idx:
+            if c in col_pal:
+                _, _, hbg, hfg = col_pal[c]
+                out.append(f"background-color: {hbg}; color: {hfg};")
+            else:
+                out.append("")
+        return out
+
+    try:
+        styler = styler.apply_index(_hdr, axis="columns")
+    except Exception:
+        pass
+
+    return styler
+
 
 def _granularity_badge(info: dict) -> str:
     if info["is_integrated"]:
@@ -1785,8 +1841,9 @@ def _table_card(tid: str, info: dict):
         col_prev, col_info = st.columns([1, 1])
 
         with col_prev:
+            _new_cols = info.get("new_col_names") or []
             st.dataframe(
-                df.astype(str),
+                _styled_df(df, _new_cols) if _new_cols else df.astype(str),
                 use_container_width=True,
                 hide_index=True,
                 height=220,
@@ -2080,6 +2137,12 @@ def step6():
 
 def main():
     _init()
+
+    # Save callback stores result in session_state so it survives the rerun
+    # and can be shown as a toast from outside the header container.
+    if "_save_result" in st.session_state:
+        _msg = st.session_state.pop("_save_result")
+        st.toast(_msg, icon="💾" if _msg.startswith("✅") else "❌")
 
     with st.container():
         _render_header()
