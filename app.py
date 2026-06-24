@@ -2095,20 +2095,27 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
         )
 
         if info["is_integrated"] and ir is not None and tables_dict is not None:
+            # Description block ABOVE the before/after preview so users read
+            # what the integration does before seeing the table comparison.
+            _splitter_marker(f"s5-{tid}")
+            st.markdown(f"_{info['description']}_")
+            meta_cols = st.columns([2, 5])
+            with meta_cols[0]:
+                st.caption(f"📊 {len(df)} 行 × {len(df.columns)} 列")
+            with meta_cols[1]:
+                if info.get("source_ids") and len(info["source_ids"]) > 1:
+                    st.caption(f"🔗 統合元: {', '.join(info['source_ids'])}")
+            if info.get("reasoning"):
+                st.caption(f"💡 {info['reasoning']}")
+
+            st.divider()
+
             # Before/after view for integrated tables
             _render_integration_before_after(ir, tables_dict, compact=True)
 
             st.divider()
-            _splitter_marker(f"s5-{tid}")
-            col_info, col_btn = st.columns([3, 1])
-            with col_info:
-                st.markdown(f"_{info['description']}_")
-                st.caption(f"📊 {len(df)} 行 × {len(df.columns)} 列")
-                st.caption(f"💡 {info['reasoning']}")
-                if info.get("source_ids") and len(info["source_ids"]) > 1:
-                    st.caption(f"🔗 統合元: {', '.join(info['source_ids'])}")
+            col_gap, col_btn = st.columns([4, 1])
             with col_btn:
-                st.markdown("<br><br>", unsafe_allow_html=True)
                 _sel_button()
         else:
             # Standard view for non-integrated tables
