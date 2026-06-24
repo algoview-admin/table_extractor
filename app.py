@@ -1746,32 +1746,51 @@ _COL_PALETTES = [
 ]
 
 # Per-axis color families for integration previews.
-# Each family has 4 shades: (hdr_bg, hdr_fg, cell_bg, cell_fg)
-# Axis 0 = green, Axis 1 = blue, Axis 2 = purple, Axis 3 = orange
+# Each family has 8 DISTINCT colors (not shades): (hdr_bg, hdr_fg, cell_bg, cell_fg)
+# Axis 0 = WARM family (red/orange/pink/amber — visually distinct per value)
+# Axis 1 = COOL family (blue/teal/purple/cyan — visually distinct per value)
+# Axis 2 = NATURE family (green/lime/olive/forest)
+# Axis 3 = ACCENT family (deep-orange/indigo/rose/mint)
 _AXIS_FAMILIES: list = [
-    [  # axis-0: green
-        ("#27ae60", "#fff", "#d5f5e3", "#0b3c2e"),
-        ("#1e8449", "#fff", "#a9dfbf", "#07291e"),
-        ("#117a65", "#fff", "#d1f2eb", "#07291e"),
-        ("#0e6640", "#fff", "#c3e8d2", "#07291e"),
+    [  # axis-0: WARM — each value is a clearly different warm hue
+        ("#e74c3c", "#fff", "#fadbd8", "#7b0c0c"),  # red
+        ("#e67e22", "#fff", "#fae5d3", "#7a3a0a"),  # orange
+        ("#e91e63", "#fff", "#fce4ec", "#7c0024"),  # magenta/pink
+        ("#f39c12", "#1a1a1a", "#fef9e7", "#5d3a00"),  # amber
+        ("#c0392b", "#fff", "#f5b7b1", "#6e1006"),  # dark red
+        ("#d35400", "#fff", "#fad5b0", "#6b2800"),  # burnt orange
+        ("#ec407a", "#fff", "#fce8ef", "#7a0036"),  # rose
+        ("#f57c00", "#fff", "#fff0d9", "#6b3800"),  # deep orange
     ],
-    [  # axis-1: blue
-        ("#2980b9", "#fff", "#d6eaf8", "#0d2f6e"),
-        ("#1a5276", "#fff", "#aed6f1", "#0a2050"),
-        ("#2471a3", "#fff", "#d0e8f5", "#0a2050"),
-        ("#1b4f72", "#fff", "#c8e1ef", "#0a2050"),
+    [  # axis-1: COOL — each value is a clearly different cool hue
+        ("#2980b9", "#fff", "#d6eaf8", "#0d2f6e"),  # blue
+        ("#1abc9c", "#fff", "#d1f2eb", "#0a4038"),  # teal
+        ("#8e44ad", "#fff", "#e8daef", "#4a1a72"),  # purple
+        ("#00acc1", "#fff", "#e0f7fa", "#00474f"),  # cyan
+        ("#3f51b5", "#fff", "#e8eaf6", "#1a237e"),  # indigo
+        ("#16a085", "#fff", "#cde8e4", "#0a3630"),  # dark teal
+        ("#6c3483", "#fff", "#e4d0ef", "#3b1260"),  # deep purple
+        ("#0288d1", "#fff", "#e1f1fb", "#013d6e"),  # light blue
     ],
-    [  # axis-2: purple
-        ("#8e44ad", "#fff", "#f4ecf7", "#4a1a72"),
-        ("#6c3483", "#fff", "#e8daef", "#3b1260"),
-        ("#7d3c98", "#fff", "#f0e6f8", "#3b1260"),
-        ("#5b2c6f", "#fff", "#e4d5ee", "#3b1260"),
+    [  # axis-2: NATURE — greens/lime/forest
+        ("#27ae60", "#fff", "#d5f5e3", "#0b3c2e"),  # green
+        ("#8bc34a", "#1a1a1a", "#f1f8e9", "#33691e"),  # lime green
+        ("#00695c", "#fff", "#cce5e2", "#00332e"),  # forest
+        ("#558b2f", "#fff", "#dcedc8", "#2a4200"),  # olive
+        ("#2e7d32", "#fff", "#c8e6c9", "#0a2d0b"),  # dark green
+        ("#76ff03", "#1a1a1a", "#f4ffe0", "#3a5f00"),  # neon lime
+        ("#1b5e20", "#fff", "#c3e8c4", "#0a1c0a"),  # deep forest
+        ("#aed581", "#1a1a1a", "#ecf6dc", "#3a5f00"),  # light olive
     ],
-    [  # axis-3: orange
-        ("#d35400", "#fff", "#fdebd0", "#7a3a0a"),
-        ("#b7770d", "#fff", "#fad7a0", "#5f2d04"),
-        ("#ca6f1e", "#fff", "#f8e6c0", "#5f2d04"),
-        ("#9c640c", "#fff", "#f5d5a0", "#5f2d04"),
+    [  # axis-3: ACCENT — misc vivid
+        ("#ff5722", "#fff", "#fbe9e7", "#bf360c"),  # deep orange
+        ("#9c27b0", "#fff", "#f3e5f5", "#4a148c"),  # deep purple
+        ("#009688", "#fff", "#e0f2f1", "#004d40"),  # teal accent
+        ("#ffc107", "#1a1a1a", "#fff8e1", "#6b4900"),  # yellow accent
+        ("#5c6bc0", "#fff", "#e8eaf6", "#1a237e"),  # indigo accent
+        ("#ef5350", "#fff", "#ffebee", "#7b0000"),  # red accent
+        ("#26a69a", "#fff", "#e0f2f1", "#00352f"),  # teal light
+        ("#ab47bc", "#fff", "#f3e5f5", "#4a0072"),  # purple accent
     ],
 ]
 
@@ -1905,9 +1924,11 @@ def _render_integration_before_after(
     # 統合前
     # ════════════════════════════════════════════════════════════════════════
     st.markdown(
-        '<p style="font-weight:700;font-size:0.8rem;color:#9aa5b4;'
-        'letter-spacing:.1em;text-transform:uppercase;'
-        'border-left:3px solid #4a7de0;padding-left:8px;margin:6px 0 10px;">統合前</p>',
+        '<div style="display:flex;align-items:center;gap:10px;margin:6px 0 14px;">'
+        '<div style="width:5px;height:22px;background:#4a7de0;border-radius:3px;flex-shrink:0;"></div>'
+        '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">統合前</span>'
+        '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(74,125,224,.4),transparent);"></div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -1929,10 +1950,19 @@ def _render_integration_before_after(
                 with ex_cols[i % n_ex]:
                     _src_card(tid)
 
-    # ── Arrow ────────────────────────────────────────────────────────────────
+    # ── 統合処理 separator ───────────────────────────────────────────────────
     st.markdown(
-        '<div style="text-align:center;font-size:1.1rem;color:#7FFFD4;'
-        'margin:14px 0 8px;letter-spacing:.06em;">↓ &nbsp;統合</div>',
+        '<div style="display:flex;align-items:center;gap:0;margin:22px 0 18px;">'
+        '<div style="flex:1;height:1px;background:linear-gradient(to right,transparent,rgba(39,174,96,.5));"></div>'
+        '<div style="border:1.5px solid rgba(39,174,96,.7);border-radius:24px;'
+        'padding:6px 22px;margin:0 16px;font-size:0.82rem;font-weight:700;'
+        'color:#7FFFD4;letter-spacing:.14em;'
+        'background:linear-gradient(135deg,rgba(39,174,96,.12),rgba(26,188,156,.08));'
+        'display:flex;align-items:center;gap:8px;white-space:nowrap;">'
+        '↓&nbsp;&nbsp;統合処理'
+        '</div>'
+        '<div style="flex:1;height:1px;background:linear-gradient(to left,transparent,rgba(39,174,96,.5));"></div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -1940,9 +1970,11 @@ def _render_integration_before_after(
     # 統合後
     # ════════════════════════════════════════════════════════════════════════
     st.markdown(
-        '<p style="font-weight:700;font-size:0.8rem;color:#9aa5b4;'
-        'letter-spacing:.1em;text-transform:uppercase;'
-        'border-left:3px solid #27ae60;padding-left:8px;margin:6px 0 10px;">統合後</p>',
+        '<div style="display:flex;align-items:center;gap:10px;margin:6px 0 14px;">'
+        '<div style="width:5px;height:22px;background:#27ae60;border-radius:3px;flex-shrink:0;"></div>'
+        '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">統合後</span>'
+        '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(39,174,96,.4),transparent);"></div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
