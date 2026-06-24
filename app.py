@@ -1957,19 +1957,19 @@ def _render_integration_before_after(
                     _src_card(tid)
 
     # ── 統合元テーブル一覧 (エクスパンダー下) ──────────────────────────────
+    # Avoid st.columns() inside the expander — nested columns in the same
+    # vertical container can cause unequal width distribution in the source
+    # table grid rendered above.
     if source_ids:
         _INLINE_LIMIT = 4
         if len(source_ids) <= _INLINE_LIMIT:
-            st.caption(f"🔗 統合元: {' ／ '.join(source_ids)}")
+            st.caption(f"🔗 統合元テーブル一覧: {' ／ '.join(source_ids)}")
         else:
             with st.expander(
-                f"🔗 統合元 （{len(source_ids)} テーブル）", expanded=False
+                f"🔗 統合元テーブル一覧 （{len(source_ids)} テーブル）", expanded=False
             ):
-                n_sc = min(len(source_ids), 3)
-                sc_cols = st.columns(n_sc)
-                for i, sid in enumerate(source_ids):
-                    with sc_cols[i % n_sc]:
-                        st.caption(f"• {sid}")
+                for sid in source_ids:
+                    st.caption(f"• {sid}")
 
     # ── 統合処理 separator ───────────────────────────────────────────────────
     st.markdown(
