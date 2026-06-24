@@ -1441,42 +1441,15 @@ def step4():
                 st.markdown(f"#### {ir.group_name}")
                 st.markdown(f"_{ir.description}_")
 
-                _splitter_marker(f"s4-ir-{ir.recommendation_id}")
-                c_prev, c_info = st.columns([1, 1])
-                with c_prev:
-                    st.caption(
-                        f"統合後プレビュー（全 {len(ir.table_ids)} テーブル × 2 行）"
-                    )
-                    _pv_col_names = getattr(ir, "new_column_names", []) or [
-                        ir.new_column_name
-                    ]
-                    _pv_multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
-                    preview_frames = []
-                    for tid in ir.table_ids:
-                        t = tables_dict.get(tid)
-                        if t and t.df is not None:
-                            row = t.df.head(2).copy()
-                            vals = _pv_multi_vals.get(tid) or [
-                                ir.new_column_values.get(tid, "")
-                            ]
-                            for i in range(len(_pv_col_names) - 1, -1, -1):
-                                val = vals[i] if i < len(vals) else ""
-                                row.insert(0, _pv_col_names[i], val)
-                            preview_frames.append(row)
-                    if preview_frames:
-                        try:
-                            combined_prev = pd.concat(preview_frames, ignore_index=True)
-                            st.dataframe(
-                                _styled_df(combined_prev, _pv_col_names),
-                                use_container_width=True,
-                                hide_index=True,
-                                height=350,
-                            )
-                        except Exception:
-                            st.caption("（プレビュー生成不可）")
+                # Full-width before/after preview
+                _render_integration_before_after(ir, tables_dict)
 
+                st.divider()
+
+                # Info + decision below the preview
+                _splitter_marker(f"s4-ir-{ir.recommendation_id}")
+                c_info, c_dec = st.columns([2, 1])
                 with c_info:
-                    st.markdown(f"**対象テーブル**: {', '.join(ir.table_ids)}")
                     _col_names = getattr(ir, "new_column_names", []) or [
                         ir.new_column_name
                     ]
@@ -1492,6 +1465,7 @@ def step4():
                         st.markdown(f"  - `{tid}` → **{val_str}**")
                     st.caption(f"💡 推奨理由: {ir.reasoning}")
 
+                with c_dec:
                     st.markdown("<br>", unsafe_allow_html=True)
                     decision = st.radio(
                         "この統合を実施しますか？",
@@ -1829,6 +1803,151 @@ def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Style
     return styler
 
 
+def _render_integration_before_after(
+    ir,
+    tables_dict: dict,
+    compact: bool = False,
+) -> None:
+    """Render a colored before → after integration preview.
+
+    Source tables appear on top with palette-coloured headers; the integrated
+    table below colours each row's axis cells to match its origin table,
+    making the before/after relationship immediately visible.
+    """
+    col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
+    multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
+    n_preview = 2 if compact else 3
+
+    # Source table i → palette[i]
+    tid_pal = {
+        tid: _COL_PALETTES[i % len(_COL_PALETTES)]
+        for i, tid in enumerate(ir.table_ids)
+    }
+    # Axis key → palette  (used for per-row colouring in the integrated table)
+    key_to_pal: dict = {}
+    for tid in ir.table_ids:
+        vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
+        k = str(vals[0]) if len(vals) == 1 else tuple(str(v) for v in vals)
+        key_to_pal[k] = tid_pal[tid]
+
+    # ── 統合前 ──────────────────────────────────────────────────────────────
+    n = len(ir.table_ids)
+    src_cols = st.columns(min(n, 4)) if n > 0 else []
+
+    for i, tid in enumerate(ir.table_ids):
+        pal = tid_pal[tid]
+        t = tables_dict.get(tid)
+        with src_cols[i % len(src_cols)]:
+            vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
+            axis_html = " &nbsp;/&nbsp; ".join(
+                f"{cn}&nbsp;=&nbsp;<b>{v}</b>" for cn, v in zip(col_names, vals)
+            )
+            st.markdown(
+                f'<div style="background:{pal[2]};color:{pal[3]};'
+                f'padding:5px 10px;border-radius:6px 6px 0 0;'
+                f'font-size:0.78rem;font-weight:600;line-height:1.5;'
+                f'margin-bottom:-1px;">'
+                f'📋&nbsp;{tid}<br>{axis_html}</div>',
+                unsafe_allow_html=True,
+            )
+            if t is not None and t.df is not None and not t.df.empty:
+                prev = t.df.head(n_preview)
+                st.dataframe(
+                    prev.astype(str),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(len(prev) * 35 + 38, 130),
+                )
+            else:
+                st.caption("（データなし）")
+
+    # ── 矢印 ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="text-align:center;font-size:1rem;color:#7FFFD4;'
+        'margin:8px 0 2px;letter-spacing:.05em;">↓ &nbsp;統合</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── 統合後 ──────────────────────────────────────────────────────────────
+    frames = []
+    for tid in ir.table_ids:
+        t = tables_dict.get(tid)
+        if t is not None and t.df is not None and not t.df.empty:
+            row = t.df.head(n_preview).copy()
+            vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
+            for ci in range(len(col_names) - 1, -1, -1):
+                val = vals[ci] if ci < len(vals) else ""
+                row.insert(0, col_names[ci], val)
+            frames.append(row)
+
+    if not frames:
+        st.caption("（プレビュー生成不可）")
+        return
+
+    try:
+        combined = pd.concat(frames, ignore_index=True)
+        df_str = combined.astype(str)
+        valid_cols = [c for c in col_names if c in df_str.columns]
+
+        def _color_row(row):
+            s = pd.Series("", index=row.index)
+            k = (
+                str(row[valid_cols[0]])
+                if len(valid_cols) == 1
+                else tuple(str(row[c]) for c in valid_cols)
+            )
+            pal = key_to_pal.get(k)
+            if pal:
+                for c in valid_cols:
+                    s[c] = f"background-color:{pal[0]};color:{pal[1]};"
+            return s
+
+        styler = df_str.style.apply(_color_row, axis=1) if valid_cols else df_str.style
+
+        # Axis column headers: dark accent so they stand out
+        _H_BG, _H_FG = "#1a5c42", "#ffffff"
+
+        def _hdr_fn(idx):
+            return [
+                f"background-color:{_H_BG};color:{_H_FG};" if c in valid_cols else ""
+                for c in idx
+            ]
+
+        try:
+            styler = styler.apply_index(_hdr_fn, axis="columns")
+        except Exception:
+            pass
+
+        tbl_styles = []
+        for c in valid_cols:
+            try:
+                ci = list(df_str.columns).index(c)
+                tbl_styles.append({
+                    "selector": f"th.col_heading.col{ci}",
+                    "props": (
+                        f"background-color:{_H_BG} !important;"
+                        f"color:{_H_FG} !important;font-weight:bold !important;"
+                    ),
+                })
+            except ValueError:
+                pass
+        if tbl_styles:
+            try:
+                styler = styler.set_table_styles(tbl_styles, overwrite=False)
+            except Exception:
+                pass
+
+        n_data = len(df_str)
+        st.dataframe(
+            styler,
+            use_container_width=True,
+            hide_index=True,
+            height=min(n_data * 35 + 38, 200 if compact else 300),
+        )
+    except Exception:
+        st.caption("（プレビュー生成不可）")
+
+
 def _granularity_badge(info: dict) -> str:
     if info["is_integrated"]:
         return "<span class='step-badge badge-integrated'>🔀 統合</span>"
@@ -1844,52 +1963,63 @@ def _granularity_badge(info: dict) -> str:
     return "<span class='step-badge badge-ref'>📄 その他</span>"
 
 
-def _table_card(tid: str, info: dict):
+def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
     df: pd.DataFrame = info["df"]
     is_sel = tid in st.session_state.selected_ids
     badge = _granularity_badge(info)
 
+    def _sel_button():
+        if is_sel:
+            if st.button("✅ 選択中", key=f"sel_{tid}", use_container_width=True, type="primary"):
+                st.session_state.selected_ids.discard(tid)
+                st.rerun()
+        else:
+            if st.button("＋ 選択", key=f"sel_{tid}", use_container_width=True):
+                st.session_state.selected_ids.add(tid)
+                st.rerun()
+
     with st.container(border=True):
-        # Title: always above the table/description split
         st.markdown(
             f"**{info['display_name']}** &nbsp; `{tid}` {badge}",
             unsafe_allow_html=True,
         )
 
-        # Marker placed immediately before st.columns so JS finds the right block
-        _splitter_marker(f"s5-{tid}")
-        col_prev, col_info = st.columns([1, 1])
+        if info["is_integrated"] and ir is not None and tables_dict is not None:
+            # Before/after view for integrated tables
+            _render_integration_before_after(ir, tables_dict, compact=True)
 
-        with col_prev:
-            _new_cols = info.get("new_col_names") or []
-            st.dataframe(
-                _styled_df(df, _new_cols) if _new_cols else df.astype(str),
-                use_container_width=True,
-                hide_index=True,
-                height=220,
-            )
-
-        with col_info:
-            st.markdown(f"_{info['description']}_")
-            st.caption(f"📊 {len(df)} 行 × {len(df.columns)} 列")
-            st.caption(f"💡 {info['reasoning']}")
-            if info.get("source_ids") and len(info["source_ids"]) > 1:
-                st.caption(f"🔗 統合元: {', '.join(info['source_ids'])}")
-
-            st.markdown("<br>", unsafe_allow_html=True)
-            if is_sel:
-                if st.button(
-                    "✅ 選択中",
-                    key=f"sel_{tid}",
+            st.divider()
+            _splitter_marker(f"s5-{tid}")
+            col_info, col_btn = st.columns([3, 1])
+            with col_info:
+                st.markdown(f"_{info['description']}_")
+                st.caption(f"📊 {len(df)} 行 × {len(df.columns)} 列")
+                st.caption(f"💡 {info['reasoning']}")
+                if info.get("source_ids") and len(info["source_ids"]) > 1:
+                    st.caption(f"🔗 統合元: {', '.join(info['source_ids'])}")
+            with col_btn:
+                st.markdown("<br><br>", unsafe_allow_html=True)
+                _sel_button()
+        else:
+            # Standard view for non-integrated tables
+            _splitter_marker(f"s5-{tid}")
+            col_prev, col_info = st.columns([1, 1])
+            with col_prev:
+                _new_cols = info.get("new_col_names") or []
+                st.dataframe(
+                    _styled_df(df, _new_cols) if _new_cols else df.astype(str),
                     use_container_width=True,
-                    type="primary",
-                ):
-                    st.session_state.selected_ids.discard(tid)
-                    st.rerun()
-            else:
-                if st.button("＋ 選択", key=f"sel_{tid}", use_container_width=True):
-                    st.session_state.selected_ids.add(tid)
-                    st.rerun()
+                    hide_index=True,
+                    height=220,
+                )
+            with col_info:
+                st.markdown(f"_{info['description']}_")
+                st.caption(f"📊 {len(df)} 行 × {len(df.columns)} 列")
+                st.caption(f"💡 {info['reasoning']}")
+                if info.get("source_ids") and len(info["source_ids"]) > 1:
+                    st.caption(f"🔗 統合元: {', '.join(info['source_ids'])}")
+                st.markdown("<br>", unsafe_allow_html=True)
+                _sel_button()
 
 
 def step5():
@@ -1970,6 +2100,21 @@ def step5():
 
     st.divider()
 
+    # Build lookups for the integrated table before/after display
+    _s5_analysis = st.session_state.get("ai_analysis")
+    _s5_ir_by_rec: dict = {}
+    if _s5_analysis:
+        _s5_ir_by_rec = {
+            ir.recommendation_id: ir
+            for ir in _s5_analysis.integration_recommendations
+        }
+    _s5_tbls = {t.table_id: t for t in st.session_state.get("detected_tables", [])}
+
+    def _get_ir_for(k: str):
+        if k.startswith("integrated_"):
+            return _s5_ir_by_rec.get(k[len("integrated_"):])
+        return None
+
     # --- Integrated tables (grouped by column signature) ---
     integrated = {k: v for k, v in final.items() if v["is_integrated"]}
     if integrated:
@@ -1997,7 +2142,7 @@ def step5():
             rep_tid, rep_info = group[0]
             similar_int = group[1:]
 
-            _table_card(rep_tid, rep_info)
+            _table_card(rep_tid, rep_info, ir=_get_ir_for(rep_tid), tables_dict=_s5_tbls)
 
             if similar_int:
                 with st.expander(
@@ -2005,7 +2150,7 @@ def step5():
                     expanded=False,
                 ):
                     for tid, info in similar_int:
-                        _table_card(tid, info)
+                        _table_card(tid, info, ir=_get_ir_for(tid), tables_dict=_s5_tbls)
 
     # --- Minimum granularity ---
     min_tables = {
