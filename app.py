@@ -174,7 +174,7 @@ STEP_LABELS = [
     "ファイル選択",
     "テーブル検出",
     "テーブル関係分析",
-    "新規テーブル確認",
+    "新規テーブル案生成",
     "テーブル選択",
     "エクスポート",
 ]
@@ -622,7 +622,7 @@ def _render_header():
     )
     title_col, save_col = st.columns([6, 1])
     with title_col:
-        st.title("📊 Table Extractor")
+        st.title("📊 Table Extractor (開発中)")
         st.caption("Excel / CSV ファイルから分析対象とするテーブルを抽出します。")
     with save_col:
         if st.session_state.get("filename"):
@@ -1178,7 +1178,7 @@ def step3():
         st.button("← 戻る", on_click=_go_to, args=(2,))
     with c2:
         st.button(
-            "次へ：新規テーブル確認 →",
+            "次へ：新規テーブル案生成 →",
             type="primary",
             use_container_width=True,
             on_click=_go_to,
@@ -1373,7 +1373,7 @@ def _dedup_master_irs(master_irs, tables_dict):
 
 
 def step4():
-    st.header("✅ ステップ 4 : 新規テーブル確認")
+    st.header("✅ ステップ 4 : 新規テーブル案生成")
 
     components.html(
         """<script>
@@ -1390,7 +1390,7 @@ def step4():
 
     # Auto-advance during the initial forward pass only
     if st.session_state.auto_processing:
-        with st.spinner("新規テーブル・マスタを自動設定中..."):
+        with st.spinner("新規テーブル案・マスタ案を自動設定中..."):
             _build_final_tables()
         st.session_state.step = 5
         st.rerun()
@@ -1790,7 +1790,8 @@ def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Style
             subset=[col], **{"background-color": cbg, "color": cfg}
         )
 
-    # ── Column header background (Streamlit supports apply_index axis="columns") ──
+    # ── Column header background ──
+    # Method A: apply_index (pandas ≥ 1.4, Streamlit ≥ 1.26)
     def _hdr(idx: "pd.Index") -> list:
         out = []
         for c in idx:
@@ -1805,6 +1806,25 @@ def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Style
         styler = styler.apply_index(_hdr, axis="columns")
     except Exception:
         pass
+
+    # Method B: set_table_styles – targets Pandas HTML class selectors
+    # (th.col_heading.colN).  Works in some Streamlit versions that ignore
+    # apply_index but still honour table-level CSS injected via set_table_styles.
+    tbl_styles = []
+    for col, (_, _, hbg, hfg) in col_pal.items():
+        try:
+            col_idx = list(df_str.columns).index(col)
+            tbl_styles.append({
+                "selector": f"th.col_heading.col{col_idx}",
+                "props": f"background-color: {hbg} !important; color: {hfg} !important;",
+            })
+        except ValueError:
+            pass
+    if tbl_styles:
+        try:
+            styler = styler.set_table_styles(tbl_styles, overwrite=False)
+        except Exception:
+            pass
 
     return styler
 
@@ -1894,6 +1914,22 @@ def step5():
         st.warning("表示できるテーブルがありません")
         st.button("← 戻る", on_click=_go_to, args=(4,))
         return
+
+    # Backfill new_col_names for entries that were loaded from an older .tep file
+    # which was saved before this field was added.  Derive from ai_analysis so
+    # that column highlighting works even after a project restore.
+    _analysis = st.session_state.get("ai_analysis")
+    if _analysis:
+        _ir_map = {
+            f"integrated_{ir.recommendation_id}": ir
+            for ir in _analysis.integration_recommendations
+        }
+        for k, info in final.items():
+            if info.get("is_integrated") and not info.get("new_col_names") and k in _ir_map:
+                ir = _ir_map[k]
+                info["new_col_names"] = (
+                    getattr(ir, "new_column_names", []) or [ir.new_column_name]
+                )
 
     # Auto-processing terminates at step 5
     if st.session_state.auto_processing:
