@@ -1,6 +1,8 @@
 import json
 import os
-from typing import Any, Dict, List, Tuple
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import (
     AIAnalysisResult,
@@ -264,15 +266,245 @@ def _format_table_detail(
     )
 
 
+# ---------------------------------------------------------------------------
+# Cross-sheet synthesis prompts (used in chunked mode, Phase 2)
+# ---------------------------------------------------------------------------
+
+CROSS_SHEET_SYSTEM = """あなたはExcelデータ構造の分析専門家です。
+複数シートにまたがるテーブルのcross-sheet統合推奨のみを生成してください。
+
+必ず以下のJSON形式のみで回答してください（説明文は不要）:
+{
+  "integration_recommendations": [
+    {
+      "recommendation_id": "IR_CS_1",
+      "group_name": "統合後テーブルの表示名",
+      "description": "統合の内容説明",
+      "table_ids": ["統合対象テーブルIDのリスト（全シートの対応テーブル）"],
+      "new_column_names": ["識別軸の列名（例: 支店）"],
+      "new_column_values": {"テーブルID": ["値（例: 東京支店）"]},
+      "axis_parent_table_ids": [null],
+      "axis_parent_label_columns": [null],
+      "reasoning": "統合を推奨する理由"
+    }
+  ]
+}
+
+【重要】シート内の統合（intra-sheet）は既に処理済みです。
+異なるシートに存在する同一構造・同一目的のテーブルをまとめる統合推奨のみを出力してください。"""
+
+CROSS_SHEET_USER = """以下は各シートのテーブル分析結果サマリーです。
+複数シートにまたがる同一構造のテーブルがある場合、cross-sheet統合推奨を生成してください。
+
+=== 全テーブル一覧（{n_tables}件） ===
+{table_summaries}
+
+=== シート内統合（参考：既処理済み） ===
+{intra_recs_summary}
+
+{relation_facts}
+
+上記を踏まえ、cross-sheet統合推奨のみをJSON形式で返してください。"""
+
+
+# ---------------------------------------------------------------------------
+# API call wrapper with exponential backoff for 429 errors
+# ---------------------------------------------------------------------------
+
+def _call_api(
+    client: Any,
+    model: str,
+    messages: List[Dict],
+    max_completion_tokens: int,
+    timeout: float = 360.0,
+) -> str:
+    """Call the chat completion API with retry on 429 / rate-limit errors."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(4):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.1,
+                max_completion_tokens=max_completion_tokens,
+                timeout=timeout,
+            )
+            choice = response.choices[0]
+            if choice.finish_reason == "length":
+                raise ValueError(
+                    f"GPT レスポンスがトークン上限に達して途中で切れました。"
+                    f"(finish_reason=length)"
+                )
+            return choice.message.content or ""
+        except Exception as exc:
+            err = str(exc)
+            if "429" in err or "too_many_requests" in err.lower() or "rate_limit" in err.lower():
+                last_exc = exc
+                if attempt < 3:
+                    wait = 15 * (2 ** attempt)  # 15 s, 30 s, 60 s
+                    time.sleep(wait)
+                    continue
+            raise
+    raise RuntimeError(
+        f"API呼び出しが最大リトライ回数を超えました: {last_exc}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lightweight table summary for large-set prompts
+# ---------------------------------------------------------------------------
+
+def _format_table_light(
+    t: DetectedTable,
+    granularity: str = "",
+    display_name: str = "",
+) -> str:
+    """Single-line summary used in cross-sheet synthesis prompts."""
+    cols = [str(c) for c in (t.df.columns.tolist()[:8] if t.df is not None else [])]
+    cols_str = "、".join(cols)
+    if t.df is not None and len(t.df.columns) > 8:
+        cols_str += f"…ほか{len(t.df.columns) - 8}列"
+    title = f" [{t.title}]" if t.title else ""
+    gran = f" ({granularity})" if granularity else ""
+    name = f" 表示名:「{display_name}」" if display_name else ""
+    return (
+        f"[{t.table_id}] シート:{t.sheet_name}{title}{gran}{name} | "
+        f"{t.row_count}行×{t.col_count}列 | 列: {cols_str}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-sheet batch helper (Phase 1 in chunked mode)
+# ---------------------------------------------------------------------------
+
+def _analyze_sheet_batch(
+    client: Any,
+    model: str,
+    sheet_tables: List[DetectedTable],
+    sheet_names: List[str],
+    relation_facts: str,
+) -> Dict[str, Any]:
+    """Analyze one sheet's tables. Returns the raw JSON dict from the AI."""
+    n = len(sheet_tables)
+    max_sample = 3 if n > 20 else 5
+    max_tail   = 2 if n > 20 else 3
+
+    sheet_list = "\n".join(f"- {name}" for name in sheet_names)
+    table_details = "\n\n".join(
+        _format_table_detail(t, max_sample=max_sample, max_tail=max_tail)
+        for t in sheet_tables
+    )
+
+    user_msg = USER_PROMPT.format(
+        sheet_list=sheet_list,
+        table_details=table_details,
+        relation_facts=relation_facts,
+    )
+
+    completion_tokens = min(16384, max(4096, n * 400))
+    content = _call_api(
+        client, model,
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": user_msg},
+        ],
+        max_completion_tokens=completion_tokens,
+    )
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"シート分析レスポンスが不正な JSON です: {e}\n先頭300文字: {content[:300]}"
+        ) from e
+
+
+# ---------------------------------------------------------------------------
+# Merge helper: combine Phase 1 (per-sheet) + Phase 2 (cross-sheet) results
+# ---------------------------------------------------------------------------
+
+def _merge_raws(
+    phase1_raws: List[Dict[str, Any]],
+    phase2_raw: Dict[str, Any],
+    tables: List[DetectedTable],
+) -> "AIAnalysisResult":
+    all_sheet_cls:   List[Dict] = []
+    all_table_ana:   List[Dict] = []
+    all_int_recs:    List[Dict] = []
+    all_masters:     List[Dict] = []
+    summaries:       List[str]  = []
+
+    for raw in phase1_raws:
+        if raw is None:
+            continue
+        all_sheet_cls.extend(raw.get("sheet_classifications", []))
+        all_table_ana.extend(raw.get("table_analyses", []))
+        all_int_recs.extend(raw.get("integration_recommendations", []))
+        all_masters.extend(raw.get("master_tables", []))
+        if raw.get("summary"):
+            summaries.append(raw["summary"])
+
+    all_int_recs.extend(phase2_raw.get("integration_recommendations", []))
+
+    # Renumber recommendation IDs to avoid duplicates across batches
+    for i, rec in enumerate(all_int_recs, 1):
+        rec["recommendation_id"] = f"IR_{i}"
+
+    merged: Dict[str, Any] = {
+        "sheet_classifications": all_sheet_cls,
+        "table_analyses": all_table_ana,
+        "integration_recommendations": all_int_recs,
+        "master_tables": all_masters,
+        "summary": " / ".join(summaries[:3]) if summaries else "複数シートの分析完了",
+    }
+
+    return _parse_response(merged, tables)
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+# Tables per batch that fits comfortably in one API call (input + output)
+_SINGLE_CALL_LIMIT = 50
+
+
 def analyze_tables(
     tables: List[DetectedTable],
     sheet_names: List[str],
-) -> AIAnalysisResult:
-    """Analyze table relationships using OpenAI or Azure OpenAI (via OPENAI_API_TYPE env var)."""
+) -> "AIAnalysisResult":
+    """Analyze table relationships using OpenAI or Azure OpenAI.
+
+    For large table sets (> _SINGLE_CALL_LIMIT tables) the analysis is split
+    into two phases to avoid exceeding context-window and rate limits:
+
+    Phase 1 – Per-sheet parallel calls: each sheet's tables are sent in a
+              separate request (≤ 30 tables per call, 3 concurrent workers).
+    Phase 2 – Cross-sheet synthesis: a single lightweight call that receives
+              one-line summaries of all tables and produces integration
+              recommendations that span multiple sheets.
+    """
     client, model = _make_client()
 
-    # Scale down per-table detail verbosity for large table sets so the prompt
-    # stays manageable.  The AI still gets enough structure to classify tables.
+    # Pre-compute aggregation relationships once for all tables
+    relations = detect_sum_relations(tables)
+    relation_facts = format_relation_facts(relations, tables)
+
+    n = len(tables)
+    if n <= _SINGLE_CALL_LIMIT:
+        return _analyze_single(client, model, tables, sheet_names, relation_facts)
+    return _analyze_chunked(client, model, tables, sheet_names, relation_facts)
+
+
+def _analyze_single(
+    client: Any,
+    model: str,
+    tables: List[DetectedTable],
+    sheet_names: List[str],
+    relation_facts: str,
+) -> "AIAnalysisResult":
+    """Single-call path (≤ _SINGLE_CALL_LIMIT tables)."""
     n = len(tables)
     max_sample = 3 if n > 25 else (4 if n > 15 else 5)
     max_tail   = 2 if n > 25 else 3
@@ -282,39 +514,21 @@ def analyze_tables(
         _format_table_detail(t, max_sample=max_sample, max_tail=max_tail) for t in tables
     )
 
-    relations = detect_sum_relations(tables)
-    relation_facts = format_relation_facts(relations, tables)
-
     user_msg = USER_PROMPT.format(
         sheet_list=sheet_list,
         table_details=table_details,
         relation_facts=relation_facts,
     )
 
-    # Scale completion token budget: larger files may produce larger JSON responses.
     completion_tokens = min(16384, max(8192, n * 300))
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    content = _call_api(
+        client, model,
+        [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
+            {"role": "user",   "content": user_msg},
         ],
-        response_format={"type": "json_object"},
-        temperature=0.1,
         max_completion_tokens=completion_tokens,
-        timeout=360.0,  # 6-minute hard limit; prevents indefinite hangs
     )
-
-    choice = response.choices[0]
-    content = choice.message.content or ""
-
-    if choice.finish_reason == "length":
-        raise ValueError(
-            f"GPT レスポンスがトークン上限に達して途中で切れました。"
-            f"テーブル数を減らすか、より少ないシートを対象にしてください。"
-            f"(finish_reason=length, 文字数={len(content)})"
-        )
 
     try:
         raw: Dict[str, Any] = json.loads(content)
@@ -325,6 +539,100 @@ def analyze_tables(
         ) from e
 
     return _parse_response(raw, tables)
+
+
+def _analyze_chunked(
+    client: Any,
+    model: str,
+    tables: List[DetectedTable],
+    sheet_names: List[str],
+    relation_facts: str,
+) -> "AIAnalysisResult":
+    """Two-phase chunked path for large table sets.
+
+    Phase 1: Parallel per-sheet API calls (3 concurrent workers).
+    Phase 2: Single cross-sheet synthesis call.
+    """
+    # Group tables by sheet, preserving original order
+    by_sheet: Dict[str, List[DetectedTable]] = {}
+    for t in tables:
+        by_sheet.setdefault(t.sheet_name, []).append(t)
+
+    sheet_items = list(by_sheet.items())
+    phase1_raws: List[Optional[Dict[str, Any]]] = [None] * len(sheet_items)
+
+    def _process(idx_item: Tuple[int, Any]) -> Tuple[int, Dict[str, Any]]:
+        idx, (_, sheet_tables) = idx_item
+        raw = _analyze_sheet_batch(
+            client, model, sheet_tables, sheet_names, relation_facts
+        )
+        return idx, raw
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(_process, (i, item)): i
+            for i, item in enumerate(sheet_items)
+        }
+        for future in as_completed(futures):
+            idx, raw = future.result()
+            phase1_raws[idx] = raw
+
+    # ── Phase 2: cross-sheet synthesis ────────────────────────────────────────
+    # Build a one-line summary per table, annotated with Phase 1 classifications
+    ta_by_id: Dict[str, Dict] = {}
+    for raw in phase1_raws:
+        if raw is None:
+            continue
+        for ta in raw.get("table_analyses", []):
+            ta_by_id[ta.get("table_id", "")] = ta
+
+    table_summaries = "\n".join(
+        _format_table_light(
+            t,
+            granularity=ta_by_id.get(t.table_id, {}).get("granularity_level", ""),
+            display_name=ta_by_id.get(t.table_id, {}).get("display_name", ""),
+        )
+        for t in tables
+    )
+
+    # Brief intra-sheet integration recap for context
+    intra_recs: List[Dict] = []
+    for raw in phase1_raws:
+        if raw:
+            intra_recs.extend(raw.get("integration_recommendations", []))
+
+    intra_summary_lines = [
+        f"  [{r.get('recommendation_id')}] {r.get('group_name')} : "
+        + " + ".join(r.get("table_ids", [])[:4])
+        + ("…" if len(r.get("table_ids", [])) > 4 else "")
+        for r in intra_recs[:30]
+    ]
+    intra_recs_summary = "\n".join(intra_summary_lines) or "（なし）"
+
+    cs_user = CROSS_SHEET_USER.format(
+        n_tables=len(tables),
+        table_summaries=table_summaries,
+        intra_recs_summary=intra_recs_summary,
+        relation_facts=relation_facts,
+    )
+
+    cs_completion = min(32768, max(16384, len(tables) * 80))
+
+    try:
+        cs_content = _call_api(
+            client, model,
+            [
+                {"role": "system", "content": CROSS_SHEET_SYSTEM},
+                {"role": "user",   "content": cs_user},
+            ],
+            max_completion_tokens=cs_completion,
+        )
+        phase2_raw: Dict[str, Any] = json.loads(cs_content)
+    except Exception:
+        # Cross-sheet synthesis is best-effort; fall back to intra-sheet only
+        phase2_raw = {"integration_recommendations": []}
+
+    return _merge_raws(phase1_raws, phase2_raw, tables)
 
 
 def _parse_response(raw: Dict[str, Any], tables: List[DetectedTable]) -> AIAnalysisResult:
