@@ -1874,7 +1874,14 @@ def _render_integration_before_after(
     """
     col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
     multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
-    n_preview = 2 if compact else 3
+
+    # Visible-row heights for the inline preview boxes.
+    # Full dataframe is always passed so (a) scroll reveals all rows and
+    # (b) the native Fullscreen button shows every record.
+    _BEFORE_VISIBLE = 3   # 統合前カード: 3 rows visible before scroll
+    _AFTER_VISIBLE  = 5   # 統合後プレビュー: 5 rows visible before scroll
+    _ROW_PX = 35          # approx px per data row in st.dataframe
+    _HDR_PX = 38          # header row height
 
     # ── Build per-axis unique-value order ───────────────────────────────────
     axis_val_order: list = [[] for _ in col_names]
@@ -1915,12 +1922,13 @@ def _render_integration_before_after(
             unsafe_allow_html=True,
         )
         if t is not None and t.df is not None and not t.df.empty:
-            prev = t.df.head(n_preview)
+            n_rows = len(t.df)
             st.dataframe(
-                prev.astype(str),
+                t.df.astype(str),
                 use_container_width=True,
                 hide_index=True,
-                height=min(len(prev) * 35 + 38, 128),
+                height=min(n_rows * _ROW_PX + _HDR_PX,
+                           _BEFORE_VISIBLE * _ROW_PX + _HDR_PX),
             )
         else:
             st.caption("（データなし）")
@@ -2003,7 +2011,7 @@ def _render_integration_before_after(
     for tid in ir.table_ids:
         t = tables_dict.get(tid)
         if t is not None and t.df is not None and not t.df.empty:
-            row = t.df.head(n_preview).copy()
+            row = t.df.copy()  # full data — scroll + Fullscreen reveal all rows
             vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
             for ci in range(len(col_names) - 1, -1, -1):
                 val = vals[ci] if ci < len(vals) else ""
@@ -2073,7 +2081,8 @@ def _render_integration_before_after(
             styler,
             use_container_width=True,
             hide_index=True,
-            height=min(n_data * 35 + 38, 200 if compact else 320),
+            height=min(n_data * _ROW_PX + _HDR_PX,
+                       _AFTER_VISIBLE * _ROW_PX + _HDR_PX),
         )
         # Full integrated table size – shown bottom-right of the preview
         if full_df_size:
