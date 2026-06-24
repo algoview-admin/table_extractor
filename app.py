@@ -1893,38 +1893,60 @@ def _render_integration_before_after(
         vi = vals_list.index(val) if val in vals_list else 0
         return family[vi % len(family)]
 
-    # ── Helper: render one source table card ────────────────────────────────
-    def _src_card(tid: str) -> None:
+    # ── Helper: build one source table card as an HTML string ───────────────
+    # Pure HTML avoids st.columns() which always adds Streamlit's column gap.
+    def _src_card_html(tid: str) -> str:
+        import html as _html
         t = tables_dict.get(tid)
         vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
         pills = "".join(
-            '<span style="'
-            f'background:{_axis_color(ai, str(v))[0]};'
+            f'<span style="background:{_axis_color(ai, str(v))[0]};'
             f'color:{_axis_color(ai, str(v))[1]};'
-            'padding:2px 9px;border-radius:12px;'
-            'font-size:0.72rem;font-weight:600;'
-            'margin-right:4px;display:inline-block;margin-bottom:3px;">'
-            f'{cn}:&nbsp;{v}</span>'
+            f'padding:2px 9px;border-radius:12px;font-size:0.72rem;font-weight:600;'
+            f'margin-right:4px;display:inline-block;margin-bottom:3px;">'
+            f'{_html.escape(cn)}:&nbsp;{_html.escape(str(v))}</span>'
             for ai, (cn, v) in enumerate(zip(col_names, vals))
         )
-        st.markdown(
-            f'<div style="background:#161c2c;border:1px solid #2d3748;'
-            f'border-radius:8px 8px 0 0;padding:7px 10px;margin-bottom:0;">'
+        hdr = (
+            f'<div style="background:#161c2c;border-bottom:1px solid #2d3748;padding:7px 10px;">'
             f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:5px;">'
-            f'📋&nbsp;{tid}</div>'
-            f'{pills}</div>',
-            unsafe_allow_html=True,
+            f'📋&nbsp;{_html.escape(tid)}</div>{pills}</div>'
         )
         if t is not None and t.df is not None and not t.df.empty:
-            prev = t.df.head(n_preview)
-            st.dataframe(
-                prev.astype(str),
-                use_container_width=True,
-                hide_index=True,
-                height=min(len(prev) * 35 + 38, 128),
+            th_s = ('background:#1e2433;color:#9aa5b4;padding:4px 8px;text-align:left;'
+                    'border-bottom:1px solid #2d3748;font-size:0.72rem;white-space:nowrap;'
+                    'font-weight:600;position:sticky;top:0;')
+            td_s = ('padding:4px 8px;color:#c8d4e8;border-bottom:1px solid #2d3748;'
+                    'font-size:0.72rem;white-space:nowrap;')
+            df_str = t.df.astype(str)
+            ths = "".join(f'<th style="{th_s}">{_html.escape(c)}</th>' for c in df_str.columns)
+            trs = "".join(
+                '<tr>' + "".join(f'<td style="{td_s}">{_html.escape(v)}</td>'
+                                  for v in row) + '</tr>'
+                for row in df_str.values
             )
+            tbl = (f'<table style="border-collapse:collapse;width:100%;">'
+                   f'<thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>')
+            body = (f'<div style="overflow:auto;max-height:{n_preview * 35 + 38}px;'
+                    f'background:#0e1117;">{tbl}</div>')
         else:
-            st.caption("（データなし）")
+            body = '<p style="color:#666;font-size:0.72rem;padding:8px 10px;">（データなし）</p>'
+        return hdr + body
+
+    def _src_grid_html(tids: list) -> str:
+        """Render multiple source table cards flush side-by-side in one HTML block."""
+        cells = []
+        for j, tid in enumerate(tids):
+            bl = "border-left:1px solid #2d3748;" if j > 0 else ""
+            cells.append(
+                f'<div style="flex:1;min-width:0;overflow:hidden;{bl}">'
+                f'{_src_card_html(tid)}</div>'
+            )
+        return (
+            '<div style="display:flex;border:1px solid #2d3748;'
+            'border-radius:6px;overflow:hidden;margin-bottom:4px;">'
+            + "".join(cells) + '</div>'
+        )
 
     # ════════════════════════════════════════════════════════════════════════
     # 統合前
@@ -1943,18 +1965,14 @@ def _render_integration_before_after(
     extra_tids = ir.table_ids[SAMPLE_LIMIT:]
 
     if preview_tids:
-        cols = st.columns(len(preview_tids))
-        for i, tid in enumerate(preview_tids):
-            with cols[i]:
-                _src_card(tid)
+        st.markdown(_src_grid_html(preview_tids), unsafe_allow_html=True)
 
     if extra_tids:
         with st.expander(f"他 {len(extra_tids)} テーブルを見る", expanded=False):
             n_ex = min(len(extra_tids), 3)
-            ex_cols = st.columns(n_ex)
-            for i, tid in enumerate(extra_tids):
-                with ex_cols[i % n_ex]:
-                    _src_card(tid)
+            for start in range(0, len(extra_tids), n_ex):
+                chunk = extra_tids[start:start + n_ex]
+                st.markdown(_src_grid_html(chunk), unsafe_allow_html=True)
 
     # ── 統合元テーブル一覧 (エクスパンダー下) ──────────────────────────────
     # Avoid st.columns() inside the expander — nested columns in the same
