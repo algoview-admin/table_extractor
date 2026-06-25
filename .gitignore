@@ -3,8 +3,8 @@
 .env.local
 
 # Data
-# input_data/
-# project/
+input_data/
+project/
 
 # Python cache
 __pycache__/
