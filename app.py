@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from src.relation_analyzer import analyze_tables
 from src.excel_parser import parse_csv, parse_excel
 from src.models import AIAnalysisResult, DetectedTable
+from src.latent_table_detector import find_latent_tables, LatentTableProposal
 
 load_dotenv()
 
@@ -1567,6 +1568,69 @@ def step4():
                     st.session_state.master_decisions[dm_key] = (
                         decision == "✅ マスタを作成する"
                     )
+
+    # ── Section 3: Latent table proposals ────────────────────────────────────
+    latent_proposals = find_latent_tables(st.session_state.detected_tables)
+    if latent_proposals:
+        st.divider()
+        st.subheader("🔍 潜在テーブル提案")
+        st.caption(
+            "テーブル外の注記・コメントに記載されている名称を分析した結果、"
+            "検出されていない可能性のあるテーブルが見つかりました。"
+        )
+
+        _NOTE_TYPE_LABEL = {
+            "aggregation": ("集計注記", "🧮"),
+            "exclusion":   ("除外注記", "➖"),
+            "reference":   ("参照注記", "🔗"),
+            "general":     ("注記",     "📝"),
+        }
+
+        for lp in latent_proposals:
+            type_label, type_icon = _NOTE_TYPE_LABEL.get(
+                lp.note_type, ("注記", "📝")
+            )
+            with st.container(border=True):
+                # Header row
+                col_icon, col_title = st.columns([1, 12])
+                with col_icon:
+                    st.markdown(
+                        f"<span style='font-size:1.6rem'>{type_icon}</span>",
+                        unsafe_allow_html=True,
+                    )
+                with col_title:
+                    st.markdown(
+                        f"**潜在テーブル候補: {', '.join(lp.missing_names)}**  "
+                        f"<span style='font-size:0.75rem;color:#607090;'>"
+                        f"({type_label} / 注記元: {lp.source_title})</span>",
+                        unsafe_allow_html=True,
+                    )
+
+                # Note text
+                st.markdown(
+                    f"<div style='background:#0d1520;border-left:3px solid #2a4060;"
+                    f"border-radius:0 6px 6px 0;padding:8px 14px;"
+                    f"font-size:0.82rem;color:#7090b0;margin:6px 0'>"
+                    f"{lp.note_text}</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # Detected vs missing breakdown
+                c_det, c_miss = st.columns(2)
+                with c_det:
+                    st.markdown("**検出済み（照合済み）**")
+                    for name in lp.detected_names:
+                        st.markdown(f"✅ {name}")
+                with c_miss:
+                    st.markdown("**未検出（潜在テーブル候補）**")
+                    for name in lp.missing_names:
+                        st.markdown(
+                            f"<span style='color:#e08080'>❓ {name}</span>",
+                            unsafe_allow_html=True,
+                        )
+
+                with st.expander("💡 推奨理由", expanded=False):
+                    st.caption(lp.reasoning)
 
     # ── Navigation ───────────────────────────────────────────────────────────
     _inject_splitter_js()
