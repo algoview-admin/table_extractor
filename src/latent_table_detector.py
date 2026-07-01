@@ -143,7 +143,12 @@ def _exact_match(name: str, tables: List[DetectedTable]) -> Optional[str]:
 
 
 def _fuzzy_match(name: str, tables: List[DetectedTable]) -> Optional[str]:
-    """Fuzzy match against a (pre-filtered) table list. Returns table_id or None."""
+    """Fuzzy match against a (pre-filtered) table list. Returns table_id or None.
+
+    Threshold is intentionally high (0.92) to avoid false positives between
+    near-homograph names that differ only in a series suffix (e.g. "X-3" vs
+    "X合計" or "X-D" share a long common prefix but are genuinely different).
+    """
     best_ratio = 0.0
     best_id: Optional[str] = None
     for t in tables:
@@ -152,7 +157,7 @@ def _fuzzy_match(name: str, tables: List[DetectedTable]) -> Optional[str]:
             if ratio > best_ratio:
                 best_ratio = ratio
                 best_id = t.table_id
-    return best_id if best_ratio >= 0.70 else None
+    return best_id if best_ratio >= 0.92 else None
 
 
 # ---------------------------------------------------------------------------
@@ -212,10 +217,42 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
 
         # ── Pass 2: fuzzy on un-reserved tables only ────────────────────
         available = [t2 for t2 in tables if t2.table_id not in reserved_ids]
+
+        # Pre-compute name prefixes of exact-matched tables (first 10 chars).
+        # When at least one entity has already been exact-matched, a fuzzy
+        # candidate that shares the same long prefix is very likely a sibling
+        # in the same series (e.g. "TypeC合計" shares prefix with "TypeC-1").
+        # Accepting such a fuzzy match would incorrectly consume a missing
+        # series member — so we reject it and let it fall through to missing.
+        exact_title_prefixes: List[str] = []
+        if exact_map:
+            id_to_table = {tb.table_id: tb for tb in tables}
+            for eid in exact_map.values():
+                tb = id_to_table.get(eid)
+                title = (tb.title or "") if tb else ""
+                if len(title) >= 10:
+                    exact_title_prefixes.append(title[:10])
+
+        def _prefix_conflict(candidate_table: DetectedTable) -> bool:
+            """True when the candidate shares a 10-char prefix with an exact-matched table."""
+            if not exact_title_prefixes:
+                return False
+            c_title = candidate_table.title or ""
+            if len(c_title) < 10:
+                return False
+            c_pre = c_title[:10]
+            return c_pre in exact_title_prefixes
+
         fuzzy_map: dict = {}
         for entity in entities:
             if entity not in exact_map:
                 mid = _fuzzy_match(entity, available)
+                if mid:
+                    # Reject matches where the candidate shares a long-prefix
+                    # with already exact-matched tables (series-sibling guard).
+                    cand = next((tb for tb in available if tb.table_id == mid), None)
+                    if cand is not None and _prefix_conflict(cand):
+                        mid = None
                 if mid:
                     fuzzy_map[entity] = mid
 
