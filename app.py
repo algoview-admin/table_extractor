@@ -1557,6 +1557,19 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
     if gk not in st.session_state.latent_group_decisions:
         st.session_state.latent_group_decisions[gk] = True
 
+    # Pre-initialize the radio widget key before st.radio() is called.
+    # This avoids the "index vs. key" conflict in Streamlit that causes a 1-rerun delay:
+    # using `index=` alongside `key=` can cause Streamlit to reset the widget to the index
+    # value even after the user has changed it, because the index is recomputed from the
+    # still-old latent_group_decisions value at render time.
+    _radio_key = f"radio_latent_group_{gk}"
+    if _radio_key not in st.session_state:
+        st.session_state[_radio_key] = (
+            "✅ 追加する"
+            if st.session_state.latent_group_decisions.get(gk, True)
+            else "❌ 追加しない"
+        )
+
     _NOTE_TYPE_LABEL = {
         "aggregation": ("集計注記", "🧮"),
         "exclusion":   ("除外注記", "➖"),
@@ -1626,8 +1639,7 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
                 "この推定テーブルを追加しますか？",
                 ["✅ 追加する", "❌ 追加しない"],
                 horizontal=True,
-                key=f"radio_latent_group_{gk}",
-                index=(0 if st.session_state.latent_group_decisions.get(gk, True) else 1),
+                key=_radio_key,
             )
             st.session_state.latent_group_decisions[gk] = (decision == "✅ 追加する")
             if decision == "✅ 追加する" and n_derived > 0:
@@ -1780,13 +1792,14 @@ def step4():
             if _sup_real.issubset(set(_ai_ir.table_ids)):
                 _superseded_ai_ids.add(_ai_ir.recommendation_id)
 
-    # Merge: filtered AI IRs (not superseded) + auto IRs
-    _all_irs_flagged: list = [
+    # Merge: auto-IRs FIRST (so they appear at the top when latent table is accepted),
+    # then non-superseded AI IRs.
+    _all_irs_flagged: list = [(ir, True) for ir, _ in _auto_irs_flat]
+    _all_irs_flagged += [
         (ir, False)
         for ir in _ai_irs_trimmed
         if ir.recommendation_id not in _superseded_ai_ids
     ]
-    _all_irs_flagged += [(ir, True) for ir, _ in _auto_irs_flat]
     _is_auto_map: dict = {ir.recommendation_id: flag for ir, flag in _all_irs_flagged}
     _all_irs = [ir for ir, _ in _all_irs_flagged]
 
