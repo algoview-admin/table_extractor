@@ -1477,6 +1477,10 @@ def _build_auto_irs_from_latent(
                 ),
                 new_column_names=[col_name],
                 new_column_multi_values={tid: [v] for tid, v in col_vals.items()},
+                # Set parent so master-table generation can produce the correct mapping
+                # (child values → parent aggregate title) for this auto-IR.
+                axis_parent_table_ids=[lp.source_table_id],
+                axis_parent_label_columns=[None],
             )
             result.append((ir, gk))
 
@@ -1737,11 +1741,14 @@ def step4():
         if _vt is not None:
             _ext_tables[_dlt.proposal_id] = _vt
 
-    has_integrations = bool(analysis.integration_recommendations)
-    unique_master_specs = _collect_unique_master_specs(
-        analysis.integration_recommendations, tables_dict
+    # Preliminary trimming used only for the early "nothing to show" check and
+    # for computing has_masters.  The full dynamic computation happens later,
+    # after latent group cards are rendered (decisions updated).
+    _ai_irs_prelim = _clip_ai_irs_by_latent_groups(
+        analysis.integration_recommendations, _latent_groups, tables_dict
     )
-    has_masters = bool(unique_master_specs)
+    has_integrations = bool(_ai_irs_prelim) or bool(_latent_groups)
+    has_masters = bool(_collect_unique_master_specs(_ai_irs_prelim, tables_dict))
     has_latent = bool(_latent_groups)
 
     if not has_integrations and not has_masters and not has_latent:
@@ -1835,7 +1842,16 @@ def step4():
                         )
 
     # ── Section 3: マスタ自動生成 ─────────────────────────────────────────────
-    if has_masters:
+    # Recompute dynamically: use trimmed AI IRs (X_D excluded) + accepted auto-IRs
+    # (which have axis_parent_table_ids set so master gen can produce X_3 mapping).
+    # Use _ext_tables so virtual DLT tables (X_3) are resolved.
+    _master_ir_list = [ir for ir, _ in _auto_irs_flat] + [
+        ir for ir in _ai_irs_trimmed if ir.recommendation_id not in _superseded_ai_ids
+    ]
+    unique_master_specs = _collect_unique_master_specs(_master_ir_list, _ext_tables)
+    _has_masters_now = bool(unique_master_specs)
+
+    if _has_masters_now:
         st.divider()
         st.subheader("🗂️ マスタ自動生成")
         st.caption(
