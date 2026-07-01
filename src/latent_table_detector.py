@@ -224,10 +224,17 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
         _seen.add(key)
 
         # ── Pass 1: exact / substring matches ──────────────────────────
+        # Same-sheet tables are tried first so that when multiple sheets
+        # have identically-named component tables (e.g. "カテゴリX_1" in
+        # both 拜点A and 拜点B), each sheet's note matches its OWN components
+        # rather than borrowing another sheet's tables.
+        same_sheet = [t2 for t2 in tables if t2.sheet_name == t.sheet_name]
+        other_sheet = [t2 for t2 in tables if t2.sheet_name != t.sheet_name]
+
         exact_map: dict = {}
         reserved_ids: set = {t.table_id}
         for entity in entities:
-            mid = _exact_match(entity, tables)
+            mid = _exact_match(entity, same_sheet) or _exact_match(entity, other_sheet)
             if mid and mid != t.table_id:
                 exact_map[entity] = mid
                 reserved_ids.add(mid)
