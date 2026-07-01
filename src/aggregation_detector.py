@@ -9,7 +9,7 @@ as verified facts, so the AI does not need to infer them from keywords or names.
 
 import math
 from itertools import combinations
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -191,6 +191,84 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
             })
 
     return relations
+
+
+def detect_sheet_levels(tables: List[DetectedTable]) -> List[Dict]:
+    """
+    Identify potential aggregate sheets by comparing per-sheet numeric totals
+    within same-schema table groups.
+
+    A sheet is flagged as aggregate candidate when its combined numeric total is
+    consistently ≥ 1.5× the average of other sheets across at least two schema
+    groups.  This detects organisational roll-ups (e.g. a division sheet that
+    sums branch sheets) even when only a subset of source sheets is present.
+
+    Returns list of {"aggregate_sheet": str, "source_sheets": [str]} dicts.
+    """
+    groups = _group_by_columns(tables)
+
+    aggregate_votes: Dict[str, int] = {}
+    smaller_peers: Dict[str, Set[str]] = {}
+
+    for group in groups:
+        sheet_sums: Dict[str, float] = {}
+        for t in group:
+            arr = _numeric_array(t)
+            if arr is None:
+                continue
+            total = float(np.nansum(np.abs(arr)))
+            if total < 1.0:
+                continue
+            sheet_sums[t.sheet_name] = sheet_sums.get(t.sheet_name, 0.0) + total
+
+        if len(sheet_sums) < 3:
+            continue
+
+        sorted_items = sorted(sheet_sums.items(), key=lambda x: x[1], reverse=True)
+        top_sheet, top_total = sorted_items[0]
+        other_totals = [v for _, v in sorted_items[1:]]
+        avg_other = sum(other_totals) / len(other_totals)
+
+        if avg_other > 0 and top_total >= avg_other * 1.5 and len(other_totals) >= 2:
+            aggregate_votes[top_sheet] = aggregate_votes.get(top_sheet, 0) + 1
+            if top_sheet not in smaller_peers:
+                smaller_peers[top_sheet] = set()
+            for other_sheet, _ in sorted_items[1:]:
+                smaller_peers[top_sheet].add(other_sheet)
+
+    return [
+        {
+            "aggregate_sheet": sheet,
+            "source_sheets": sorted(smaller_peers.get(sheet, set())),
+        }
+        for sheet, votes in aggregate_votes.items()
+        if votes >= 2 and len(smaller_peers.get(sheet, set())) >= 2
+    ]
+
+
+def format_sheet_level_hints(hints: List[Dict]) -> str:
+    """Format aggregate-sheet hints as a prompt section for the AI.
+
+    Returns empty string when no aggregate sheets were detected.
+    """
+    if not hints:
+        return ""
+
+    lines = [
+        "=== シート間集計構造（数値比較による推定） ===",
+        "以下のシートは同一構造の複数シートより数値が大きく、集計シートと推定されます。",
+        "これらのシートのテーブルは granularity_level=summary として扱ってください。",
+        "",
+    ]
+    for h in hints:
+        srcs = h["source_sheets"]
+        src_str = "、".join(srcs[:6]) + ("…" if len(srcs) > 6 else "")
+        lines.append(
+            f"  【集計シート候補】 {h['aggregate_sheet']}"
+            f" ← 集計元候補シート: {src_str}"
+        )
+
+    return "\n".join(lines) + "\n"
 
 
 def _drop_supersets(relations: List[Dict]) -> List[Dict]:
