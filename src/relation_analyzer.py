@@ -118,24 +118,27 @@ Excelデータは複数の独立した集計軸を同時に持つことがある
   - 注記内の名称と「事前検証済み：数値合計関係」を照合して child_table_ids を特定すること
 
 ▼ 多段階（ネスト）集計の識別（最重要）:
-  集計は複数レベルでネストされることがある。例:
-    C-1 + C-2 → タイプC合計 → ネクスト合計 → サービスA合計
-  各テーブルの判定:
-  - C-1, C-2: 全軸で最下位 → granularity_level=detail, is_minimum_granularity_candidate=true
-  - タイプC合計: 「事前検証済み」で右辺（C-1,C-2の集計先）かつ左辺（ネクスト合計の子）
-    → granularity_level=summary, is_minimum_granularity_candidate=false（中間集計層）
-  - ネクスト合計, サービスA合計: 上位集計 → summary, is_minimum_granularity_candidate=false
+  集計は複数レベルでネストされることがある。汎用的な構造例（固有名詞は使わない）:
+    詳細X + 詳細Y → 中間集計Z → 上位集計W → 全体集計V
+  判定は「事前検証済み：数値合計関係」の左辺/右辺の出現有無に従う:
+  - 詳細X, 詳細Y: 右辺のみ（どの親の左辺にも登場しない）
+    → granularity_level=detail, is_minimum_granularity_candidate=true
+  - 中間集計Z: 左辺（詳細X,詳細Yの集計親）かつ右辺（上位集計Wの子）
+    → granularity_level=summary, is_minimum_granularity_candidate=false
+  - 上位集計W, 全体集計V: 左辺（集計親として登場）
+    → granularity_level=summary, is_minimum_granularity_candidate=false
 
-  各支店レベルのサービス合計テーブルは、同一サービスの事業部合計テーブルが存在する場合
-  summary（組織軸で上位集計が存在する）と判定する。
-  「全ての集計軸で最下位」の場合のみ is_minimum_granularity_candidate=true とする。
+  【summary/detail 判定の大原則（誤分類防止）】
+  summary の唯一の条件: 「このテーブル自体が、ファイル内の他テーブルを集計した結果である」こと。
+  「上位組織（事業部等）に同一構造のテーブルが存在する」だけでは summary にしない。
+    正しい判定: 集計元（支店の詳細データ）→ detail
+                集計結果（事業部が支店を集計したもの）→ summary
+  「事前検証済み：数値合計関係」で左辺（親）に登場するテーブルのみを summary とすること。
 
 ▼ 最小粒度の判定ルール（最重要）:
   is_minimum_granularity_candidate=true の条件:「全ての集計軸において最下位レベルであること」
-  判定方法: 「事前検証済み：数値合計関係」セクションで、そのテーブルが誰かの「右辺（子）」に
-  含まれている場合、別の親テーブル関係で確認する。「左辺（親）」として出現しなければ最小粒度。
-  出現すれば中間層（summary）。
-  また、同一構造のテーブルが組織軸の上位シートに存在する場合も最小粒度ではない（summaryとなる）。
+  判定方法: 「事前検証済み：数値合計関係」で、そのテーブルが「左辺（親）」として出現しなければ
+  最小粒度候補。出現すれば（他テーブルを集計している）中間層または上位層（summary）。
 
 【表間の階層関係判定（3観点）】
 以下の3観点を順に適用して表間の集計元→集計結果の関係を判定してください。
