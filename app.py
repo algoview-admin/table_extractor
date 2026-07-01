@@ -1483,6 +1483,72 @@ def _build_auto_irs_from_latent(
     return result
 
 
+def _clip_ai_irs_by_latent_groups(
+    irs: list,
+    latent_groups: List[LatentTableGroup],
+    tables_dict: dict,
+) -> list:
+    """Trim AI integration proposals that contain extra intra-sheet tables.
+
+    When a latent group knows that tables D1, D2 are siblings (detected components
+    of the same aggregate), any AI IR that contains {D1, D2, ...extras} where the
+    extras are from the same sheet(s) as D1/D2 is trimmed to just {D1, D2}.
+    This prevents incorrectly-grouped tables (e.g. X_D when X_1+X_2 are siblings)
+    from polluting integration proposals.
+
+    Cross-sheet integrations (extras from different sheets) are left untouched.
+    """
+    # Collect sibling sets from all latent group members
+    sibling_sets: List[frozenset] = []
+    for grp in latent_groups:
+        for lp, _ in grp.members:
+            if len(lp.detected_table_ids) >= 2:
+                sibling_sets.append(frozenset(lp.detected_table_ids))
+
+    if not sibling_sets:
+        return irs
+
+    result = []
+    for ir in irs:
+        ir_set = frozenset(ir.table_ids)
+        trimmed_ir = ir
+        for sib_set in sibling_sets:
+            # Only trim if sib_set is a PROPER subset of this IR's tables
+            if not (sib_set < ir_set and len(sib_set) >= 2):
+                continue
+            extras = ir_set - sib_set
+            # Guard: only trim if extras are all from the same sheet(s) as siblings
+            sib_sheets = {tables_dict[t].sheet_name for t in sib_set if t in tables_dict}
+            extra_sheets = {tables_dict[t].sheet_name for t in extras if t in tables_dict}
+            if not sib_sheets or not (extra_sheets <= sib_sheets):
+                continue  # Cross-sheet extras — leave untouched
+            # Trim: keep only sibling tables
+            new_ids = [t for t in ir.table_ids if t in sib_set]
+            if len(new_ids) < 2:
+                continue
+            trimmed_ir = IntegrationRecommendation(
+                recommendation_id=ir.recommendation_id,
+                group_name=ir.group_name,
+                description=ir.description,
+                table_ids=new_ids,
+                new_column_name=ir.new_column_name,
+                new_column_values={k: v for k, v in ir.new_column_values.items() if k in sib_set},
+                reasoning=ir.reasoning,
+                parent_table_id=ir.parent_table_id,
+                parent_label_column=ir.parent_label_column,
+                user_decision=ir.user_decision,
+                new_column_names=ir.new_column_names,
+                new_column_multi_values={
+                    k: v for k, v in ir.new_column_multi_values.items() if k in sib_set
+                },
+                axis_parent_table_ids=ir.axis_parent_table_ids,
+                axis_parent_label_columns=ir.axis_parent_label_columns,
+            )
+            break  # Use first matching sibling set
+        result.append(trimmed_ir)
+    return result
+
+
 def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> None:
     """Render a unified card for a latent table group (proposals + derived across sheets)."""
     gk = group.group_key
@@ -1694,21 +1760,30 @@ def step4():
     # Auto-IRs reflect the current latent group decisions (dynamic)
     _auto_irs_flat = _build_auto_irs_from_latent(_latent_groups, _ext_tables, tables_dict)
 
-    # Suppress AI IRs whose table_ids are fully covered by an accepted auto-IR.
-    # When latent table X-3 is accepted, the auto-IR covers X-1+X-2+X-3, so the
-    # AI IR for X-1+X-2 alone is replaced (hidden) rather than shown alongside it.
+    # Trim AI IRs: remove intra-sheet tables that don't belong to verified sibling sets.
+    # e.g. if latent detection says T2+T3 are siblings, remove X_D (T4) from {T2,T3,T4}.
+    _ai_irs_trimmed = _clip_ai_irs_by_latent_groups(
+        analysis.integration_recommendations, _latent_groups, tables_dict
+    )
+
+    # Suppress AI IRs whose real detected tables are ALL contained in an accepted auto-IR.
+    # When latent X-3 is accepted: auto-IR real={T2,T3} ⊆ AI IR {T2,T3} → suppress AI IR.
+    # (The auto-IR supersedes it by adding the latent table.)
     _superseded_ai_ids: set = set()
     for _sup_ir, _ in _auto_irs_flat:
         # Real (non-virtual) table IDs in the auto-IR
         _sup_real = {t for t in _sup_ir.table_ids if t in tables_dict}
-        for _ai_ir in analysis.integration_recommendations:
-            if set(_ai_ir.table_ids).issubset(_sup_real):
+        if len(_sup_real) < 2:
+            continue
+        for _ai_ir in _ai_irs_trimmed:
+            # Suppress if auto-IR's real tables are all present in the AI IR
+            if _sup_real.issubset(set(_ai_ir.table_ids)):
                 _superseded_ai_ids.add(_ai_ir.recommendation_id)
 
     # Merge: filtered AI IRs (not superseded) + auto IRs
     _all_irs_flagged: list = [
         (ir, False)
-        for ir in analysis.integration_recommendations
+        for ir in _ai_irs_trimmed
         if ir.recommendation_id not in _superseded_ai_ids
     ]
     _all_irs_flagged += [(ir, True) for ir, _ in _auto_irs_flat]
@@ -1851,6 +1926,11 @@ def _build_final_tables():
             _bft_sup_ext[_dsup.proposal_id] = _vsup
     _bft_auto_irs = _build_auto_irs_from_latent(_bft_sup_groups, _bft_sup_ext, tables_dict)
 
+    # Trim AI IRs using latent sibling sets (same logic as step4)
+    _bft_ai_irs_trimmed = _clip_ai_irs_by_latent_groups(
+        analysis.integration_recommendations, _bft_sup_groups, tables_dict
+    )
+
     _superseded_in_bft: set = set()
     for _bft_auto_ir, _ in _bft_auto_irs:
         if not st.session_state.get("latent_auto_int_decisions", {}).get(
@@ -1858,12 +1938,15 @@ def _build_final_tables():
         ):
             continue
         _auto_real = {t for t in _bft_auto_ir.table_ids if t in tables_dict}
-        for _ai_check in analysis.integration_recommendations:
-            if set(_ai_check.table_ids).issubset(_auto_real):
+        if len(_auto_real) < 2:
+            continue
+        for _ai_check in _bft_ai_irs_trimmed:
+            # Suppress if auto-IR's real tables are all present in the AI IR
+            if _auto_real.issubset(set(_ai_check.table_ids)):
                 _superseded_in_bft.add(_ai_check.recommendation_id)
 
     # Apply approved integrations (skip superseded ones)
-    for ir in analysis.integration_recommendations:
+    for ir in _bft_ai_irs_trimmed:
         if ir.recommendation_id in _superseded_in_bft:
             continue  # replaced by an auto-IR that includes the derived table
         if not st.session_state.integration_decisions.get(ir.recommendation_id, True):
