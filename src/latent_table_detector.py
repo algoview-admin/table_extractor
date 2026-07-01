@@ -55,6 +55,23 @@ class LatentTableProposal:
     reasoning: str
 
 
+@dataclass
+class LatentTableGroup:
+    """A group of similar LatentTableProposals (same missing_names) across multiple sheets,
+    bundled with their matching DerivedLatentTable objects."""
+
+    group_key: str           # "|".join(sorted(missing_names)) — used as session-state key
+    missing_names: List[str]
+    detected_names: List[str]  # from the representative member
+    note_type: str
+    note_text: str             # from the representative member
+    members: List              # List of (LatentTableProposal, Optional[DerivedLatentTable])
+
+    @property
+    def has_derived(self) -> bool:
+        return any(dlt is not None for _, dlt in self.members)
+
+
 # ---------------------------------------------------------------------------
 # Note-text normalisation & entity extraction
 # ---------------------------------------------------------------------------
@@ -470,3 +487,36 @@ def _try_derive_one(
             ),
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Grouping helpers
+# ---------------------------------------------------------------------------
+
+
+def group_latent_proposals(
+    proposals: List[LatentTableProposal],
+    derived_latent: List[DerivedLatentTable],
+) -> List[LatentTableGroup]:
+    """Group LatentTableProposals by their missing_names set, attaching matching DLTs.
+
+    Proposals that share the same frozenset of missing_names are considered
+    'similar' (e.g. the same latent table appearing across multiple sheets).
+    Each group is assigned the DerivedLatentTable that was computed from the
+    same source table (parent_table_id == proposal.source_table_id).
+    """
+    dlt_by_source: dict = {dlt.parent_table_id: dlt for dlt in derived_latent}
+    groups: dict = {}
+    for lp in proposals:
+        key = "|".join(sorted(lp.missing_names))
+        if key not in groups:
+            groups[key] = LatentTableGroup(
+                group_key=key,
+                missing_names=list(lp.missing_names),
+                detected_names=list(lp.detected_names),
+                note_type=lp.note_type,
+                note_text=lp.note_text,
+                members=[],
+            )
+        groups[key].members.append((lp, dlt_by_source.get(lp.source_table_id)))
+    return list(groups.values())
