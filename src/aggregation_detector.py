@@ -132,7 +132,7 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
     - MAX_K: real-world aggregation chains rarely exceed MAX_K direct children
     - COMBO_CAP: dynamically reduce max_k if the search space still exceeds this
     """
-    MAX_SMALLER = 14    # at most 14 child candidates per parent
+    MAX_SMALLER = 20    # candidate pool per parent (raised to handle 15+ service types)
     MAX_K = 9           # rarely more than 9 direct children in practice
     COMBO_CAP = 50_000  # combinations cap per parent; reduce max_k if exceeded
 
@@ -151,11 +151,23 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
         if len(smaller) < 2:
             continue
 
-        # Limit candidate pool: keep the MAX_SMALLER tables with the largest
-        # totals. Direct children are almost always among the largest sub-tables,
-        # so this preserves relevant candidates while bounding search complexity.
+        # Limit candidate pool: prioritise tables from the SAME sheet as the
+        # parent, then fill remaining slots with the largest other-sheet tables.
+        # Without this, multi-sheet groups cause other sheets' larger intermediate
+        # aggregates to displace the smaller but correct direct children of
+        # within-sheet aggregates (e.g. a 5-child relationship fails because two
+        # of the smaller children are pushed out by a sibling branch's tables).
         if len(smaller) > MAX_SMALLER:
-            smaller = sorted(smaller, key=lambda t: totals[t.table_id], reverse=True)[:MAX_SMALLER]
+            same = sorted(
+                [t for t in smaller if t.sheet_name == parent.sheet_name],
+                key=lambda t: totals[t.table_id], reverse=True,
+            )
+            other = sorted(
+                [t for t in smaller if t.sheet_name != parent.sheet_name],
+                key=lambda t: totals[t.table_id], reverse=True,
+            )
+            n_same = min(len(same), MAX_SMALLER)
+            smaller = same[:n_same] + other[: MAX_SMALLER - n_same]
 
         max_k = min(len(smaller), MAX_K)
 

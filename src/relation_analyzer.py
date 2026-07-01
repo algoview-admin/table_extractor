@@ -62,7 +62,7 @@ Excelファイルから自動検出されたテーブル情報を精密に分析
   "table_analyses": [
     {
       "table_id": "テーブルID（入力と完全一致）",
-      "display_name": "わかりやすい日本語表示名",
+      "display_name": "シート名を前置した表示名（形式: 「シート名 テーブル内容」必須。例: 「横浜支店 サービスA合計」）",
       "description": "テーブルの内容・目的の説明",
       "granularity_level": "detail または summary または master または reference または unknown",
       "is_master_table": false,
@@ -143,7 +143,8 @@ Excelデータは複数の独立した集計軸を同時に持つことがある
     1. 「事前検証済み：数値合計関係」で左辺（親）に登場 → summary（最高優先・疑いなし）
     2. 「シート間集計構造（推定）」の集計シート候補のテーブル → summary（数値ヒントに基づく）
     3. 観点1・2（名称・構造）から集計結果と判断できる場合 → summary（名称/構造推論）
-  ※ 観点3（数値合計）で「右辺のみ」と確認済みのテーブルは、観点1・2がsummaryを示しても detail を維持
+  ※ 観点3（数値合計）で「右辺のみ」と確認済みのテーブルは原則 detail を維持するが、
+    「シート間集計構造（推定）」の集計シート候補に含まれるシートのテーブルは summary にすること
 
 ▼ 最小粒度の判定ルール（最重要）:
   is_minimum_granularity_candidate=true の条件:
@@ -183,10 +184,12 @@ Excelデータは複数の独立した集計軸を同時に持つことがある
 「事前検証済み：数値合計関係」セクションに記載された関係はシステムが数値計算で確認済みです。
 AIによる推測不要であり、観点1・2の推論より優先して採用してください。
 - 「左辺（親）」のテーブル → granularity_level=summary, is_minimum_granularity_candidate=false
-- 「右辺（子）」のみのテーブル（どの親の左辺にも登場しない）→ is_minimum_granularity_candidate=true
-  ※ 「組織軸で上位シートが存在する」は is_minimum_granularity_candidate=false の根拠にしない
-  ※ 「名称に合計・計・集計を含む」も is_minimum_granularity_candidate=false の根拠にしない
-     名称に関わらず、relation_factsで左辺（親）に登場しなければ is_minimum_granularity_candidate=true
+- 「右辺（子）」のみのテーブル（どの親の左辺にも登場しない）かつ集計シートでないシートのテーブル
+  → is_minimum_granularity_candidate=true
+  ※ 「シート間集計構造（推定）」の集計シート候補に含まれるシートのテーブル
+    → is_minimum_granularity_candidate=false（右辺のみでも集計シートのテーブルは除外）
+  ※ 「名称に合計・計・集計を含む」は is_minimum_granularity_candidate=false の根拠にしない
+     relation_factsで左辺に登場せず、かつ集計シートに属さなければ is_minimum_granularity_candidate=true
 - 「右辺（子）」かつ別の関係で「左辺（親）」のテーブル → 中間層、is_minimum_granularity_candidate=false
 - 上位テーブルの child_table_ids=[下位テーブルIDリスト]、下位テーブルの parent_table_ids=[上位テーブルID]
 
@@ -754,6 +757,7 @@ def _analyze_chunked(
 
 def _parse_response(raw: Dict[str, Any], tables: List[DetectedTable]) -> AIAnalysisResult:
     valid_ids = {t.table_id for t in tables}
+    id_to_table = {t.table_id: t for t in tables}
 
     sheet_classifications = [
         SheetClassification(
@@ -769,10 +773,17 @@ def _parse_response(raw: Dict[str, Any], tables: List[DetectedTable]) -> AIAnaly
         tid = ta.get("table_id", "")
         if tid not in valid_ids:
             continue
+        # Ensure display_name always includes the sheet name.
+        # The AI sometimes omits it for summary tables; patch it here so the UI
+        # can always distinguish tables from different sheets at a glance.
+        dn = ta.get("display_name") or tid
+        dt = id_to_table.get(tid)
+        if dt and dt.sheet_name and dt.sheet_name not in dn:
+            dn = f"{dt.sheet_name} {dn}"
         table_analyses.append(
             TableAnalysisResult(
                 table_id=tid,
-                display_name=ta.get("display_name", tid),
+                display_name=dn,
                 description=ta.get("description", ""),
                 granularity_level=ta.get("granularity_level", "unknown"),
                 is_master_table=ta.get("is_master_table", False),
