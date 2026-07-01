@@ -1694,8 +1694,23 @@ def step4():
     # Auto-IRs reflect the current latent group decisions (dynamic)
     _auto_irs_flat = _build_auto_irs_from_latent(_latent_groups, _ext_tables, tables_dict)
 
-    # Merge AI IRs and auto-IRs into a single unified list
-    _all_irs_flagged: list = [(ir, False) for ir in analysis.integration_recommendations]
+    # Suppress AI IRs whose table_ids are fully covered by an accepted auto-IR.
+    # When latent table X-3 is accepted, the auto-IR covers X-1+X-2+X-3, so the
+    # AI IR for X-1+X-2 alone is replaced (hidden) rather than shown alongside it.
+    _superseded_ai_ids: set = set()
+    for _sup_ir, _ in _auto_irs_flat:
+        # Real (non-virtual) table IDs in the auto-IR
+        _sup_real = {t for t in _sup_ir.table_ids if t in tables_dict}
+        for _ai_ir in analysis.integration_recommendations:
+            if set(_ai_ir.table_ids).issubset(_sup_real):
+                _superseded_ai_ids.add(_ai_ir.recommendation_id)
+
+    # Merge: filtered AI IRs (not superseded) + auto IRs
+    _all_irs_flagged: list = [
+        (ir, False)
+        for ir in analysis.integration_recommendations
+        if ir.recommendation_id not in _superseded_ai_ids
+    ]
     _all_irs_flagged += [(ir, True) for ir, _ in _auto_irs_flat]
     _is_auto_map: dict = {ir.recommendation_id: flag for ir, flag in _all_irs_flagged}
     _all_irs = [ir for ir, _ in _all_irs_flagged]
@@ -1824,8 +1839,33 @@ def _build_final_tables():
         set()
     )  # Dedup masters that map identical child→parent labels
 
-    # Apply approved integrations
+    # Compute which AI IRs are superseded by accepted auto-IRs (same logic as step4).
+    # Build latent groups to determine accepted auto-IRs.
+    _bft_sup_proposals = find_latent_tables(st.session_state.detected_tables)
+    _bft_sup_derived = derive_latent_tables(st.session_state.detected_tables)
+    _bft_sup_groups = group_latent_proposals(_bft_sup_proposals, _bft_sup_derived)
+    _bft_sup_ext = dict(tables_dict)
+    for _dsup in _bft_sup_derived:
+        _vsup = _dlt_virtual_table(_dsup, tables_dict)
+        if _vsup:
+            _bft_sup_ext[_dsup.proposal_id] = _vsup
+    _bft_auto_irs = _build_auto_irs_from_latent(_bft_sup_groups, _bft_sup_ext, tables_dict)
+
+    _superseded_in_bft: set = set()
+    for _bft_auto_ir, _ in _bft_auto_irs:
+        if not st.session_state.get("latent_auto_int_decisions", {}).get(
+            _bft_auto_ir.recommendation_id, True
+        ):
+            continue
+        _auto_real = {t for t in _bft_auto_ir.table_ids if t in tables_dict}
+        for _ai_check in analysis.integration_recommendations:
+            if set(_ai_check.table_ids).issubset(_auto_real):
+                _superseded_in_bft.add(_ai_check.recommendation_id)
+
+    # Apply approved integrations (skip superseded ones)
     for ir in analysis.integration_recommendations:
+        if ir.recommendation_id in _superseded_in_bft:
+            continue  # replaced by an auto-IR that includes the derived table
         if not st.session_state.integration_decisions.get(ir.recommendation_id, True):
             continue
 
