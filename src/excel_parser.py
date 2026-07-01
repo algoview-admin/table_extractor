@@ -243,6 +243,12 @@ _NOTE_PREFIXES: Tuple[str, ...] = (
     "note:", "NOTE:", "＊注", "*注",
 )
 
+# Matches aggregation/relationship keywords at the end of enumeration notes
+# e.g. "C-1・C-2・C-3の合計", "A・B・Cの内訳"
+_AGG_ENUM_RE = re.compile(
+    r"[・、,＋+].+[のをにおける]*(合計|内訳|合算|総計|小計|集計|含む|合わせた|除く|除外)"
+)
+
 
 def _row_content_profile(grid: List[List[Any]], r: int, max_col: int) -> Dict[str, Any]:
     """Return a content profile dict for a single grid row."""
@@ -291,6 +297,10 @@ def _classify_row(p: Dict[str, Any]) -> str:
         # Annotation markers or very long sentence → footnote/note outside the table
         if txt.startswith(_NOTE_PREFIXES) or len(txt) > 60:
             return _RT_NOTE
+        # Enumeration + aggregation keyword without a standard note prefix
+        # e.g. "C-1・C-2・C-3の合計", "A区・B区の内訳"
+        if _AGG_ENUM_RE.search(txt):
+            return _RT_NOTE
         return _RT_TITLE
 
     # All filled cells share one unique text → merged cell spanning the row.
@@ -302,6 +312,8 @@ def _classify_row(p: Dict[str, Any]) -> str:
         if len(unique) == 1:
             txt = next(iter(unique))
             if txt.startswith(_NOTE_PREFIXES) or len(txt) > 60:
+                return _RT_NOTE
+            if _AGG_ENUM_RE.search(txt):
                 return _RT_NOTE
             return _RT_TITLE if len(txt) <= 40 else _RT_COL_HDR
 

@@ -161,11 +161,18 @@ def _fuzzy_match(name: str, tables: List[DetectedTable]) -> Optional[str]:
 
 
 def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]:
-    """Scan all detected tables' trailing notes and return latent-table proposals.
+    """Scan all detected tables' trailing notes and titles for latent-table proposals.
 
-    A proposal is generated when a note mentions N ≥ 2 entity names AND:
+    A proposal is generated when a note (or aggregation-style title) mentions N ≥ 2
+    entity names AND:
       - at least 1 entity matches a detected table   (confirms the note is relevant)
       - at least 1 entity has NO detected-table match (the latent/missing table)
+
+    Two scan passes:
+      1. Trailing notes  (t.notes)  — primary path after excel_parser fix
+      2. Table titles    (t.title)  — fallback for notes that were misclassified as
+                                      titles in older project files; only fires when
+                                      the title looks like an enumeration/aggregation
 
     Matching uses a two-pass strategy to avoid cross-contamination between
     similarly-named series entries (e.g. C-1 / C-2 / C-3):
@@ -175,83 +182,104 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
                 searching only tables NOT claimed in pass 1.
     """
     proposals: List[LatentTableProposal] = []
+    # Track (source_table_id, frozenset(entities)) already proposed to avoid duplicates
+    _seen: set = set()
+
+    # Aggregation/enumeration pattern — same regex used in excel_parser._AGG_ENUM_RE
+    _title_note_re = re.compile(
+        r"[・、,＋+].+[のをにおける]*(合計|内訳|合算|総計|小計|集計|含む|合わせた|除く|除外)"
+    )
+
+    def _scan_text(t: DetectedTable, text: str, is_title: bool = False) -> None:
+        """Process a single note/title text against the full table list."""
+        entities = _extract_entities(text)
+        if len(entities) < 2:
+            return
+
+        key = (t.table_id, frozenset(entities))
+        if key in _seen:
+            return
+        _seen.add(key)
+
+        # ── Pass 1: exact / substring matches ──────────────────────────
+        exact_map: dict = {}
+        reserved_ids: set = {t.table_id}
+        for entity in entities:
+            mid = _exact_match(entity, tables)
+            if mid and mid != t.table_id:
+                exact_map[entity] = mid
+                reserved_ids.add(mid)
+
+        # ── Pass 2: fuzzy on un-reserved tables only ────────────────────
+        available = [t2 for t2 in tables if t2.table_id not in reserved_ids]
+        fuzzy_map: dict = {}
+        for entity in entities:
+            if entity not in exact_map:
+                mid = _fuzzy_match(entity, available)
+                if mid:
+                    fuzzy_map[entity] = mid
+
+        # ── Classify each entity ────────────────────────────────────────
+        detected_ids: List[str] = []
+        detected_names: List[str] = []
+        missing_names: List[str] = []
+
+        for entity in entities:
+            mid = exact_map.get(entity) or fuzzy_map.get(entity)
+            if mid:
+                detected_ids.append(mid)
+                detected_names.append(entity)
+            else:
+                missing_names.append(entity)
+
+        if not detected_names or not missing_names:
+            return
+
+        source_title = t.title or t.table_id
+        note_type = _detect_note_type(text)
+        note_short = text[:100] + ("…" if len(text) > 100 else "")
+
+        type_label = {
+            "aggregation": "集計注記",
+            "exclusion":   "除外注記",
+            "reference":   "参照注記",
+            "general":     "注記",
+        }.get(note_type, "注記")
+
+        origin = "テーブル表題" if is_title else type_label
+
+        reasoning = (
+            f"テーブル「{source_title}」の{origin}「{note_short}」に "
+            f"{len(entities)} 件の名称が列挙されています。"
+            f"うち {len(detected_names)} 件（{', '.join(detected_names)}）は検出済みですが、"
+            f"{len(missing_names)} 件（{', '.join(missing_names)}）は未検出です。"
+            f"これらのテーブルが実際に存在する可能性があります。"
+        )
+
+        proposals.append(
+            LatentTableProposal(
+                proposal_id=f"LP_{len(proposals) + 1}",
+                source_table_id=t.table_id,
+                source_title=source_title,
+                note_text=text,
+                note_type=note_type,
+                all_referenced=entities,
+                detected_table_ids=detected_ids,
+                detected_names=detected_names,
+                missing_names=missing_names,
+                reasoning=reasoning,
+            )
+        )
 
     for t in tables:
-        for note in t.notes or []:
-            entities = _extract_entities(note)
-            if len(entities) < 2:
-                continue
+        # Primary: trailing notes
+        for note in getattr(t, "notes", None) or []:
+            _scan_text(t, note, is_title=False)
 
-            # ── Pass 1: exact / substring matches ──────────────────────────
-            exact_map: dict = {}   # entity → table_id
-            # Always reserve the source table itself so it cannot be matched
-            # as a "detected" entity (it IS the parent/aggregate table).
-            reserved_ids: set = {t.table_id}
-            for entity in entities:
-                mid = _exact_match(entity, tables)
-                if mid and mid != t.table_id:
-                    exact_map[entity] = mid
-                    reserved_ids.add(mid)
-
-            # ── Pass 2: fuzzy on un-reserved tables only ────────────────────
-            available = [t2 for t2 in tables if t2.table_id not in reserved_ids]
-            fuzzy_map: dict = {}
-            for entity in entities:
-                if entity not in exact_map:
-                    mid = _fuzzy_match(entity, available)
-                    if mid:
-                        fuzzy_map[entity] = mid
-
-            # ── Classify each entity ────────────────────────────────────────
-            detected_ids: List[str] = []
-            detected_names: List[str] = []
-            missing_names: List[str] = []
-
-            for entity in entities:
-                mid = exact_map.get(entity) or fuzzy_map.get(entity)
-                if mid:
-                    detected_ids.append(mid)
-                    detected_names.append(entity)
-                else:
-                    missing_names.append(entity)
-
-            # Require at least 1 confirmed hit AND 1 miss
-            if not detected_names or not missing_names:
-                continue
-
-            source_title = t.title or t.table_id
-            note_type = _detect_note_type(note)
-            note_short = note[:100] + ("…" if len(note) > 100 else "")
-
-            type_label = {
-                "aggregation": "集計注記",
-                "exclusion":   "除外注記",
-                "reference":   "参照注記",
-                "general":     "注記",
-            }.get(note_type, "注記")
-
-            reasoning = (
-                f"テーブル「{source_title}」の{type_label}「{note_short}」に "
-                f"{len(entities)} 件の名称が列挙されています。"
-                f"うち {len(detected_names)} 件（{', '.join(detected_names)}）は検出済みですが、"
-                f"{len(missing_names)} 件（{', '.join(missing_names)}）は未検出です。"
-                f"これらのテーブルが実際に存在する可能性があります。"
-            )
-
-            proposals.append(
-                LatentTableProposal(
-                    proposal_id=f"LP_{len(proposals) + 1}",
-                    source_table_id=t.table_id,
-                    source_title=source_title,
-                    note_text=note,
-                    note_type=note_type,
-                    all_referenced=entities,
-                    detected_table_ids=detected_ids,
-                    detected_names=detected_names,
-                    missing_names=missing_names,
-                    reasoning=reasoning,
-                )
-            )
+        # Fallback: aggregation-style titles (catches notes misclassified by older parser)
+        title = getattr(t, "title", None) or ""
+        if title and _title_note_re.search(title):
+            _scan_text(t, title, is_title=True)
 
     return proposals
 
@@ -265,15 +293,19 @@ def derive_latent_tables(
     tables: List[DetectedTable],
 ) -> List[DerivedLatentTable]:
     """
-    For each latent table proposal where exactly ONE component is missing
-    from a set of tables related by an aggregation note, attempt to derive
-    the missing table's data by numeric subtraction:
+    For each latent table proposal where at least ONE component is missing
+    from a set of tables related by a note, attempt to derive the missing
+    table's data by numeric subtraction:
 
         missing ≈ aggregate_table − sum(detected_components)
 
-    The aggregate table (parent) is identified as the one with the largest
-    numeric total among the source table and all detected referenced tables.
-    All tables in the group must share the exact same numeric data shape.
+    The aggregate table (parent) is identified as the candidate with the
+    largest absolute numeric total. When more than one component is missing,
+    the computed residual represents their combined total.
+
+    Shape flexibility: only the numeric columns common to ALL candidates are
+    used, so tables that differ only in non-numeric or extra columns can still
+    participate. Row counts must match.
 
     Returns a list of DerivedLatentTable instances (empty if none can be derived).
     """
@@ -282,98 +314,122 @@ def derive_latent_tables(
     derived: List[DerivedLatentTable] = []
 
     for lp in latent_proposals:
-        # Derivation requires exactly one missing component so we can solve uniquely.
-        if len(lp.missing_names) != 1:
-            continue
-
-        # Only aggregation-type notes reliably encode a sum relationship.
-        if lp.note_type not in ("aggregation", "general"):
-            continue
-
-        # Gather all tables in the relationship: the note source + every detected reference.
-        candidate_ids: List[str] = [lp.source_table_id] + list(lp.detected_table_ids)
-        candidate_ids_unique = list(dict.fromkeys(candidate_ids))  # preserve order, deduplicate
-        candidates = [id_to_table.get(cid) for cid in candidate_ids_unique]
-        if any(c is None or c.df is None or c.df.empty for c in candidates):
-            continue
-
-        # Extract numeric portions; all must be non-empty and share the same shape.
-        num_arrays = []
-        valid = True
-        for c in candidates:
-            num = c.df.select_dtypes(include=[np.number])
-            if num.empty:
-                valid = False
-                break
-            num_arrays.append((c, num))
-        if not valid or len(num_arrays) < 2:
-            continue
-
-        base_shape = num_arrays[0][1].shape
-        if not all(a.shape == base_shape for _, a in num_arrays):
-            continue  # Incompatible shapes — cannot subtract element-wise
-
-        # Identify the PARENT as the candidate with the largest absolute numeric total.
-        # The parent is the aggregate; all other detected tables are known components.
-        totals = [float(np.nansum(np.abs(a.values))) for _, a in num_arrays]
-        if max(totals) < 1e-9:
-            continue  # All zeros — nothing to derive
-
-        parent_idx = int(np.argmax(totals))
-        parent_table, parent_num = num_arrays[parent_idx]
-        children = [(c, num) for i, (c, num) in enumerate(num_arrays) if i != parent_idx]
-        child_tables = [c for c, _ in children]
-        child_nums = [num for _, num in children]
-
-        # Sanity check: the parent total must be ≥ 80% of the sum of child totals.
-        # If not, the "parent" identification is likely wrong — skip.
-        child_sum_total = sum(float(np.nansum(np.abs(n.values))) for n in child_nums)
-        if totals[parent_idx] < child_sum_total * 0.8:
-            continue
-
-        # Compute: missing = parent − sum(detected_children)
-        p_arr = np.nan_to_num(parent_num.values.astype(float), nan=0.0)
-        c_sum = np.zeros_like(p_arr)
-        for cn in child_nums:
-            c_sum += np.nan_to_num(cn.values.astype(float), nan=0.0)
-        derived_arr = p_arr - c_sum
-
-        # Build the derived DataFrame: same structure as the parent table,
-        # with only the numeric columns replaced by the computed difference.
-        derived_df = parent_table.df.copy()
-        for col_idx, col in enumerate(parent_num.columns):
-            derived_df[col] = derived_arr[:, col_idx]
-
-        # Human-readable formula
-        parent_label = parent_table.title or parent_table.table_id
-        child_labels = [c.title or c.table_id for c in child_tables]
-        missing_name = lp.missing_names[0]
-        formula = (
-            f"{missing_name}  ≈  {parent_label}"
-            f"  −  ( {' + '.join(child_labels)} )"
-        )
-
-        # Display order: parent first, then known children in original candidate order
-        source_display_order = [parent_table.table_id] + [c.table_id for c in child_tables]
-
-        derived.append(
-            DerivedLatentTable(
-                proposal_id=f"DLT_{len(derived) + 1}",
-                derived_name=missing_name,
-                df=derived_df,
-                parent_table_id=parent_table.table_id,
-                parent_title=parent_label,
-                detected_child_ids=[c.table_id for c in child_tables],
-                note_text=lp.note_text,
-                derivation_formula=formula,
-                source_display_order=source_display_order,
-                reasoning=(
-                    f"注記「{lp.note_text[:100]}{'…' if len(lp.note_text) > 100 else ''}」に"
-                    f"よれば「{missing_name}」は「{parent_label}」の構成要素として記載されているが"
-                    f"未検出。検出済み構成要素（{', '.join(child_labels)}）を集計テーブルから"
-                    f"差し引くことで推定データを算出した。"
-                ),
-            )
-        )
+        try:
+            _try_derive_one(lp, id_to_table, derived)
+        except Exception:
+            pass  # Skip any proposal that raises an unexpected error
 
     return derived
+
+
+def _try_derive_one(
+    lp: "LatentTableProposal",
+    id_to_table: dict,
+    derived: List[DerivedLatentTable],
+) -> None:
+    """Attempt to derive one latent table from a LatentTableProposal.
+    Appends to `derived` in-place; raises on unrecoverable errors (caller catches)."""
+
+    # Need at least one missing component to derive
+    if not lp.missing_names:
+        return
+
+    # Accept any note type — aggregation wording is not required for the math
+    # to work, and some notes phrase the relationship differently ("C-3を含む").
+
+    # Gather all tables in the relationship: the note source + every detected ref
+    candidate_ids: List[str] = [lp.source_table_id] + list(lp.detected_table_ids)
+    candidate_ids_unique = list(dict.fromkeys(candidate_ids))  # preserve order, dedup
+    candidates = [id_to_table.get(cid) for cid in candidate_ids_unique]
+    if any(c is None or c.df is None or c.df.empty for c in candidates):
+        return
+
+    # Find numeric columns common to ALL candidates
+    common_num_cols: Optional[List] = None
+    for c in candidates:
+        nc = list(c.df.select_dtypes(include=[np.number]).columns)
+        if not nc:
+            return  # This candidate has no numeric data
+        if common_num_cols is None:
+            common_num_cols = nc
+        else:
+            # Keep only columns present in both, in the order of the first candidate
+            common_num_cols = [col for col in common_num_cols if col in nc]
+
+    if not common_num_cols:
+        return  # No shared numeric columns
+
+    # Row counts must match for element-wise subtraction
+    row_counts = [len(c.df) for c in candidates]
+    if len(set(row_counts)) != 1:
+        return
+
+    # Extract numeric arrays for common columns
+    arrays: List[Tuple["DetectedTable", np.ndarray]] = []
+    for c in candidates:
+        arr = np.nan_to_num(
+            c.df[common_num_cols].values.astype(float), nan=0.0
+        )
+        arrays.append((c, arr))
+
+    # Identify the PARENT as the candidate with the largest absolute numeric total
+    totals = [float(np.nansum(np.abs(arr))) for _, arr in arrays]
+    if max(totals) < 1e-9:
+        return  # All zeros — nothing to derive
+
+    parent_idx = int(np.argmax(totals))
+    parent_table, parent_arr = arrays[parent_idx]
+    children: List[Tuple["DetectedTable", np.ndarray]] = [
+        (c, arr) for i, (c, arr) in enumerate(arrays) if i != parent_idx
+    ]
+    if not children:
+        return
+
+    # Sanity check: parent total must be ≥ 80% of sum of child totals.
+    child_sum_total = sum(float(np.nansum(np.abs(arr))) for _, arr in children)
+    if child_sum_total > 0 and totals[parent_idx] < child_sum_total * 0.8:
+        return  # Parent smaller than children — wrong table identified as parent
+
+    # Compute: missing = parent − sum(detected_children)
+    c_sum = np.zeros_like(parent_arr, dtype=float)
+    for _, arr in children:
+        c_sum += arr
+    derived_arr = parent_arr - c_sum
+
+    # Build the derived DataFrame: parent's full structure, numeric cols replaced
+    derived_df = parent_table.df.copy()
+    for ci, col in enumerate(common_num_cols):
+        derived_df[col] = derived_arr[:, ci]
+
+    # Human-readable names and formula
+    parent_label = parent_table.title or parent_table.table_id
+    child_labels = [c.title or c.table_id for c, _ in children]
+    missing_name = (
+        lp.missing_names[0]
+        if len(lp.missing_names) == 1
+        else "（" + " + ".join(lp.missing_names) + "）合算"
+    )
+    formula = (
+        f"{missing_name}  ≈  {parent_label}"
+        f"  −  ( {' + '.join(child_labels)} )"
+    )
+
+    derived.append(
+        DerivedLatentTable(
+            proposal_id=f"DLT_{len(derived) + 1}",
+            derived_name=missing_name,
+            df=derived_df,
+            parent_table_id=parent_table.table_id,
+            parent_title=parent_label,
+            detected_child_ids=[c.table_id for c, _ in children],
+            note_text=lp.note_text,
+            derivation_formula=formula,
+            source_display_order=[parent_table.table_id] + [c.table_id for c, _ in children],
+            reasoning=(
+                f"注記「{lp.note_text[:100]}{'…' if len(lp.note_text) > 100 else ''}」に"
+                f"よれば「{missing_name}」は「{parent_label}」の構成要素として記載されているが"
+                f"未検出。検出済み構成要素（{', '.join(child_labels)}）を集計テーブルから"
+                f"差し引くことで推定データを算出した。"
+            ),
+        )
+    )

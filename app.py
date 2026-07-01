@@ -1640,11 +1640,10 @@ def step4():
     # ── Section 4: Derived latent tables ─────────────────────────────────────
     if derived_latent:
         st.divider()
-        st.subheader("🔢 差分抽出テーブル")
+        st.subheader("🔢 差分抽出テーブル（潜在テーブル推定）")
         st.caption(
-            "テーブル外の注記に記載された集計関係をもとに、"
-            "検出されなかったテーブルのデータを差分計算で推定しました。"
-            "集計テーブルから検出済み構成要素を差し引いた値が「推定データ」です。"
+            "注記に記載された集計関係をもとに、未検出テーブルのデータを差分計算で推定しました。"
+            "「集計テーブル − 検出済み構成要素の合計」が推定データです。"
         )
 
         for dlt in derived_latent:
@@ -1652,13 +1651,9 @@ def step4():
                 st.session_state.derived_decisions[dlt.proposal_id] = True
 
             with st.container(border=True):
-                st.markdown(f"#### ❓→📊 {dlt.derived_name}")
+                st.markdown(f"#### {dlt.derived_name}")
                 st.markdown(
-                    f"<div style='background:#0d1520;border-left:3px solid #4a6080;"
-                    f"border-radius:0 6px 6px 0;padding:8px 14px;"
-                    f"font-size:0.82rem;color:#7090b0;margin:6px 0'>"
-                    f"📝 注記元: {dlt.note_text}</div>",
-                    unsafe_allow_html=True,
+                    f"_{dlt.parent_title} の注記より「{dlt.derived_name}」を差分計算で推定_"
                 )
 
                 _render_derived_before_after(dlt, tables_dict)
@@ -1666,7 +1661,8 @@ def step4():
                 st.divider()
                 c_info, c_dec = st.columns([2, 1])
                 with c_info:
-                    st.caption(f"💡 推奨理由: {dlt.reasoning}")
+                    with st.expander("💡 推奨理由", expanded=False):
+                        st.caption(dlt.reasoning)
                 with c_dec:
                     st.markdown("<br>", unsafe_allow_html=True)
                     decision = st.radio(
