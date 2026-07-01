@@ -1535,21 +1535,18 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
                 )
 
         if n_derived > 0:
-            if n_sheets == 1:
-                _, dlt = group.members[0]
-                if dlt is not None:
-                    _render_derived_before_after(dlt, tables_dict)
-            else:
+            derived_members = [(lp, dlt) for lp, dlt in group.members if dlt is not None]
+            # Representative: show first DLT directly
+            _render_derived_before_after(derived_members[0][1], tables_dict)
+            # Others: collapsed expander
+            if len(derived_members) > 1:
+                others = derived_members[1:]
                 with st.expander(
-                    f"📊 シート別推定データ（{n_derived}/{n_sheets} シートで算出済み）",
-                    expanded=False,
+                    f"同様の推定 他 {len(others)} 件", expanded=False
                 ):
-                    for lp, dlt in group.members:
+                    for lp, dlt in others:
                         st.markdown(f"**{lp.source_title}**")
-                        if dlt is not None:
-                            _render_derived_before_after(dlt, tables_dict)
-                        else:
-                            st.caption("（差分計算不可 — 行数不一致または共通数値列なし）")
+                        _render_derived_before_after(dlt, tables_dict)
                         st.divider()
 
         st.divider()
@@ -1571,28 +1568,34 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
                 st.caption("💡 下の統合テーブル案に自動反映されます")
 
 
-def _render_auto_ir_card(ir: IntegrationRecommendation, ext_tables_dict: dict) -> None:
-    """Render a card for an auto-generated integration from a latent table group."""
+def _render_unified_ir_card(
+    ir: IntegrationRecommendation,
+    tables_for_render: dict,
+    is_auto: bool = False,
+) -> None:
+    """Render an integration recommendation card — handles both AI-proposed and auto-generated."""
     rec_id = ir.recommendation_id
-    if "latent_auto_int_decisions" not in st.session_state:
-        st.session_state.latent_auto_int_decisions = {}
-    if rec_id not in st.session_state.latent_auto_int_decisions:
-        st.session_state.latent_auto_int_decisions[rec_id] = True
+    dec_store = "latent_auto_int_decisions" if is_auto else "integration_decisions"
+    if dec_store not in st.session_state:
+        st.session_state[dec_store] = {}
+    if rec_id not in st.session_state[dec_store]:
+        st.session_state[dec_store][rec_id] = True
 
     with st.container(border=True):
         st.markdown(f"#### {ir.group_name}")
-        st.markdown(
-            "<span style='display:inline-block;background:#1a3a1a;border:1px solid #2a6a2a;"
-            "border-radius:12px;padding:2px 10px;font-size:0.72rem;color:#7aba7a;"
-            "margin-bottom:8px;'>💡 潜在テーブル追加による自動提案</span>",
-            unsafe_allow_html=True,
-        )
+        if is_auto:
+            st.markdown(
+                "<span style='display:inline-block;background:#1a3a1a;border:1px solid #2a6a2a;"
+                "border-radius:12px;padding:2px 10px;font-size:0.72rem;color:#7aba7a;"
+                "margin-bottom:8px;'>💡 潜在テーブル追加による自動提案</span>",
+                unsafe_allow_html=True,
+            )
         st.markdown(f"_{ir.description}_")
 
-        _render_integration_before_after(ir, ext_tables_dict)
+        _render_integration_before_after(ir, tables_for_render)
 
         st.divider()
-        _splitter_marker(f"s4-auto-{rec_id}")
+        _splitter_marker(f"s4-ir-{rec_id}")
         c_info, c_dec = st.columns([2, 1])
         with c_info:
             _col_names = ir.new_column_names or [ir.new_column_name]
@@ -1601,20 +1604,23 @@ def _render_auto_ir_card(ir: IntegrationRecommendation, ext_tables_dict: dict) -
             for tid in ir.table_ids:
                 vals = _multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
                 val_str = " / ".join(str(v) for v in vals)
-                t_label = ext_tables_dict.get(tid)
-                label_str = f"（{t_label.title}）" if t_label and t_label.title else ""
-                st.markdown(f"  - `{tid}`{label_str} → **{val_str}**")
-            st.caption(f"💡 {ir.reasoning}")
+                if is_auto:
+                    t_entry = tables_for_render.get(tid)
+                    lbl = f"（{t_entry.title}）" if t_entry and t_entry.title else ""
+                    st.markdown(f"  - `{tid}`{lbl} → **{val_str}**")
+                else:
+                    st.markdown(f"  - `{tid}` → **{val_str}**")
+            st.caption(f"💡 推奨理由: {ir.reasoning}")
         with c_dec:
             st.markdown("<br>", unsafe_allow_html=True)
             decision = st.radio(
                 "この統合を実施しますか？",
                 ["✅ 統合する", "❌ 統合しない"],
                 horizontal=True,
-                key=f"radio_latent_auto_int_{rec_id}",
-                index=(0 if st.session_state.latent_auto_int_decisions.get(rec_id, True) else 1),
+                key=f"radio_{rec_id}",
+                index=(0 if st.session_state[dec_store].get(rec_id, True) else 1),
             )
-            st.session_state.latent_auto_int_decisions[rec_id] = (decision == "✅ 統合する")
+            st.session_state[dec_store][rec_id] = (decision == "✅ 統合する")
 
 
 def step4():
@@ -1674,9 +1680,9 @@ def step4():
             )
         return
 
-    # ── Section 1: 潜在テーブル (FIRST) ─────────────────────────────────────
+    # ── Section 1: 潜在テーブル推定 (FIRST) ──────────────────────────────────
     if has_latent:
-        st.subheader("🔢 潜在テーブル")
+        st.subheader("🔢 潜在テーブル推定")
         st.caption(
             "テーブルの注記に記載された集計関係を分析し、未検出テーブルを差分計算で推定しました。"
             "「追加する」を選択すると下の統合テーブル案に自動反映されます。"
@@ -1685,104 +1691,45 @@ def step4():
             _render_latent_group_card(_group, tables_dict)
 
     # ── Section 2: 統合テーブル ───────────────────────────────────────────────
+    # Auto-IRs reflect the current latent group decisions (dynamic)
     _auto_irs_flat = _build_auto_irs_from_latent(_latent_groups, _ext_tables, tables_dict)
-    _has_any_int = has_integrations or bool(_auto_irs_flat)
 
-    if _has_any_int:
+    # Merge AI IRs and auto-IRs into a single unified list
+    _all_irs_flagged: list = [(ir, False) for ir in analysis.integration_recommendations]
+    _all_irs_flagged += [(ir, True) for ir, _ in _auto_irs_flat]
+    _is_auto_map: dict = {ir.recommendation_id: flag for ir, flag in _all_irs_flagged}
+    _all_irs = [ir for ir, _ in _all_irs_flagged]
+
+    if _all_irs:
         if has_latent:
             st.divider()
         st.subheader("🔀 統合テーブル")
+        st.caption(
+            "各統合について実施するかどうかをお選びください。"
+            "潜在テーブルを「追加する」にすると、関連する統合提案が自動で追加されます。"
+        )
 
-        if has_integrations:
-            if _auto_irs_flat:
-                st.caption("▼ AI が推奨する統合")
-            else:
-                st.caption(
-                    "AI が以下のテーブル統合を推奨しています。"
-                    "各統合について実施するかどうかをお選びください。"
-                )
+        # Group by column signature across the combined list
+        _ir_groups = _group_irs_by_similarity(_all_irs, _ext_tables)
 
-            for ir in analysis.integration_recommendations:
-                if ir.recommendation_id not in st.session_state.integration_decisions:
-                    st.session_state.integration_decisions[ir.recommendation_id] = True
-
-            ir_groups = _group_irs_by_similarity(
-                analysis.integration_recommendations, tables_dict
+        for _grp in _ir_groups:
+            _rep = _grp[0]
+            _similar = _grp[1:]
+            _render_unified_ir_card(
+                _rep, _ext_tables,
+                is_auto=_is_auto_map.get(_rep.recommendation_id, False),
             )
-
-            def _render_ir_card(ir, td):
-                with st.container(border=True):
-                    st.markdown(f"#### {ir.group_name}")
-                    st.markdown(f"_{ir.description}_")
-                    _render_integration_before_after(ir, td)
-                    st.divider()
-                    _splitter_marker(f"s4-ir-{ir.recommendation_id}")
-                    c_info, c_dec = st.columns([2, 1])
-                    with c_info:
-                        _col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
-                        _multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
-                        st.markdown(f"**追加列名**: {', '.join(f'`{n}`' for n in _col_names)}")
-                        for tid in ir.table_ids:
-                            vals = _multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
-                            val_str = " / ".join(str(v) for v in vals)
-                            st.markdown(f"  - `{tid}` → **{val_str}**")
-                        st.caption(f"💡 推奨理由: {ir.reasoning}")
-                    with c_dec:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        decision = st.radio(
-                            "この統合を実施しますか？",
-                            ["✅ 統合する", "❌ 統合しない"],
-                            horizontal=True,
-                            key=f"radio_{ir.recommendation_id}",
-                            index=(
-                                0 if st.session_state.integration_decisions.get(
-                                    ir.recommendation_id, True
-                                ) else 1
-                            ),
+            if _similar:
+                _rep_cols = _rep.new_column_names or [_rep.new_column_name]
+                _axes_lbl = " × ".join(_rep_cols)
+                with st.expander(
+                    f"同様の統合 他 {len(_similar)} 件（{_axes_lbl} 軸）", expanded=False
+                ):
+                    for _ir in _similar:
+                        _render_unified_ir_card(
+                            _ir, _ext_tables,
+                            is_auto=_is_auto_map.get(_ir.recommendation_id, False),
                         )
-                        st.session_state.integration_decisions[ir.recommendation_id] = (
-                            decision == "✅ 統合する"
-                        )
-
-            for group in ir_groups:
-                representative = group[0]
-                similar = group[1:]
-                _render_ir_card(representative, tables_dict)
-                if similar:
-                    _rep_col_names = getattr(representative, "new_column_names", []) or [
-                        representative.new_column_name
-                    ]
-                    _axes_label = " × ".join(_rep_col_names)
-                    with st.expander(
-                        f"同様の統合 他 {len(similar)} 件（{_axes_label} 軸）",
-                        expanded=False,
-                    ):
-                        for ir in similar:
-                            _render_ir_card(ir, tables_dict)
-
-        # Auto-IRs from accepted latent groups
-        if _auto_irs_flat:
-            if has_integrations:
-                st.markdown("---")
-                st.caption("▼ 潜在テーブル追加による自動統合提案")
-
-            # Group auto-IRs by group_key so similar ones collapse
-            _auto_by_gk: dict = {}
-            for _auto_ir, _gk in _auto_irs_flat:
-                _auto_by_gk.setdefault(_gk, []).append((_auto_ir, _gk))
-
-            for _gk, _ir_list in _auto_by_gk.items():
-                _rep_auto_ir, _ = _ir_list[0]
-                _similar_auto = _ir_list[1:]
-
-                _render_auto_ir_card(_rep_auto_ir, _ext_tables)
-
-                if _similar_auto:
-                    with st.expander(
-                        f"同様の統合 他 {len(_similar_auto)} 件", expanded=False
-                    ):
-                        for _auto_ir, _ in _similar_auto:
-                            _render_auto_ir_card(_auto_ir, _ext_tables)
 
     # ── Section 3: マスタ自動生成 ─────────────────────────────────────────────
     if has_masters:
@@ -2482,11 +2429,11 @@ def _render_derived_before_after(
 
     import html as _html
 
-    # ── 抽出前 ───────────────────────────────────────────────────────────────
+    # ── 推定前 ───────────────────────────────────────────────────────────────
     st.markdown(
         '<div style="display:flex;align-items:center;gap:10px;margin:6px 0 14px;">'
         '<div style="width:5px;height:22px;background:#4a7de0;border-radius:3px;flex-shrink:0;"></div>'
-        '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">抽出前（使用テーブル）</span>'
+        '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">推定前（検出テーブル）</span>'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(74,125,224,.4),transparent);"></div>'
         '</div>',
         unsafe_allow_html=True,
@@ -2540,7 +2487,7 @@ def _render_derived_before_after(
         'padding:6px 22px;margin:0 16px;font-size:0.95rem;font-weight:800;'
         'color:#f5d06a;letter-spacing:.06em;'
         'background:linear-gradient(135deg,rgba(229,168,60,.12),rgba(200,140,40,.08));'
-        'white-space:nowrap;">−&nbsp;&nbsp;差分計算</div>'
+        'white-space:nowrap;">↓&nbsp;&nbsp;差分計算</div>'
         '<div style="flex:1;height:1px;background:linear-gradient(to left,transparent,rgba(229,168,60,.5));"></div>'
         '</div>',
         unsafe_allow_html=True,
@@ -2553,11 +2500,11 @@ def _render_derived_before_after(
         unsafe_allow_html=True,
     )
 
-    # ── 抽出後 ────────────────────────────────────────────────────────────────
+    # ── 推定後 ────────────────────────────────────────────────────────────────
     st.markdown(
         '<div style="display:flex;align-items:center;gap:10px;margin:6px 0 14px;">'
         '<div style="width:5px;height:22px;background:#e5a83c;border-radius:3px;flex-shrink:0;"></div>'
-        '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">抽出後（推定データ）</span>'
+        '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">推定後（潜在テーブル）</span>'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(229,168,60,.4),transparent);"></div>'
         '</div>',
         unsafe_allow_html=True,
