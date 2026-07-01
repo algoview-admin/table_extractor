@@ -195,10 +195,16 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
 
 def _drop_supersets(relations: List[Dict]) -> List[Dict]:
     """
-    For each parent, keep only the smallest-cardinality valid child sets.
-    Larger subsets are redundant (cross-axis mixed decompositions) and add noise.
-    If multiple subsets share the minimum size, all are kept — each likely
-    represents a distinct aggregation axis (e.g. geographic vs. product axis).
+    For each parent, remove only child sets that are strict supersets of another
+    valid set for the same parent.  This preserves ALL minimal decompositions,
+    including those that represent DIFFERENT aggregation axes — e.g. a geographic
+    axis (3 branches) and a product axis (4 service types) are both kept even
+    though they have different cardinalities.
+
+    Previous behaviour (keep only min-size) incorrectly discarded the larger-axis
+    relation, causing the AI to miss multi-level hierarchies such as:
+      • C-1 + C-2 → TypeC-total → Next-total → ServiceA-total
+    where TypeC-total is both a child (of Next-total) and a parent (of C-1/C-2).
     """
     from itertools import groupby
 
@@ -206,6 +212,11 @@ def _drop_supersets(relations: List[Dict]) -> List[Dict]:
     keyfn = lambda r: r["parent_id"]
     for _, group_iter in groupby(sorted(relations, key=keyfn), key=keyfn):
         group_rels = list(group_iter)
-        min_size = min(len(r["child_ids"]) for r in group_rels)
-        result.extend(r for r in group_rels if len(r["child_ids"]) == min_size)
+        sets = [(frozenset(r["child_ids"]), r) for r in group_rels]
+        # Keep r only when no other relation for the same parent has a STRICT
+        # subset of r's children (i.e. r is not a superset of another relation).
+        result.extend(
+            r for s, r in sets
+            if not any(other < s for other, _ in sets)
+        )
     return result
