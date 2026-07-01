@@ -254,7 +254,7 @@ def detect_sheet_levels(tables: List[DetectedTable]) -> List[Dict]:
             "source_sheets": sorted(smaller_peers.get(sheet, set())),
         }
         for sheet, votes in aggregate_votes.items()
-        if votes >= 2 and len(smaller_peers.get(sheet, set())) >= 2
+        if votes >= 1 and len(smaller_peers.get(sheet, set())) >= 2
     ]
 
 
@@ -268,8 +268,11 @@ def format_sheet_level_hints(hints: List[Dict]) -> str:
 
     lines = [
         "=== シート間集計構造（数値比較による推定） ===",
-        "以下のシートは同一構造の複数シートより数値が大きく、集計シートと推定されます。",
-        "これらのシートのテーブルは granularity_level=summary として扱ってください。",
+        "以下のシートは、同一構造を持つ複数の下位シートの数値合計シートと推定されます。",
+        "【絶対ルール】これらのシートの全テーブルは granularity_level=summary かつ",
+        "is_minimum_granularity_candidate=false と確定してください。",
+        "「事前検証済み：数値合計関係」で右辺のみ・左辺のいずれの状況であっても、",
+        "このシート判定を他の全ての推論・ルールより優先してください。",
         "",
     ]
     for h in hints:
