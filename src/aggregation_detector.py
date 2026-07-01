@@ -132,7 +132,7 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
     - MAX_K: real-world aggregation chains rarely exceed MAX_K direct children
     - COMBO_CAP: dynamically reduce max_k if the search space still exceeds this
     """
-    MAX_SMALLER = 20    # candidate pool per parent (raised to handle 15+ service types)
+    MAX_SMALLER = 14    # candidate pool per parent
     MAX_K = 9           # rarely more than 9 direct children in practice
     COMBO_CAP = 50_000  # combinations cap per parent; reduce max_k if exceeded
 
