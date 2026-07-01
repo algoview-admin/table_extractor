@@ -494,6 +494,97 @@ def _format_merge_candidates(
     return "\n".join(lines)
 
 
+def _compute_merge_recommendations(
+    relations: List[Dict],
+    tables: List[DetectedTable],
+    aggregate_sheets: Optional[Set[str]] = None,
+) -> List[Dict]:
+    """
+    Generate 2-axis integration recommendation dicts directly from pre-verified
+    numeric relations — no AI required.
+
+    Uses the same grouping logic as _format_merge_candidates: a group is formed
+    when the same parent title appears in 2+ non-aggregate sheets with the same
+    number of direct children.  Each group produces one ready-to-use
+    integration_recommendation covering ALL sheets' children.
+
+    These Python-generated recs are guaranteed to be correct (based on numeric
+    evidence) and take precedence over AI-generated per-branch recs.
+    """
+    if not relations:
+        return []
+    if aggregate_sheets is None:
+        aggregate_sheets = set()
+
+    id_to_table: Dict[str, DetectedTable] = {t.table_id: t for t in tables}
+    id_to_title: Dict[str, str] = {t.table_id: (t.title or "").strip() for t in tables}
+
+    by_type: Dict[Tuple[str, int], List[Dict]] = defaultdict(list)
+    for r in relations:
+        pid = r["parent_id"]
+        parent = id_to_table.get(pid)
+        if parent is None:
+            continue
+        ptitle = id_to_title.get(pid, "")
+        if not ptitle:
+            continue
+        k = len(r["child_ids"])
+        if k < 2:
+            continue
+        by_type[(ptitle, k)].append({
+            "parent_id": pid,
+            "child_ids": r["child_ids"],
+            "sheet": parent.sheet_name,
+        })
+
+    recs: List[Dict] = []
+    for i, ((ptitle, k), entries) in enumerate(by_type.items(), 1):
+        branch_entries = [e for e in entries if e["sheet"] not in aggregate_sheets]
+        branch_sheets = {e["sheet"] for e in branch_entries}
+        if len(branch_sheets) < 2:
+            continue
+
+        all_child_ids = [cid for e in branch_entries for cid in e["child_ids"]]
+
+        # Build new_column_values: {child_id: [sheet_name, content_title]}
+        new_col_vals: Dict[str, List[str]] = {}
+        for e in branch_entries:
+            for cid in e["child_ids"]:
+                child = id_to_table.get(cid)
+                if child:
+                    new_col_vals[cid] = [child.sheet_name, id_to_title.get(cid, cid)]
+
+        # axis_parent_table_ids:
+        #   index 0 → sheet-axis parent (aggregate sheet's same-type table, if exists)
+        #   index 1 → content-axis parent (first branch's parent)
+        agg_entries = [e for e in entries if e["sheet"] in aggregate_sheets]
+        sheet_axis_parent: Optional[str] = agg_entries[0]["parent_id"] if agg_entries else None
+        content_axis_parent: Optional[str] = (
+            branch_entries[0]["parent_id"] if branch_entries else None
+        )
+
+        recs.append({
+            "recommendation_id": f"IR_AUTO_{i}",
+            "group_name": f"{ptitle} 支店横断統合",
+            "description": (
+                f"{len(branch_sheets)}シートに存在する「{ptitle}」の直接子テーブルを、"
+                f"シート識別と内容区分の2軸で統合する。"
+            ),
+            "table_ids": all_child_ids,
+            "new_column_names": ["シート識別", "内容区分"],
+            "new_column_values": new_col_vals,
+            "axis_parent_table_ids": [sheet_axis_parent, content_axis_parent],
+            "axis_parent_label_columns": [None, None],
+            "reasoning": (
+                f"「{ptitle}」が{len(branch_sheets)}シートにわたって同一構造"
+                f"（直接子{k}件）を持つことが数値計算で確認済み。"
+                f"シート識別軸と内容区分軸の2軸統合を自動生成。"
+            ),
+        })
+
+    return recs
+
+
 # ---------------------------------------------------------------------------
 # Cross-sheet synthesis prompts (used in chunked mode, Phase 2)
 # ---------------------------------------------------------------------------
@@ -709,24 +800,61 @@ def _merge_raws(
     phase1_raws: List[Dict[str, Any]],
     phase2_raw: Dict[str, Any],
     tables: List[DetectedTable],
+    auto_recs: Optional[List[Dict]] = None,
 ) -> "AIAnalysisResult":
-    all_sheet_cls:   List[Dict] = []
-    all_table_ana:   List[Dict] = []
-    all_int_recs:    List[Dict] = []
-    all_masters:     List[Dict] = []
-    summaries:       List[str]  = []
+    """Merge Phase 1, Phase 2, and auto-generated recommendations.
+
+    Priority / deduplication rules:
+      1. auto_recs  — Python-computed 2-axis recs (deterministic, always included first)
+      2. phase2_recs — AI cross-sheet recs not already covered by auto_recs
+      3. phase1_recs — per-batch recs whose table_ids are NOT a subset of any
+                       auto_rec or phase2_rec (single-branch recs subsumed by a
+                       multi-branch 2-axis rec are silently dropped)
+    """
+    all_sheet_cls:    List[Dict] = []
+    all_table_ana:    List[Dict] = []
+    phase1_int_recs:  List[Dict] = []
+    all_masters:      List[Dict] = []
+    summaries:        List[str]  = []
 
     for raw in phase1_raws:
         if raw is None:
             continue
         all_sheet_cls.extend(raw.get("sheet_classifications", []))
         all_table_ana.extend(raw.get("table_analyses", []))
-        all_int_recs.extend(raw.get("integration_recommendations", []))
+        phase1_int_recs.extend(raw.get("integration_recommendations", []))
         all_masters.extend(raw.get("master_tables", []))
         if raw.get("summary"):
             summaries.append(raw["summary"])
 
-    all_int_recs.extend(phase2_raw.get("integration_recommendations", []))
+    phase2_int_recs = phase2_raw.get("integration_recommendations", [])
+    auto = auto_recs or []
+
+    # Build a superset pool from auto + phase2 recs.
+    # Any Phase 1 rec whose table_ids is a SUBSET of a pool entry is redundant
+    # (it represents a single-branch slice already covered by the multi-branch rec).
+    superset_pool = [
+        frozenset(r.get("table_ids", []))
+        for r in (auto + phase2_int_recs)
+        if r.get("table_ids")
+    ]
+
+    filtered_phase1 = [
+        r for r in phase1_int_recs
+        if not any(
+            frozenset(r.get("table_ids", [])) <= pool_set
+            for pool_set in superset_pool
+        )
+    ]
+
+    # Drop Phase 2 recs whose table_ids exactly match an auto rec (exact duplicates)
+    auto_id_sets = {frozenset(r.get("table_ids", [])) for r in auto}
+    filtered_phase2 = [
+        r for r in phase2_int_recs
+        if frozenset(r.get("table_ids", [])) not in auto_id_sets
+    ]
+
+    all_int_recs = auto + filtered_phase2 + filtered_phase1
 
     # Renumber recommendation IDs to avoid duplicates across batches
     for i, rec in enumerate(all_int_recs, 1):
@@ -911,6 +1039,10 @@ def _analyze_chunked(
     intra_recs_summary = "\n".join(intra_summary_lines) or "（なし）"
 
     aggregate_sheets: Set[str] = {h["aggregate_sheet"] for h in sheet_hints_raw}
+
+    # Generate Python-computed 2-axis recs (deterministic, no AI)
+    auto_recs = _compute_merge_recommendations(relations, tables, aggregate_sheets)
+
     merge_candidates = _format_merge_candidates(relations, tables, aggregate_sheets)
 
     cs_user = CROSS_SHEET_USER.format(
@@ -935,7 +1067,7 @@ def _analyze_chunked(
         # Cross-sheet synthesis is best-effort; fall back to sub-batch results only
         phase2_raw = {"integration_recommendations": []}
 
-    return _merge_raws(batch_raws, phase2_raw, tables)
+    return _merge_raws(batch_raws, phase2_raw, tables, auto_recs=auto_recs)
 
 
 def _parse_response(raw: Dict[str, Any], tables: List[DetectedTable]) -> AIAnalysisResult:
