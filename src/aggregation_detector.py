@@ -179,6 +179,7 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
             max_k -= 1
 
         found_sets: List[Tuple[frozenset, float]] = []
+        all_sheets_in_group = {t.sheet_name for t in group}
 
         for k in range(2, max_k + 1):
             for subset in combinations(smaller, k):
@@ -186,6 +187,23 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
                 # Fast total-level pruning (tighter window than before)
                 if s_total > p_total * 1.15 or s_total < p_total * 0.72:
                     continue
+
+                # Cross-sheet coverage guard:
+                # A valid relation must be either (a) purely within the parent's sheet,
+                # or (b) purely cross-sheet with exactly one child per every other sheet.
+                # This prevents false positives where a branch-level leaf table
+                # coincidentally equals the numeric sum of the same leaf table in a
+                # subset of sibling branches — a common occurrence with small totals.
+                cross_kids = [t for t in subset if t.sheet_name != parent.sheet_name]
+                if cross_kids:
+                    # Reject mixed (within + cross) combinations.
+                    if len(cross_kids) != len(subset):
+                        continue
+                    # Reject partial cross-sheet: all other sheets must contribute.
+                    required = all_sheets_in_group - {parent.sheet_name}
+                    if {t.sheet_name for t in cross_kids} != required:
+                        continue
+
                 ratio = _match_ratio(parent, list(subset))
                 if ratio >= 0.88:
                     found_sets.append((frozenset(t.table_id for t in subset), ratio))
