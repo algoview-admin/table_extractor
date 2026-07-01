@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 from src.relation_analyzer import analyze_tables
 from src.excel_parser import parse_csv, parse_excel
 from src.models import AIAnalysisResult, DetectedTable
-from src.latent_table_detector import find_latent_tables, LatentTableProposal
+from src.latent_table_detector import find_latent_tables, LatentTableProposal, derive_latent_tables
+from src.models import DerivedLatentTable
 
 load_dotenv()
 
@@ -195,6 +196,7 @@ def _init():
         "ai_analysis": None,
         "integration_decisions": {},  # rec_id -> bool
         "master_decisions": {},  # dim_master_{rec_id} -> bool
+        "derived_decisions": {},   # dlt_id -> bool
         "final_tables": {},  # table_id -> dict
         "selected_ids": set(),
     }
@@ -238,6 +240,7 @@ _SAVE_KEYS = [
     "ai_analysis",
     "integration_decisions",
     "master_decisions",
+    "derived_decisions",
     "final_tables",
     "selected_ids",
     "step",
@@ -1571,6 +1574,8 @@ def step4():
 
     # ── Section 3: Latent table proposals ────────────────────────────────────
     latent_proposals = find_latent_tables(st.session_state.detected_tables)
+    derived_latent = derive_latent_tables(st.session_state.detected_tables)
+
     if latent_proposals:
         st.divider()
         st.subheader("🔍 潜在テーブル提案")
@@ -1631,6 +1636,53 @@ def step4():
 
                 with st.expander("💡 推奨理由", expanded=False):
                     st.caption(lp.reasoning)
+
+    # ── Section 4: Derived latent tables ─────────────────────────────────────
+    if derived_latent:
+        st.divider()
+        st.subheader("🔢 差分抽出テーブル")
+        st.caption(
+            "テーブル外の注記に記載された集計関係をもとに、"
+            "検出されなかったテーブルのデータを差分計算で推定しました。"
+            "集計テーブルから検出済み構成要素を差し引いた値が「推定データ」です。"
+        )
+
+        for dlt in derived_latent:
+            if dlt.proposal_id not in st.session_state.derived_decisions:
+                st.session_state.derived_decisions[dlt.proposal_id] = True
+
+            with st.container(border=True):
+                st.markdown(f"#### ❓→📊 {dlt.derived_name}")
+                st.markdown(
+                    f"<div style='background:#0d1520;border-left:3px solid #4a6080;"
+                    f"border-radius:0 6px 6px 0;padding:8px 14px;"
+                    f"font-size:0.82rem;color:#7090b0;margin:6px 0'>"
+                    f"📝 注記元: {dlt.note_text}</div>",
+                    unsafe_allow_html=True,
+                )
+
+                _render_derived_before_after(dlt, tables_dict)
+
+                st.divider()
+                c_info, c_dec = st.columns([2, 1])
+                with c_info:
+                    st.caption(f"💡 推奨理由: {dlt.reasoning}")
+                with c_dec:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    decision = st.radio(
+                        "この推定テーブルを追加しますか？",
+                        ["✅ 追加する", "❌ 追加しない"],
+                        horizontal=True,
+                        key=f"radio_dlt_{dlt.proposal_id}",
+                        index=(
+                            0 if st.session_state.derived_decisions.get(
+                                dlt.proposal_id, True
+                            ) else 1
+                        ),
+                    )
+                    st.session_state.derived_decisions[dlt.proposal_id] = (
+                        decision == "✅ 追加する"
+                    )
 
     # ── Navigation ───────────────────────────────────────────────────────────
     _inject_splitter_js()
@@ -1748,6 +1800,26 @@ def _build_final_tables():
                     "is_minimum": False,
                     "is_master": True,
                 }
+
+    # Approved derived latent tables (numerically computed from aggregation notes)
+    derived_latent = derive_latent_tables(st.session_state.detected_tables)
+    for dlt in derived_latent:
+        if not st.session_state.derived_decisions.get(dlt.proposal_id, True):
+            continue
+        final[dlt.proposal_id] = {
+            "df": dlt.df,
+            "display_name": dlt.derived_name,
+            "description": (
+                f"{dlt.derivation_formula}"
+            ),
+            "reasoning": dlt.reasoning,
+            "is_integrated": False,
+            "source_ids": dlt.source_display_order,
+            "recommended": True,
+            "granularity": "detail",
+            "is_minimum": True,
+            "is_master": False,
+        }
 
     # Individual non-integrated tables
     for ta in analysis.table_analyses:
@@ -2159,6 +2231,119 @@ def _render_integration_before_after(
             )
     except Exception:
         st.caption("（プレビュー生成不可）")
+
+
+def _render_derived_before_after(
+    dlt: "DerivedLatentTable",
+    tables_dict: dict,
+) -> None:
+    """Render the before/after view for a derived latent table.
+
+    'Before' shows the aggregate parent and each detected component.
+    'After' shows the numerically derived (subtracted) table.
+    """
+    _ROW_PX = 35
+    _HDR_PX = 38
+    _BEFORE_VISIBLE = 3
+    _AFTER_VISIBLE = 4
+
+    import html as _html
+
+    # ── 抽出前 ───────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:10px;margin:6px 0 14px;">'
+        '<div style="width:5px;height:22px;background:#4a7de0;border-radius:3px;flex-shrink:0;"></div>'
+        '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">抽出前（使用テーブル）</span>'
+        '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(74,125,224,.4),transparent);"></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    def _table_card_mini(tid: str, role_label: str, color: str) -> None:
+        t = tables_dict.get(tid)
+        title = (t.title if t else None) or tid
+        st.markdown(
+            f'<div style="background:#161c2c;border:1px solid #2d3748;'
+            f'border-radius:6px 6px 0 0;padding:7px 10px;margin-bottom:0;">'
+            f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:4px;">📋&nbsp;{_html.escape(tid)}</div>'
+            f'<span style="background:{color};color:#fff;padding:2px 9px;border-radius:12px;'
+            f'font-size:0.72rem;font-weight:600;">{_html.escape(role_label)}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if t is not None and t.df is not None and not t.df.empty:
+            n = len(t.df)
+            st.dataframe(
+                t.df.astype(str),
+                use_container_width=True,
+                hide_index=True,
+                height=min(n * _ROW_PX + _HDR_PX, _BEFORE_VISIBLE * _ROW_PX + _HDR_PX),
+            )
+        else:
+            st.caption("（データなし）")
+
+    # Parent (aggregate) + children in columns
+    all_display = dlt.source_display_order  # [parent_id, child1_id, ...]
+    n_disp = min(len(all_display), 4)
+    cols = st.columns(n_disp, gap="small")
+    for i, tid in enumerate(all_display[:n_disp]):
+        with cols[i]:
+            if tid == dlt.parent_table_id:
+                _table_card_mini(tid, "集計テーブル", "#2a607a")
+            else:
+                _table_card_mini(tid, "検出済み構成要素", "#4a5a3a")
+    if len(all_display) > n_disp:
+        with st.expander(f"他 {len(all_display) - n_disp} テーブルを見る", expanded=False):
+            for tid in all_display[n_disp:]:
+                role = "集計テーブル" if tid == dlt.parent_table_id else "検出済み構成要素"
+                color = "#2a607a" if tid == dlt.parent_table_id else "#4a5a3a"
+                _table_card_mini(tid, role, color)
+
+    # ── 差分計算 separator ────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:0;margin:18px 0 14px;">'
+        '<div style="flex:1;height:1px;background:linear-gradient(to right,transparent,rgba(229,168,60,.5));"></div>'
+        '<div style="border:1.5px solid rgba(229,168,60,.7);border-radius:24px;'
+        'padding:6px 22px;margin:0 16px;font-size:0.95rem;font-weight:800;'
+        'color:#f5d06a;letter-spacing:.06em;'
+        'background:linear-gradient(135deg,rgba(229,168,60,.12),rgba(200,140,40,.08));'
+        'white-space:nowrap;">−&nbsp;&nbsp;差分計算</div>'
+        '<div style="flex:1;height:1px;background:linear-gradient(to left,transparent,rgba(229,168,60,.5));"></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="background:#1a1508;border-left:3px solid rgba(229,168,60,.6);'
+        f'border-radius:0 6px 6px 0;padding:6px 14px;font-size:0.82rem;'
+        f'color:#c8a030;font-family:monospace;margin-bottom:14px;">'
+        f'{_html.escape(dlt.derivation_formula)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── 抽出後 ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:10px;margin:6px 0 14px;">'
+        '<div style="width:5px;height:22px;background:#e5a83c;border-radius:3px;flex-shrink:0;"></div>'
+        '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">抽出後（推定データ）</span>'
+        '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(229,168,60,.4),transparent);"></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if dlt.df is not None and not dlt.df.empty:
+        n = len(dlt.df)
+        st.dataframe(
+            dlt.df.astype(str),
+            use_container_width=True,
+            hide_index=True,
+            height=min(n * _ROW_PX + _HDR_PX, _AFTER_VISIBLE * _ROW_PX + _HDR_PX),
+        )
+        st.caption(
+            f"📐 {len(dlt.df)} 行 × {len(dlt.df.columns)} 列  "
+            f"（{dlt.parent_title} から {', '.join(dlt.detected_child_ids)} を差し引いた推定値）"
+        )
+    else:
+        st.caption("（推定データなし）")
 
 
 def _granularity_badge(info: dict) -> str:

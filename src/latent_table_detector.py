@@ -29,7 +29,9 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-from .models import DetectedTable
+import numpy as np
+
+from .models import DetectedTable, DerivedLatentTable
 
 
 # ---------------------------------------------------------------------------
@@ -252,3 +254,126 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
             )
 
     return proposals
+
+
+# ---------------------------------------------------------------------------
+# Derived latent table generation (numeric subtraction)
+# ---------------------------------------------------------------------------
+
+
+def derive_latent_tables(
+    tables: List[DetectedTable],
+) -> List[DerivedLatentTable]:
+    """
+    For each latent table proposal where exactly ONE component is missing
+    from a set of tables related by an aggregation note, attempt to derive
+    the missing table's data by numeric subtraction:
+
+        missing ≈ aggregate_table − sum(detected_components)
+
+    The aggregate table (parent) is identified as the one with the largest
+    numeric total among the source table and all detected referenced tables.
+    All tables in the group must share the exact same numeric data shape.
+
+    Returns a list of DerivedLatentTable instances (empty if none can be derived).
+    """
+    latent_proposals = find_latent_tables(tables)
+    id_to_table = {t.table_id: t for t in tables}
+    derived: List[DerivedLatentTable] = []
+
+    for lp in latent_proposals:
+        # Derivation requires exactly one missing component so we can solve uniquely.
+        if len(lp.missing_names) != 1:
+            continue
+
+        # Only aggregation-type notes reliably encode a sum relationship.
+        if lp.note_type not in ("aggregation", "general"):
+            continue
+
+        # Gather all tables in the relationship: the note source + every detected reference.
+        candidate_ids: List[str] = [lp.source_table_id] + list(lp.detected_table_ids)
+        candidate_ids_unique = list(dict.fromkeys(candidate_ids))  # preserve order, deduplicate
+        candidates = [id_to_table.get(cid) for cid in candidate_ids_unique]
+        if any(c is None or c.df is None or c.df.empty for c in candidates):
+            continue
+
+        # Extract numeric portions; all must be non-empty and share the same shape.
+        num_arrays = []
+        valid = True
+        for c in candidates:
+            num = c.df.select_dtypes(include=[np.number])
+            if num.empty:
+                valid = False
+                break
+            num_arrays.append((c, num))
+        if not valid or len(num_arrays) < 2:
+            continue
+
+        base_shape = num_arrays[0][1].shape
+        if not all(a.shape == base_shape for _, a in num_arrays):
+            continue  # Incompatible shapes — cannot subtract element-wise
+
+        # Identify the PARENT as the candidate with the largest absolute numeric total.
+        # The parent is the aggregate; all other detected tables are known components.
+        totals = [float(np.nansum(np.abs(a.values))) for _, a in num_arrays]
+        if max(totals) < 1e-9:
+            continue  # All zeros — nothing to derive
+
+        parent_idx = int(np.argmax(totals))
+        parent_table, parent_num = num_arrays[parent_idx]
+        children = [(c, num) for i, (c, num) in enumerate(num_arrays) if i != parent_idx]
+        child_tables = [c for c, _ in children]
+        child_nums = [num for _, num in children]
+
+        # Sanity check: the parent total must be ≥ 80% of the sum of child totals.
+        # If not, the "parent" identification is likely wrong — skip.
+        child_sum_total = sum(float(np.nansum(np.abs(n.values))) for n in child_nums)
+        if totals[parent_idx] < child_sum_total * 0.8:
+            continue
+
+        # Compute: missing = parent − sum(detected_children)
+        p_arr = np.nan_to_num(parent_num.values.astype(float), nan=0.0)
+        c_sum = np.zeros_like(p_arr)
+        for cn in child_nums:
+            c_sum += np.nan_to_num(cn.values.astype(float), nan=0.0)
+        derived_arr = p_arr - c_sum
+
+        # Build the derived DataFrame: same structure as the parent table,
+        # with only the numeric columns replaced by the computed difference.
+        derived_df = parent_table.df.copy()
+        for col_idx, col in enumerate(parent_num.columns):
+            derived_df[col] = derived_arr[:, col_idx]
+
+        # Human-readable formula
+        parent_label = parent_table.title or parent_table.table_id
+        child_labels = [c.title or c.table_id for c in child_tables]
+        missing_name = lp.missing_names[0]
+        formula = (
+            f"{missing_name}  ≈  {parent_label}"
+            f"  −  ( {' + '.join(child_labels)} )"
+        )
+
+        # Display order: parent first, then known children in original candidate order
+        source_display_order = [parent_table.table_id] + [c.table_id for c in child_tables]
+
+        derived.append(
+            DerivedLatentTable(
+                proposal_id=f"DLT_{len(derived) + 1}",
+                derived_name=missing_name,
+                df=derived_df,
+                parent_table_id=parent_table.table_id,
+                parent_title=parent_label,
+                detected_child_ids=[c.table_id for c in child_tables],
+                note_text=lp.note_text,
+                derivation_formula=formula,
+                source_display_order=source_display_order,
+                reasoning=(
+                    f"注記「{lp.note_text[:100]}{'…' if len(lp.note_text) > 100 else ''}」に"
+                    f"よれば「{missing_name}」は「{parent_label}」の構成要素として記載されているが"
+                    f"未検出。検出済み構成要素（{', '.join(child_labels)}）を集計テーブルから"
+                    f"差し引くことで推定データを算出した。"
+                ),
+            )
+        )
+
+    return derived

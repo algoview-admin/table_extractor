@@ -109,6 +109,25 @@ class MasterTableInfo:
 
 
 @dataclass
+class DerivedLatentTable:
+    """A table that does not exist explicitly but can be computed by numeric
+    subtraction from a parent aggregate table and its detected components,
+    as suggested by an aggregation note attached to one of the related tables."""
+
+    proposal_id: str
+    derived_name: str              # Inferred name of the missing component
+    df: pd.DataFrame               # Computed data (parent − sum_of_detected_children)
+    parent_table_id: str           # Table ID of the aggregate/parent
+    parent_title: str              # Display title of the aggregate table
+    detected_child_ids: List[str]  # IDs of the detected components used
+    note_text: str                 # The original annotation text
+    derivation_formula: str        # Human-readable formula showing the computation
+    source_display_order: List[str]  # [parent_id, child1_id, child2_id, ...]
+    reasoning: str
+    user_decision: Optional[bool] = None  # True=include, False=exclude, None=pending
+
+
+@dataclass
 class AIAnalysisResult:
     sheet_classifications: List[SheetClassification]
     table_analyses: List[TableAnalysisResult]
