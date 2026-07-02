@@ -1409,7 +1409,7 @@ def _dlt_virtual_table(dlt: DerivedLatentTable, tables_dict: dict) -> Optional[D
 def _infer_col_name_from_values(values: List[str]) -> str:
     """値ラベルから妥当な列名を推定する。
 
-    例: ['カテゴリX-1','カテゴリX-2','カテゴリX-3'] → 'カテゴリX'
+    共通prefixの末尾にある区切り文字・数字を除去した語幹を返す。
     意味のある共通プレフィックスが見つからない場合は '種別' にフォールバックする。
     """
     import os.path as _osp
@@ -1418,6 +1418,70 @@ def _infer_col_name_from_values(values: List[str]) -> str:
     prefix = _osp.commonprefix(values)
     prefix = re.sub(r'[-_・\s\d]+$', '', prefix).strip()
     return prefix if len(prefix) >= 2 else "種別"
+
+
+def _infer_axis_name(values: List[str]) -> str:
+    """値ラベル群から軸名称を動的に推定する。
+
+    Step 1: 共通prefix（末尾の区切り・数字・英字を除去）で語幹を取り出す。
+    Step 2: Step1 が失敗した場合、全値に共通して含まれる最長の部分文字列を探す。
+            意味のある文字（日本語等）を含まない候補は除外する。
+    どちらも失敗した場合は '種別' を返す。
+    """
+    import os.path as _osp
+    if not values:
+        return "種別"
+    if len(values) == 1:
+        return values[0]
+
+    # Step 1: 共通prefix（末尾の区切り文字・数字・英字を除去）
+    prefix = _osp.commonprefix(values)
+    prefix_clean = re.sub(r'[-_・\s\dA-Za-zＡ-Ｚａ-ｚ０-９]+$', '', prefix).strip()
+    if len(prefix_clean) >= 2:
+        return prefix_clean
+
+    # Step 2: 全値に含まれる最長の共通部分文字列を探す
+    # 数字・ASCII英字・記号のみで構成される部分文字列は意味が薄いため除外する
+    _HAS_MEANINGFUL = re.compile(r'[^\d\s\-_・A-Za-zＡ-Ｚａ-ｚ０-９（）()【】「」]')
+    shortest = min(values, key=len)
+    for length in range(len(shortest), 1, -1):
+        for start in range(len(shortest) - length + 1):
+            substr = shortest[start:start + length]
+            if not _HAS_MEANINGFUL.search(substr):
+                continue
+            if all(substr in v for v in values):
+                return substr.strip()
+
+    return "種別"
+
+
+def _strip_common_suffix(labels: List[str]) -> List[str]:
+    """全ラベルに共通する末尾部分を除去して識別部分のみを返す。
+
+    各ラベルから共通末尾（区切り文字含む）を取り除き、
+    集計元を識別する語幹部分のみを返す。
+    意味のある共通末尾が2文字未満の場合はそのまま返す。
+    """
+    import os.path as _osp
+    if len(labels) < 2:
+        return list(labels)
+
+    rev = [lbl[::-1] for lbl in labels]
+    suf_raw = _osp.commonprefix(rev)[::-1]
+
+    # 区切り文字を除いた実質的な共通末尾が2文字以上あるか確認する
+    suf_meaningful = re.sub(r'^[-_・\s（）()「」「」]+', '', suf_raw)
+    if len(suf_meaningful) < 2:
+        return list(labels)
+
+    result = []
+    for lbl in labels:
+        if lbl.endswith(suf_raw):
+            stripped = lbl[:-len(suf_raw)].rstrip('-_・ （）()「」「」').strip()
+            result.append(stripped if stripped else lbl)
+        else:
+            result.append(lbl)
+    return result
 
 
 def _build_auto_irs_from_latent(
@@ -1446,33 +1510,54 @@ def _build_auto_irs_from_latent(
 
         members_with_dlt = [(lp, dlt) for lp, dlt in group.members if dlt is not None]
 
-        # ── シート横断2軸統合IR（複数シートにまたがる場合のみ）─────────────────
+        # ── 複数集計元による2軸統合IR（2つ以上のメンバーが存在する場合）────────
         if len(members_with_dlt) >= 2:
+            # 複数シートにまたがるか、同一シート内の複数集計元かを判定する
+            member_sheets = [
+                (ext_tables_dict.get(lp.source_table_id) or tables_dict.get(lp.source_table_id))
+                for lp, _ in members_with_dlt
+            ]
+            sheet_names_of_members = [
+                t.sheet_name if t else "" for t in member_sheets
+            ]
+            is_multi_sheet = len(set(sheet_names_of_members)) > 1
+
+            # 軸2の値を決定する
+            # 複数シート: sheet_name をそのまま軸2の値として使う
+            # 同一シート: source_title から共通末尾を除去した識別部分を使う
+            if is_multi_sheet:
+                raw_axis2_vals = sheet_names_of_members
+            else:
+                raw_axis2_vals = [
+                    (t.title or lp.source_table_id)
+                    for (lp, _), t in zip(members_with_dlt, member_sheets)
+                ]
+                raw_axis2_vals = _strip_common_suffix(raw_axis2_vals)
+
             cross_ids: list = []
             cross_multi_vals: dict = {}
 
-            for lp, dlt in members_with_dlt:
-                src = ext_tables_dict.get(lp.source_table_id)
-                sheet_val = src.sheet_name if src else lp.source_table_id
-
+            for (lp, dlt), axis2_val in zip(members_with_dlt, raw_axis2_vals):
                 for i, tid in enumerate(lp.detected_table_ids):
                     cat_val = lp.detected_names[i] if i < len(lp.detected_names) else tid
                     cross_ids.append(tid)
-                    cross_multi_vals[tid] = [cat_val, sheet_val]
+                    cross_multi_vals[tid] = [cat_val, axis2_val]
 
                 cross_ids.append(dlt.proposal_id)
-                cross_multi_vals[dlt.proposal_id] = [dlt.derived_name, sheet_val]
+                cross_multi_vals[dlt.proposal_id] = [dlt.derived_name, axis2_val]
 
             if len(cross_ids) >= 4:
                 cat_names_all = group.detected_names + group.missing_names
                 cat_col_name = _infer_col_name_from_values(cat_names_all)
 
-                sheet_names_unique = list(dict.fromkeys(
+                # 軸2のラベルを実際の軸2の値から動的推定する
+                # _infer_axis_name は共通prefix → 最長共通部分文字列 の順で試みる
+                axis2_unique = list(dict.fromkeys(
                     cross_multi_vals[tid][1] for tid in cross_ids
                 ))
-                sheet_col_name = _infer_col_name_from_values(sheet_names_unique)
-                if not sheet_col_name or sheet_col_name == "種別":
-                    sheet_col_name = "シート"
+                axis2_col_name = _infer_axis_name(axis2_unique)
+                if not axis2_col_name or axis2_col_name == "種別":
+                    axis2_col_name = "シート" if is_multi_sheet else "区分"
 
                 cross_rec_id = f"latent_auto_cross2_{gk}"
 
@@ -1484,28 +1569,28 @@ def _build_auto_irs_from_latent(
                 cross_ir = IntegrationRecommendation(
                     recommendation_id=cross_rec_id,
                     group_name=(
-                        f"{'・'.join(group.missing_names)} × {sheet_col_name} "
+                        f"{'・'.join(group.missing_names)} × {axis2_col_name} "
                         f"2軸統合テーブル"
                     ),
                     description=(
                         f"差分推定した「{'・'.join(group.missing_names)}」を含む"
                         f"「{'・'.join(cat_names_all)}」を"
-                        f"全{sheet_col_name}横断で統合した2軸テーブル"
+                        f"全{axis2_col_name}横断で統合した2軸テーブル"
                     ),
                     table_ids=cross_ids,
                     new_column_name=cat_col_name,
                     new_column_values={tid: cross_multi_vals[tid][0] for tid in cross_ids},
                     reasoning=(
                         f"潜在テーブル「{'・'.join(group.missing_names)}」の差分推定により、"
-                        f"「{cat_col_name}」軸と「{sheet_col_name}」軸の2軸で"
-                        f"全{sheet_col_name}のテーブルを統合できます。"
+                        f"「{cat_col_name}」軸と「{axis2_col_name}」軸の2軸で"
+                        f"全{axis2_col_name}のテーブルを統合できます。"
                     ),
-                    new_column_names=[cat_col_name, sheet_col_name],
+                    new_column_names=[cat_col_name, axis2_col_name],
                     new_column_multi_values={
                         tid: list(v) for tid, v in cross_multi_vals.items()
                     },
                     # 構成要素軸(axis 0)の親を設定することでマスタ生成が機能する。
-                    # シート軸(axis 1)は親なし（シート自体が軸なのでマスタ不要）。
+                    # 集計元軸(axis 1)は親なし（集計元自体が軸なのでマスタ不要）。
                     axis_parent_table_ids=[members_with_dlt[0][0].source_table_id, None],
                     axis_parent_label_columns=[None, None],
                 )
