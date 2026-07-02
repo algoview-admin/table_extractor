@@ -2215,29 +2215,23 @@ def _build_final_tables():
 
     final: Dict[str, dict] = {}
     integrated_ids: Set[str] = set()
-    seen_master_sigs: Set = (
-        set()
-    )  # 同一の child→parent ラベルマップを持つマスタを重複排除する
+    seen_master_sigs: Set = set()  # 同一の child→parent ラベルマップを持つマスタを重複排除する
 
-    # 承認済みauto-IRによって置き換えられるAI IRを計算する（step4と同じロジック）。
-    # 承認済みauto-IRを特定するために潜在グループを構築する。
-    _bft_sup_proposals = find_latent_tables(st.session_state.detected_tables)
-    _bft_sup_derived = derive_latent_tables(st.session_state.detected_tables)
-    _bft_sup_groups = group_latent_proposals(_bft_sup_proposals, _bft_sup_derived)
-    _bft_sup_ext = dict(tables_dict)
-    for _dsup in _bft_sup_derived:
-        _vsup = _dlt_virtual_table(_dsup, tables_dict)
-        if _vsup:
-            _bft_sup_ext[_dsup.proposal_id] = _vsup
-    _bft_auto_irs = _build_auto_irs_from_latent(
-        _bft_sup_groups, _bft_sup_ext, tables_dict, _for_build=True
-    )
+    # ── 潜在グループの検出（1回のみ）────────────────────────────────────────
+    _bft_proposals = find_latent_tables(st.session_state.detected_tables)
+    _bft_derived = derive_latent_tables(st.session_state.detected_tables)
+    _bft_groups = group_latent_proposals(_bft_proposals, _bft_derived)
+    _bft_ext = dict(tables_dict)
+    for _dlt in _bft_derived:
+        _vt = _dlt_virtual_table(_dlt, tables_dict)
+        if _vt:
+            _bft_ext[_dlt.proposal_id] = _vt
 
-    # 潜在兄弟セットを使ってAI IRを刈り込む（step4と同じロジック）
+    # ── 承認済みauto-IRによって置き換えられるAI IRを計算する（step4と同じロジック）──
     _bft_ai_irs_trimmed = _clip_ai_irs_by_latent_groups(
-        analysis.integration_recommendations, _bft_sup_groups, tables_dict
+        analysis.integration_recommendations, _bft_groups, tables_dict
     )
-
+    _bft_auto_irs = _build_auto_irs_from_latent(_bft_groups, _bft_ext, tables_dict)
     _superseded_in_bft: set = set()
     for _bft_auto_ir, _ in _bft_auto_irs:
         if not st.session_state.get("latent_auto_int_decisions", {}).get(
@@ -2252,109 +2246,10 @@ def _build_final_tables():
             if set(_ai_check.table_ids).issubset(_auto_real):
                 _superseded_in_bft.add(_ai_check.recommendation_id)
 
-    # 承認済みの統合を適用する（置き換えられたものはスキップ）
-    for ir in _bft_ai_irs_trimmed:
-        if ir.recommendation_id in _superseded_in_bft:
-            continue  # 派生テーブルを含むauto-IRによって置き換えられた
-        if not st.session_state.integration_decisions.get(ir.recommendation_id, True):
-            continue
-
-        # マルチ軸の列名/値を解決する（シングル軸互換フィールドにフォールバック）
-        col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
-        multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
-
-        frames = []
-        for tid in ir.table_ids:
-            t = tables_dict.get(tid)
-            if t and t.df is not None and not t.df.empty:
-                df_copy = t.df.copy()
-                vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
-                # 結果で左から右の順で表示されるよう、列を右から左へ挿入する
-                for i in range(len(col_names) - 1, -1, -1):
-                    val = vals[i] if i < len(vals) else ""
-                    df_copy.insert(0, col_names[i], val)
-                frames.append(df_copy)
-                integrated_ids.add(tid)
-
-        if not frames:
-            continue
-        try:
-            merged_df = pd.concat(frames, ignore_index=True)
-        except Exception:
-            # 列の不一致 — 統合をスキップして元に戻す
-            for tid in ir.table_ids:
-                integrated_ids.discard(tid)
-            continue
-
-        src_ta = next((ta_by_id[tid] for tid in ir.table_ids if tid in ta_by_id), None)
-        key = f"integrated_{ir.recommendation_id}"
-        final[key] = {
-            "df": merged_df,
-            "display_name": ir.group_name,
-            "description": ir.description,
-            "reasoning": ir.reasoning,
-            "is_integrated": True,
-            "source_ids": ir.table_ids,
-            "recommended": True,
-            "granularity": src_ta.granularity_level if src_ta else "detail",
-            "is_minimum": src_ta.is_minimum_granularity_candidate if src_ta else False,
-            "is_master": src_ta.is_master_table if src_ta else False,
-            "new_col_names": col_names,
-        }
-
-        # 親を持つ全軸に対してディメンションマスタを自動生成する。
-        # 各ユニークマスタ（child→parentマッピングによる）は一度だけ生成される。
-        for spec in _derive_master_specs_for_ir(ir, tables_dict):
-            master_sig = _master_signature(spec)
-            if master_sig in seen_master_sigs:
-                continue
-            seen_master_sigs.add(master_sig)
-            axis_idx = spec.get("axis_idx", 0)
-            dm_key = f"dim_master_{ir.recommendation_id}_ax{axis_idx}"
-            if not st.session_state.master_decisions.get(dm_key, True):
-                continue
-            child_col = spec["child_col"]
-            parent_col = spec["parent_col"]
-            master_rows = [
-                {child_col: ck, parent_col: pv} for ck, pv in spec["mapping"].items()
-            ]
-            if master_rows:
-                master_df = pd.DataFrame(master_rows)
-                final[dm_key] = {
-                    "df": master_df,
-                    "display_name": f"{child_col} × {parent_col} マスタ",
-                    "description": (
-                        f"元データの上位集計テーブル（{spec['parent_id']}）と各子テーブルの"
-                        f"「{child_col}」値の対応関係から生成したマスタテーブル。"
-                        f"統合テーブルを「{child_col}」で結合すると「{parent_col}」単位での再集計が可能になる。"
-                    ),
-                    "reasoning": (
-                        f"元データ内の上位集計テーブル {spec['parent_id']} の階層関係から自動生成。"
-                        f"統合テーブル自体ではなく、ソースデータの親子関係をもとにした対応表。"
-                    ),
-                    "is_integrated": False,
-                    "source_ids": [spec["parent_id"]] + ir.table_ids,
-                    "recommended": True,
-                    "granularity": "master",
-                    "is_minimum": False,
-                    "is_master": True,
-                }
-
-    # 承認済みの派生潜在テーブル（集計注記から数値計算されたもの）
-    _bft_proposals = find_latent_tables(st.session_state.detected_tables)
-    _bft_derived = derive_latent_tables(st.session_state.detected_tables)
-    _bft_groups = group_latent_proposals(_bft_proposals, _bft_derived)
-
-    # 自動統合構築用の拡張 tables_dict
-    _bft_ext = dict(tables_dict)
-    for _dlt in _bft_derived:
-        _vt = _dlt_virtual_table(_dlt, tables_dict)
-        if _vt:
-            _bft_ext[_dlt.proposal_id] = _vt
-
     _lg_dec = st.session_state.get("latent_group_decisions", {})
     _lai_dec = st.session_state.get("latent_auto_int_decisions", {})
 
+    # ── 潜在グループ: DLT + auto-IR統合（step4と同じ順序で先に処理）────────
     for _grp in _bft_groups:
         _gk = _grp.group_key
         # グループ決定: 新しいキーを優先し、DLTごとの derived_decisions にフォールバック
@@ -2366,7 +2261,6 @@ def _build_final_tables():
                 for _, dlt in _grp.members
                 if dlt is not None
             )
-
         if not _grp_accepted:
             continue
 
@@ -2386,8 +2280,8 @@ def _build_final_tables():
                 "is_master": False,
             }
 
-        # 承認済みIRからの自動統合テーブル（_for_build=Trueで2軸・1軸とも個別決定に基づいて処理）
-        _auto_irs_bft = _build_auto_irs_from_latent([_grp], _bft_ext, tables_dict, _for_build=True)
+        # 承認済みauto-IR統合テーブル
+        _auto_irs_bft = _build_auto_irs_from_latent([_grp], _bft_ext, tables_dict)
         for _auto_ir, _ in _auto_irs_bft:
             _rec_id = _auto_ir.recommendation_id
             if not _lai_dec.get(_rec_id, True):
@@ -2415,6 +2309,12 @@ def _build_final_tables():
                 _merged_bft = pd.concat(_frames_bft, ignore_index=True)
             except Exception:
                 continue
+
+            # 統合元の実テーブルを integrated_ids に追加
+            # （「統合する」選択時は最小粒度データとして個別表示しない）
+            for _tid in _auto_ir.table_ids:
+                if _tid in tables_dict:
+                    integrated_ids.add(_tid)
 
             _int_key = f"latent_auto_int_{_rec_id}"
             final[_int_key] = {
@@ -2468,6 +2368,90 @@ def _build_final_tables():
                         "is_minimum": False,
                         "is_master": True,
                     }
+
+    # ── AI IR統合（抑制・不承認のものはスキップ）────────────────────────────
+    for ir in _bft_ai_irs_trimmed:
+        if ir.recommendation_id in _superseded_in_bft:
+            continue  # 派生テーブルを含むauto-IRによって置き換えられた
+        if not st.session_state.integration_decisions.get(ir.recommendation_id, True):
+            continue
+
+        col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
+        multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
+
+        frames = []
+        for tid in ir.table_ids:
+            t = tables_dict.get(tid)
+            if t and t.df is not None and not t.df.empty:
+                df_copy = t.df.copy()
+                vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
+                for i in range(len(col_names) - 1, -1, -1):
+                    val = vals[i] if i < len(vals) else ""
+                    df_copy.insert(0, col_names[i], val)
+                frames.append(df_copy)
+                integrated_ids.add(tid)
+
+        if not frames:
+            continue
+        try:
+            merged_df = pd.concat(frames, ignore_index=True)
+        except Exception:
+            for tid in ir.table_ids:
+                integrated_ids.discard(tid)
+            continue
+
+        src_ta = next((ta_by_id[tid] for tid in ir.table_ids if tid in ta_by_id), None)
+        key = f"integrated_{ir.recommendation_id}"
+        final[key] = {
+            "df": merged_df,
+            "display_name": ir.group_name,
+            "description": ir.description,
+            "reasoning": ir.reasoning,
+            "is_integrated": True,
+            "source_ids": ir.table_ids,
+            "recommended": True,
+            "granularity": src_ta.granularity_level if src_ta else "detail",
+            "is_minimum": src_ta.is_minimum_granularity_candidate if src_ta else False,
+            "is_master": src_ta.is_master_table if src_ta else False,
+            "new_col_names": col_names,
+        }
+
+        # 親を持つ全軸に対してディメンションマスタを自動生成する。
+        for spec in _derive_master_specs_for_ir(ir, tables_dict):
+            master_sig = _master_signature(spec)
+            if master_sig in seen_master_sigs:
+                continue
+            seen_master_sigs.add(master_sig)
+            axis_idx = spec.get("axis_idx", 0)
+            dm_key = f"dim_master_{ir.recommendation_id}_ax{axis_idx}"
+            if not st.session_state.master_decisions.get(dm_key, True):
+                continue
+            child_col = spec["child_col"]
+            parent_col = spec["parent_col"]
+            master_rows = [
+                {child_col: ck, parent_col: pv} for ck, pv in spec["mapping"].items()
+            ]
+            if master_rows:
+                master_df = pd.DataFrame(master_rows)
+                final[dm_key] = {
+                    "df": master_df,
+                    "display_name": f"{child_col} × {parent_col} マスタ",
+                    "description": (
+                        f"元データの上位集計テーブル（{spec['parent_id']}）と各子テーブルの"
+                        f"「{child_col}」値の対応関係から生成したマスタテーブル。"
+                        f"統合テーブルを「{child_col}」で結合すると「{parent_col}」単位での再集計が可能になる。"
+                    ),
+                    "reasoning": (
+                        f"元データ内の上位集計テーブル {spec['parent_id']} の階層関係から自動生成。"
+                        f"統合テーブル自体ではなく、ソースデータの親子関係をもとにした対応表。"
+                    ),
+                    "is_integrated": False,
+                    "source_ids": [spec["parent_id"]] + ir.table_ids,
+                    "recommended": True,
+                    "granularity": "master",
+                    "is_minimum": False,
+                    "is_master": True,
+                }
 
     # 個別の非統合テーブル
     for ta in analysis.table_analyses:
@@ -3208,9 +3192,7 @@ def step5():
             rep_tid, rep_info = group[0]
             similar_int = group[1:]
 
-            _table_card(
-                rep_tid, rep_info, ir=_get_ir_for(rep_tid), tables_dict=_s5_tbls
-            )
+            _table_card(rep_tid, rep_info)
 
             if similar_int:
                 with st.expander(
@@ -3218,9 +3200,7 @@ def step5():
                     expanded=False,
                 ):
                     for tid, info in similar_int:
-                        _table_card(
-                            tid, info, ir=_get_ir_for(tid), tables_dict=_s5_tbls
-                        )
+                        _table_card(tid, info)
 
     # --- 最小粒度テーブル ---
     min_tables = {
