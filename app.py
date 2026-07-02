@@ -831,7 +831,7 @@ def step1():
         st.markdown("#### 実行モード")
         mode_labels = {
             "manual": "マニュアル  —  各ステップを手動で確認しながら進む",
-            "semiauto": "セミオート  —  テーブル選択画面まで自動実行し、選択のみ手動で行う",
+            "semiauto": "セミオート  —  新規テーブル案生成まで自動実行し、確認・選択のみ手動で行う",
             "fullauto": "フルオート  —  推奨テーブルを自動選択してエクスポートまで完全自動実行",
         }
         mode_keys = list(mode_labels.keys())
@@ -1721,11 +1721,14 @@ def step4():
 
     analysis: AIAnalysisResult = st.session_state.ai_analysis
 
-    if st.session_state.auto_processing:
+    if st.session_state.auto_processing and st.session_state.get("run_mode") == "fullauto":
         with st.spinner("新規テーブル案・マスタ案を自動設定中..."):
             _build_final_tables()
         st.session_state.step = 5
         st.rerun()
+    elif st.session_state.auto_processing:
+        # semiauto: stop here so the user can review proposals
+        st.session_state.auto_processing = False
 
     tables_dict = {t.table_id: t for t in st.session_state.detected_tables}
 
