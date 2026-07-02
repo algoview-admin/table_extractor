@@ -1495,11 +1495,16 @@ def _build_auto_irs_from_latent(
     latent_group_decisions[group_key] が True かつDLTが少なくとも1つ存在するグループのみ
     IRを生成する。
 
-    グループメンバーが複数の異なるシートにまたがる場合は、シート横断の2軸統合IR
-    （構成要素軸 × シート軸）を先頭に追加する。
+    優先度ルール（グループに2軸統合IRが生成できる場合）:
+      - 2軸統合が「統合する」 → 2軸IRのみ返す（1軸IRは非表示・非実行）
+      - 2軸統合が「統合しない」 → 1軸IRのみ返す（2軸IRは除外）
+    2軸統合が生成できない（メンバーが1件のみ）場合は常に1軸IRを返す。
     """
     result = []
     lg_dec = st.session_state.get("latent_group_decisions", {})
+    if "latent_auto_int_decisions" not in st.session_state:
+        st.session_state.latent_auto_int_decisions = {}
+    auto_int_dec = st.session_state.latent_auto_int_decisions
 
     for group in latent_groups:
         gk = group.group_key
@@ -1510,21 +1515,19 @@ def _build_auto_irs_from_latent(
 
         members_with_dlt = [(lp, dlt) for lp, dlt in group.members if dlt is not None]
 
-        # ── 複数集計元による2軸統合IR（2つ以上のメンバーが存在する場合）────────
+        # ── 2軸統合IR を構築する（メンバーが2件以上の場合）─────────────────────
+        cross_ir = None
+        cross_rec_id = f"latent_auto_cross2_{gk}"
+
         if len(members_with_dlt) >= 2:
-            # 複数シートにまたがるか、同一シート内の複数集計元かを判定する
             member_sheets = [
                 (ext_tables_dict.get(lp.source_table_id) or tables_dict.get(lp.source_table_id))
                 for lp, _ in members_with_dlt
             ]
-            sheet_names_of_members = [
-                t.sheet_name if t else "" for t in member_sheets
-            ]
+            sheet_names_of_members = [t.sheet_name if t else "" for t in member_sheets]
             is_multi_sheet = len(set(sheet_names_of_members)) > 1
 
-            # 軸2の値を決定する
-            # 複数シート: sheet_name をそのまま軸2の値として使う
-            # 同一シート: source_title から共通末尾を除去した識別部分を使う
+            # 軸2の値: 複数シートはsheet_name、同一シートはsource_titleから識別部分を抽出
             if is_multi_sheet:
                 raw_axis2_vals = sheet_names_of_members
             else:
@@ -1536,22 +1539,17 @@ def _build_auto_irs_from_latent(
 
             cross_ids: list = []
             cross_multi_vals: dict = {}
-
             for (lp, dlt), axis2_val in zip(members_with_dlt, raw_axis2_vals):
                 for i, tid in enumerate(lp.detected_table_ids):
                     cat_val = lp.detected_names[i] if i < len(lp.detected_names) else tid
                     cross_ids.append(tid)
                     cross_multi_vals[tid] = [cat_val, axis2_val]
-
                 cross_ids.append(dlt.proposal_id)
                 cross_multi_vals[dlt.proposal_id] = [dlt.derived_name, axis2_val]
 
             if len(cross_ids) >= 4:
                 cat_names_all = group.detected_names + group.missing_names
                 cat_col_name = _infer_col_name_from_values(cat_names_all)
-
-                # 軸2のラベルを実際の軸2の値から動的推定する
-                # _infer_axis_name は共通prefix → 最長共通部分文字列 の順で試みる
                 axis2_unique = list(dict.fromkeys(
                     cross_multi_vals[tid][1] for tid in cross_ids
                 ))
@@ -1559,12 +1557,9 @@ def _build_auto_irs_from_latent(
                 if not axis2_col_name or axis2_col_name == "種別":
                     axis2_col_name = "シート" if is_multi_sheet else "区分"
 
-                cross_rec_id = f"latent_auto_cross2_{gk}"
-
-                if "latent_auto_int_decisions" not in st.session_state:
-                    st.session_state.latent_auto_int_decisions = {}
-                if cross_rec_id not in st.session_state.latent_auto_int_decisions:
-                    st.session_state.latent_auto_int_decisions[cross_rec_id] = True
+                # デフォルトは「統合する」(True)
+                if cross_rec_id not in auto_int_dec:
+                    auto_int_dec[cross_rec_id] = True
 
                 cross_ir = IntegrationRecommendation(
                     recommendation_id=cross_rec_id,
@@ -1594,15 +1589,13 @@ def _build_auto_irs_from_latent(
                     axis_parent_table_ids=[members_with_dlt[0][0].source_table_id, None],
                     axis_parent_label_columns=[None, None],
                 )
-                result.append((cross_ir, gk))
 
-        # ── シートごとの1軸統合IR（構成要素軸）──────────────────────────────
+        # ── 1軸統合IR を構築する（集計元ごと）───────────────────────────────
+        per_sheet_irs: list = []
         for lp, dlt in group.members:
             if dlt is None:
                 continue
-
             table_ids = list(lp.detected_table_ids) + [dlt.proposal_id]
-
             col_vals: dict = {}
             for i, tid in enumerate(lp.detected_table_ids):
                 col_vals[tid] = lp.detected_names[i] if i < len(lp.detected_names) else tid
@@ -1611,10 +1604,10 @@ def _build_auto_irs_from_latent(
             col_name = _infer_col_name_from_values(list(col_vals.values()))
             rec_id = f"latent_auto_{gk}_{dlt.proposal_id}"
 
-            if "latent_auto_int_decisions" not in st.session_state:
-                st.session_state.latent_auto_int_decisions = {}
-            if rec_id not in st.session_state.latent_auto_int_decisions:
-                st.session_state.latent_auto_int_decisions[rec_id] = True
+            # 1軸IRは2軸が「統合しない」に切り替えられた時に初めて表示される。
+            # デフォルトを True にして、表示時に「統合する」が選択済みになるようにする。
+            if rec_id not in auto_int_dec:
+                auto_int_dec[rec_id] = True
 
             ir = IntegrationRecommendation(
                 recommendation_id=rec_id,
@@ -1638,7 +1631,16 @@ def _build_auto_irs_from_latent(
                 axis_parent_table_ids=[lp.source_table_id],
                 axis_parent_label_columns=[None],
             )
-            result.append((ir, gk))
+            per_sheet_irs.append((ir, gk))
+
+        # ── 優先度ルール: 2軸が「統合する」なら2軸IRのみ、「統合しない」なら1軸IRのみ ──
+        if cross_ir is not None:
+            if auto_int_dec.get(cross_rec_id, True):
+                result.append((cross_ir, gk))        # 2軸のみ
+            else:
+                result.extend(per_sheet_irs)          # 1軸のみ
+        else:
+            result.extend(per_sheet_irs)              # 2軸なし → 常に1軸
 
     return result
 
@@ -1851,12 +1853,19 @@ def _render_unified_ir_card(
             st.caption(f"💡 推奨理由: {ir.reasoning}")
         with c_dec:
             st.markdown("<br>", unsafe_allow_html=True)
+            _ir_radio_key = f"radio_{rec_id}"
+            # index= を使うと 2クリック問題が起きるため、事前初期化 + index なし で対応する
+            if _ir_radio_key not in st.session_state:
+                st.session_state[_ir_radio_key] = (
+                    "✅ 統合する"
+                    if st.session_state[dec_store].get(rec_id, True)
+                    else "❌ 統合しない"
+                )
             decision = st.radio(
                 "この統合を実施しますか？",
                 ["✅ 統合する", "❌ 統合しない"],
                 horizontal=True,
-                key=f"radio_{rec_id}",
-                index=(0 if st.session_state[dec_store].get(rec_id, True) else 1),
+                key=_ir_radio_key,
             )
             st.session_state[dec_store][rec_id] = (decision == "✅ 統合する")
 
