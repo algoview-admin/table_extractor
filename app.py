@@ -2310,11 +2310,17 @@ def _build_final_tables():
             except Exception:
                 continue
 
-            # 統合元の実テーブルを integrated_ids に追加
+            # 統合元テーブルを「統合済み」として扱う
             # （「統合する」選択時は最小粒度データとして個別表示しない）
             for _tid in _auto_ir.table_ids:
                 if _tid in tables_dict:
                     integrated_ids.add(_tid)
+                elif _tid in final:
+                    # DLT（仮想テーブル）は tables_dict にないため integrated_ids で管理できない。
+                    # 代わりに final エントリを非推奨・非最小粒度に降格させ、
+                    # 非推奨テーブルの折りたたみセクションに移動させる。
+                    final[_tid]["is_minimum"] = False
+                    final[_tid]["recommended"] = False
 
             _int_key = f"latent_auto_int_{_rec_id}"
             final[_int_key] = {
