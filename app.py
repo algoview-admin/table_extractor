@@ -225,11 +225,13 @@ def _go_to(step: int, stop_auto: bool = True) -> None:
     if stop_auto:
         st.session_state.auto_processing = False
     st.session_state.step = step
+    st.session_state._scroll_to_top = True
 
 
 def _build_and_go_step5() -> None:
     _build_final_tables()
     st.session_state.step = 5
+    st.session_state._scroll_to_top = True
 
 
 # ---------------------------------------------------------------------------
@@ -639,20 +641,17 @@ def _render_header():
         st.title("📊 Table Extractor (開発中)")
         st.caption("Excel / CSV ファイルから分析対象とするテーブルを抽出します。")
     with save_col:
-        if st.session_state.get("filename"):
-            has_data = bool(st.session_state.get("detected_tables"))
-
-            def _on_save():
-                st.session_state["_save_result"] = _save_project_to_disk()
-
+        if st.session_state.get("filename") and bool(st.session_state.get("detected_tables")):
+            fname = Path(st.session_state.get("filename", "project")).stem
             st.markdown("<br>", unsafe_allow_html=True)
-            st.button(
+            st.download_button(
                 "💾 Save",
-                key="hdr_save_btn",
+                data=_serialize_project(),
+                file_name=f"{fname}.tep",
+                mime="application/octet-stream",
                 use_container_width=True,
-                disabled=not has_data,
-                on_click=_on_save,
-                help=f"現在の解析状態を {_PROJECT_DIR} に保存します。",
+                key="hdr_save_btn",
+                help="現在の解析状態を .tep ファイルとしてダウンロードします。再開時はStep 1でアップロードしてください。",
             )
 
     current = st.session_state.step
@@ -3379,11 +3378,16 @@ def step6():
 def main():
     _init()
 
-    # 保存コールバックの結果をsession_stateに格納し、rerun後も保持して
-    # ヘッダーコンテナ外からtoastとして表示できるようにする。
-    if "_save_result" in st.session_state:
-        _msg = st.session_state.pop("_save_result")
-        st.toast(_msg, icon="💾" if _msg.startswith("✅") else "❌")
+    # ナビゲーション後にページ最上部へスクロールする。
+    # height=42 の iframe はCSSで非表示になるため見た目に影響しない。
+    if st.session_state.pop("_scroll_to_top", False):
+        components.html(
+            "<script>"
+            "window.parent.document.documentElement.scrollTop=0;"
+            "window.parent.document.body.scrollTop=0;"
+            "</script>",
+            height=42,
+        )
 
     with st.container():
         _render_header()
