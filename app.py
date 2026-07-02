@@ -16,8 +16,10 @@ from src.relation_analyzer import analyze_tables
 from src.excel_parser import parse_csv, parse_excel
 from src.models import AIAnalysisResult, DetectedTable
 from src.latent_table_detector import (
-    find_latent_tables, derive_latent_tables,
-    LatentTableGroup, group_latent_proposals,
+    find_latent_tables,
+    derive_latent_tables,
+    LatentTableGroup,
+    group_latent_proposals,
 )
 from src.models import DerivedLatentTable, IntegrationRecommendation
 
@@ -200,7 +202,7 @@ def _init():
         "ai_analysis": None,
         "integration_decisions": {},  # rec_id -> bool
         "master_decisions": {},  # dim_master_{rec_id} -> bool
-        "derived_decisions": {},   # dlt_id -> bool (legacy; superseded by latent_group_decisions)
+        "derived_decisions": {},  # dlt_id -> bool (legacy; superseded by latent_group_decisions)
         "latent_group_decisions": {},  # group_key -> bool
         "latent_auto_int_decisions": {},  # auto_ir rec_id -> bool
         "final_tables": {},  # table_id -> dict
@@ -1389,7 +1391,9 @@ def _dedup_master_irs(master_irs, tables_dict):
 # ---------------------------------------------------------------------------
 
 
-def _dlt_virtual_table(dlt: DerivedLatentTable, tables_dict: dict) -> Optional[DetectedTable]:
+def _dlt_virtual_table(
+    dlt: DerivedLatentTable, tables_dict: dict
+) -> Optional[DetectedTable]:
     """統合プレビュー用に DerivedLatentTable を仮想 DetectedTable としてラップする。"""
     parent = tables_dict.get(dlt.parent_table_id)
     if parent is None or dlt.df is None:
@@ -1413,10 +1417,11 @@ def _infer_col_name_from_values(values: List[str]) -> str:
     意味のある共通プレフィックスが見つからない場合は '種別' にフォールバックする。
     """
     import os.path as _osp
+
     if len(values) < 2:
         return "種別"
     prefix = _osp.commonprefix(values)
-    prefix = re.sub(r'[-_・\s\d]+$', '', prefix).strip()
+    prefix = re.sub(r"[-_・\s\d]+$", "", prefix).strip()
     return prefix if len(prefix) >= 2 else "種別"
 
 
@@ -1429,6 +1434,7 @@ def _infer_axis_name(values: List[str]) -> str:
     どちらも失敗した場合は '種別' を返す。
     """
     import os.path as _osp
+
     if not values:
         return "種別"
     if len(values) == 1:
@@ -1436,17 +1442,17 @@ def _infer_axis_name(values: List[str]) -> str:
 
     # Step 1: 共通prefix（末尾の区切り文字・数字・英字を除去）
     prefix = _osp.commonprefix(values)
-    prefix_clean = re.sub(r'[-_・\s\dA-Za-zＡ-Ｚａ-ｚ０-９]+$', '', prefix).strip()
+    prefix_clean = re.sub(r"[-_・\s\dA-Za-zＡ-Ｚａ-ｚ０-９]+$", "", prefix).strip()
     if len(prefix_clean) >= 2:
         return prefix_clean
 
     # Step 2: 全値に含まれる最長の共通部分文字列を探す
     # 数字・ASCII英字・記号のみで構成される部分文字列は意味が薄いため除外する
-    _HAS_MEANINGFUL = re.compile(r'[^\d\s\-_・A-Za-zＡ-Ｚａ-ｚ０-９（）()【】「」]')
+    _HAS_MEANINGFUL = re.compile(r"[^\d\s\-_・A-Za-zＡ-Ｚａ-ｚ０-９（）()【】「」]")
     shortest = min(values, key=len)
     for length in range(len(shortest), 1, -1):
         for start in range(len(shortest) - length + 1):
-            substr = shortest[start:start + length]
+            substr = shortest[start : start + length]
             if not _HAS_MEANINGFUL.search(substr):
                 continue
             if all(substr in v for v in values):
@@ -1463,6 +1469,7 @@ def _strip_common_suffix(labels: List[str]) -> List[str]:
     意味のある共通末尾が2文字未満の場合はそのまま返す。
     """
     import os.path as _osp
+
     if len(labels) < 2:
         return list(labels)
 
@@ -1470,14 +1477,14 @@ def _strip_common_suffix(labels: List[str]) -> List[str]:
     suf_raw = _osp.commonprefix(rev)[::-1]
 
     # 区切り文字を除いた実質的な共通末尾が2文字以上あるか確認する
-    suf_meaningful = re.sub(r'^[-_・\s（）()「」「」]+', '', suf_raw)
+    suf_meaningful = re.sub(r"^[-_・\s（）()「」「」]+", "", suf_raw)
     if len(suf_meaningful) < 2:
         return list(labels)
 
     result = []
     for lbl in labels:
         if lbl.endswith(suf_raw):
-            stripped = lbl[:-len(suf_raw)].rstrip('-_・ （）()「」「」').strip()
+            stripped = lbl[: -len(suf_raw)].rstrip("-_・ （）()「」「」").strip()
             result.append(stripped if stripped else lbl)
         else:
             result.append(lbl)
@@ -1488,6 +1495,7 @@ def _build_auto_irs_from_latent(
     latent_groups: List[LatentTableGroup],
     ext_tables_dict: dict,
     tables_dict: dict,
+    _for_build: bool = False,
 ) -> List[tuple]:
     """承認された潜在グループに対して IntegrationRecommendation オブジェクトを構築する。
 
@@ -1520,16 +1528,21 @@ def _build_auto_irs_from_latent(
         # そのメンバーは他シートを束ねたクロスシート集計であると判定し除外する。
         # 例: 拠点A + 拠点B = 全拠点集計 の場合、全拠点集計メンバーは冗長として除外する。
         if len(members_with_dlt) >= 3:
+
             def _num_total(tid: str) -> float:
                 t = tables_dict.get(tid)
                 if t is None or t.df is None or t.df.empty:
                     return 0.0
                 try:
-                    return float(t.df.select_dtypes(include="number").abs().values.sum())
+                    return float(
+                        t.df.select_dtypes(include="number").abs().values.sum()
+                    )
                 except Exception:
                     return 0.0
 
-            _parent_totals = [_num_total(dlt.parent_table_id) for _, dlt in members_with_dlt]
+            _parent_totals = [
+                _num_total(dlt.parent_table_id) for _, dlt in members_with_dlt
+            ]
             _non_summary = []
             for _i, (lp, dlt) in enumerate(members_with_dlt):
                 _others = sum(v for _j, v in enumerate(_parent_totals) if _j != _i)
@@ -1548,7 +1561,10 @@ def _build_auto_irs_from_latent(
 
         if len(members_with_dlt) >= 2:
             member_sheets = [
-                (ext_tables_dict.get(lp.source_table_id) or tables_dict.get(lp.source_table_id))
+                (
+                    ext_tables_dict.get(lp.source_table_id)
+                    or tables_dict.get(lp.source_table_id)
+                )
                 for lp, _ in members_with_dlt
             ]
             sheet_names_of_members = [t.sheet_name if t else "" for t in member_sheets]
@@ -1568,7 +1584,9 @@ def _build_auto_irs_from_latent(
             cross_multi_vals: dict = {}
             for (lp, dlt), axis2_val in zip(members_with_dlt, raw_axis2_vals):
                 for i, tid in enumerate(lp.detected_table_ids):
-                    cat_val = lp.detected_names[i] if i < len(lp.detected_names) else tid
+                    cat_val = (
+                        lp.detected_names[i] if i < len(lp.detected_names) else tid
+                    )
                     cross_ids.append(tid)
                     cross_multi_vals[tid] = [cat_val, axis2_val]
                 cross_ids.append(dlt.proposal_id)
@@ -1577,9 +1595,9 @@ def _build_auto_irs_from_latent(
             if len(cross_ids) >= 4:
                 cat_names_all = group.detected_names + group.missing_names
                 cat_col_name = _infer_col_name_from_values(cat_names_all)
-                axis2_unique = list(dict.fromkeys(
-                    cross_multi_vals[tid][1] for tid in cross_ids
-                ))
+                axis2_unique = list(
+                    dict.fromkeys(cross_multi_vals[tid][1] for tid in cross_ids)
+                )
                 axis2_col_name = _infer_axis_name(axis2_unique)
                 if not axis2_col_name or axis2_col_name == "種別":
                     axis2_col_name = "シート" if is_multi_sheet else "区分"
@@ -1601,7 +1619,9 @@ def _build_auto_irs_from_latent(
                     ),
                     table_ids=cross_ids,
                     new_column_name=cat_col_name,
-                    new_column_values={tid: cross_multi_vals[tid][0] for tid in cross_ids},
+                    new_column_values={
+                        tid: cross_multi_vals[tid][0] for tid in cross_ids
+                    },
                     reasoning=(
                         f"潜在テーブル「{'・'.join(group.missing_names)}」の差分推定により、"
                         f"「{cat_col_name}」軸と「{axis2_col_name}」軸の2軸で"
@@ -1613,7 +1633,10 @@ def _build_auto_irs_from_latent(
                     },
                     # 構成要素軸(axis 0)の親を設定することでマスタ生成が機能する。
                     # 集計元軸(axis 1)は親なし（集計元自体が軸なのでマスタ不要）。
-                    axis_parent_table_ids=[members_with_dlt[0][0].source_table_id, None],
+                    axis_parent_table_ids=[
+                        members_with_dlt[0][0].source_table_id,
+                        None,
+                    ],
                     axis_parent_label_columns=[None, None],
                 )
 
@@ -1625,7 +1648,9 @@ def _build_auto_irs_from_latent(
             table_ids = list(lp.detected_table_ids) + [dlt.proposal_id]
             col_vals: dict = {}
             for i, tid in enumerate(lp.detected_table_ids):
-                col_vals[tid] = lp.detected_names[i] if i < len(lp.detected_names) else tid
+                col_vals[tid] = (
+                    lp.detected_names[i] if i < len(lp.detected_names) else tid
+                )
             col_vals[dlt.proposal_id] = dlt.derived_name
 
             col_name = _infer_col_name_from_values(list(col_vals.values()))
@@ -1661,12 +1686,14 @@ def _build_auto_irs_from_latent(
             per_sheet_irs.append((ir, gk))
 
         # ── 優先度ルール: 2軸IRは常に表示し、「統合しない」の場合のみ1軸IRを追加 ──
+        # _for_build=True（最終ビルド時）は決定に関わらず常に全IRを返し、
+        # 呼び出し側がそれぞれの決定に基づいてフィルタリングする。
         if cross_ir is not None:
-            result.append((cross_ir, gk))            # 常に2軸カードを表示
-            if not auto_int_dec.get(cross_rec_id, True):
-                result.extend(per_sheet_irs)          # 2軸「統合しない」の場合のみ1軸を追加
+            result.append((cross_ir, gk))  # 常に2軸カードを表示
+            if _for_build or not auto_int_dec.get(cross_rec_id, True):
+                result.extend(per_sheet_irs)  # ビルド時は常に追加、表示時は2軸「統合しない」の場合のみ
         else:
-            result.extend(per_sheet_irs)              # 2軸なし → 常に1軸
+            result.extend(per_sheet_irs)  # 2軸なし → 常に1軸
 
     return result
 
@@ -1717,14 +1744,18 @@ def _clip_ai_irs_by_latent_groups(
             description=base_ir.description,
             table_ids=new_ids,
             new_column_name=base_ir.new_column_name,
-            new_column_values={k: v for k, v in base_ir.new_column_values.items() if k in keep_set},
+            new_column_values={
+                k: v for k, v in base_ir.new_column_values.items() if k in keep_set
+            },
             reasoning=base_ir.reasoning,
             parent_table_id=base_ir.parent_table_id,
             parent_label_column=base_ir.parent_label_column,
             user_decision=base_ir.user_decision,
             new_column_names=base_ir.new_column_names,
             new_column_multi_values={
-                k: v for k, v in base_ir.new_column_multi_values.items() if k in keep_set
+                k: v
+                for k, v in base_ir.new_column_multi_values.items()
+                if k in keep_set
             },
             axis_parent_table_ids=base_ir.axis_parent_table_ids,
             axis_parent_label_columns=base_ir.axis_parent_label_columns,
@@ -1740,8 +1771,12 @@ def _clip_ai_irs_by_latent_groups(
             if not (sib_set < ir_set and len(sib_set) >= 2):
                 continue
             extras = ir_set - sib_set
-            sib_sheets = {tables_dict[t].sheet_name for t in sib_set if t in tables_dict}
-            extra_sheets = {tables_dict[t].sheet_name for t in extras if t in tables_dict}
+            sib_sheets = {
+                tables_dict[t].sheet_name for t in sib_set if t in tables_dict
+            }
+            extra_sheets = {
+                tables_dict[t].sheet_name for t in extras if t in tables_dict
+            }
             if not sib_sheets or not (extra_sheets <= sib_sheets):
                 continue  # クロスsheetのextras — ステップ2で処理
             clipped = _make_trimmed(ir, sib_set)
@@ -1791,9 +1826,9 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
 
     _NOTE_TYPE_LABEL = {
         "aggregation": ("集計注記", "🧮"),
-        "exclusion":   ("除外注記", "➖"),
-        "reference":   ("参照注記", "🔗"),
-        "general":     ("注記",     "📝"),
+        "exclusion": ("除外注記", "➖"),
+        "reference": ("参照注記", "🔗"),
+        "general": ("注記", "📝"),
     }
     type_label, type_icon = _NOTE_TYPE_LABEL.get(group.note_type, ("注記", "📝"))
     missing_label = "・".join(group.missing_names)
@@ -1804,7 +1839,8 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
         sheet_badge = (
             f"<span style='font-size:0.72rem;color:#607090;margin-left:8px;'>"
             f"（{n_sheets} シート）</span>"
-            if n_sheets > 1 else ""
+            if n_sheets > 1
+            else ""
         )
         st.markdown(
             f"#### {type_icon} {missing_label}（差分推定）{sheet_badge}",
@@ -1837,21 +1873,22 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
                 )
 
         if n_derived > 0:
-            derived_members = [(lp, dlt) for lp, dlt in group.members if dlt is not None]
+            derived_members = [
+                (lp, dlt) for lp, dlt in group.members if dlt is not None
+            ]
             # 代表: 最初のDLTを直接表示
             _render_derived_before_after(derived_members[0][1], tables_dict)
             # その他: 折りたたみexpander
             if len(derived_members) > 1:
                 others = derived_members[1:]
-                with st.expander(
-                    f"同様の推定 他 {len(others)} 件", expanded=False
-                ):
+                with st.expander(f"同様の推定 他 {len(others)} 件", expanded=False):
                     for lp, dlt in others:
                         st.markdown(f"**{lp.source_title}**")
                         _render_derived_before_after(dlt, tables_dict)
                         st.divider()
 
         st.divider()
+        _splitter_marker(f"s4-lg-{gk}")
         c_info, c_dec = st.columns([2, 1])
         with c_info:
             st.markdown("**💡 推奨理由**")
@@ -1859,12 +1896,12 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
         with c_dec:
             st.markdown("<br>", unsafe_allow_html=True)
             decision = st.radio(
-                "この推定テーブルを追加しますか？",
+                "この潜在テーブルを追加しますか？",
                 ["✅ 追加する", "❌ 追加しない"],
                 horizontal=True,
                 key=_radio_key,
             )
-            st.session_state.latent_group_decisions[gk] = (decision == "✅ 追加する")
+            st.session_state.latent_group_decisions[gk] = decision == "✅ 追加する"
             if decision == "✅ 追加する" and n_derived > 0:
                 st.caption("💡 下の統合テーブル案に自動反映されます")
 
@@ -1928,7 +1965,7 @@ def _render_unified_ir_card(
                 horizontal=True,
                 key=_ir_radio_key,
             )
-            st.session_state[dec_store][rec_id] = (decision == "✅ 統合する")
+            st.session_state[dec_store][rec_id] = decision == "✅ 統合する"
 
 
 def step4():
@@ -1947,7 +1984,10 @@ def step4():
 
     analysis: AIAnalysisResult = st.session_state.ai_analysis
 
-    if st.session_state.auto_processing and st.session_state.get("run_mode") == "fullauto":
+    if (
+        st.session_state.auto_processing
+        and st.session_state.get("run_mode") == "fullauto"
+    ):
         with st.spinner("新規テーブル案・マスタ案を自動設定中..."):
             _build_final_tables()
         st.session_state.step = 5
@@ -2005,7 +2045,9 @@ def step4():
 
     # ── セクション 2: 統合テーブル ────────────────────────────────────────────
     # auto-IRは現在の潜在グループ決定を動的に反映する
-    _auto_irs_flat = _build_auto_irs_from_latent(_latent_groups, _ext_tables, tables_dict)
+    _auto_irs_flat = _build_auto_irs_from_latent(
+        _latent_groups, _ext_tables, tables_dict
+    )
 
     # AI IRを刈り込む: 検証済み兄弟セットに属さない同一sheet内テーブルを除外する。
     # 例: 潜在検出がT2+T3を兄弟と判定した場合、{T2,T3,T4}からX_D（T4）を除外する。
@@ -2055,18 +2097,21 @@ def step4():
             _rep = _grp[0]
             _similar = _grp[1:]
             _render_unified_ir_card(
-                _rep, _ext_tables,
+                _rep,
+                _ext_tables,
                 is_auto=_is_auto_map.get(_rep.recommendation_id, False),
             )
             if _similar:
                 _rep_cols = _rep.new_column_names or [_rep.new_column_name]
                 _axes_lbl = " × ".join(_rep_cols)
                 with st.expander(
-                    f"同様の統合 他 {len(_similar)} 件（{_axes_lbl} 軸）", expanded=False
+                    f"同様の統合 他 {len(_similar)} 件（{_axes_lbl} 軸）",
+                    expanded=False,
                 ):
                     for _ir in _similar:
                         _render_unified_ir_card(
-                            _ir, _ext_tables,
+                            _ir,
+                            _ext_tables,
                             is_auto=_is_auto_map.get(_ir.recommendation_id, False),
                         )
 
@@ -2134,7 +2179,9 @@ def step4():
                         horizontal=True,
                         key=f"radio_dm_{ir.recommendation_id}_ax{axis_idx}",
                         index=(
-                            0 if st.session_state.master_decisions.get(dm_key, True) else 1
+                            0
+                            if st.session_state.master_decisions.get(dm_key, True)
+                            else 1
                         ),
                     )
                     st.session_state.master_decisions[dm_key] = (
@@ -2182,7 +2229,9 @@ def _build_final_tables():
         _vsup = _dlt_virtual_table(_dsup, tables_dict)
         if _vsup:
             _bft_sup_ext[_dsup.proposal_id] = _vsup
-    _bft_auto_irs = _build_auto_irs_from_latent(_bft_sup_groups, _bft_sup_ext, tables_dict)
+    _bft_auto_irs = _build_auto_irs_from_latent(
+        _bft_sup_groups, _bft_sup_ext, tables_dict, _for_build=True
+    )
 
     # 潜在兄弟セットを使ってAI IRを刈り込む（step4と同じロジック）
     _bft_ai_irs_trimmed = _clip_ai_irs_by_latent_groups(
@@ -2337,8 +2386,8 @@ def _build_final_tables():
                 "is_master": False,
             }
 
-        # 承認済みIRからの自動統合テーブル
-        _auto_irs_bft = _build_auto_irs_from_latent([_grp], _bft_ext, tables_dict)
+        # 承認済みIRからの自動統合テーブル（_for_build=Trueで2軸・1軸とも個別決定に基づいて処理）
+        _auto_irs_bft = _build_auto_irs_from_latent([_grp], _bft_ext, tables_dict, _for_build=True)
         for _auto_ir, _ in _auto_irs_bft:
             _rec_id = _auto_ir.recommendation_id
             if not _lai_dec.get(_rec_id, True):
@@ -2381,6 +2430,44 @@ def _build_final_tables():
                 "is_master": False,
                 "new_col_names": _col_names_bft,
             }
+
+            # auto-IRに対してもマスタを生成する（AI IRと同じロジック）
+            for _spec in _derive_master_specs_for_ir(_auto_ir, tables_dict):
+                _master_sig = _master_signature(_spec)
+                if _master_sig in seen_master_sigs:
+                    continue
+                seen_master_sigs.add(_master_sig)
+                _axis_idx = _spec.get("axis_idx", 0)
+                _dm_key = f"dim_master_{_rec_id}_ax{_axis_idx}"
+                if not st.session_state.master_decisions.get(_dm_key, True):
+                    continue
+                _child_col = _spec["child_col"]
+                _parent_col = _spec["parent_col"]
+                _master_rows = [
+                    {_child_col: ck, _parent_col: pv}
+                    for ck, pv in _spec["mapping"].items()
+                ]
+                if _master_rows:
+                    _master_df = pd.DataFrame(_master_rows)
+                    final[_dm_key] = {
+                        "df": _master_df,
+                        "display_name": f"{_child_col} × {_parent_col} マスタ",
+                        "description": (
+                            f"元データの上位集計テーブル（{_spec['parent_id']}）と各子テーブルの"
+                            f"「{_child_col}」値の対応関係から生成したマスタテーブル。"
+                            f"統合テーブルを「{_child_col}」で結合すると「{_parent_col}」単位での再集計が可能になる。"
+                        ),
+                        "reasoning": (
+                            f"元データ内の上位集計テーブル {_spec['parent_id']} の階層関係から自動生成。"
+                            f"統合テーブル自体ではなく、ソースデータの親子関係をもとにした対応表。"
+                        ),
+                        "is_integrated": False,
+                        "source_ids": [_spec["parent_id"]] + _auto_ir.table_ids,
+                        "recommended": True,
+                        "granularity": "master",
+                        "is_minimum": False,
+                        "is_master": True,
+                    }
 
     # 個別の非統合テーブル
     for ta in analysis.table_analyses:
@@ -2534,10 +2621,12 @@ def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Style
     for col, (_, _, hbg, hfg) in col_pal.items():
         try:
             col_idx = list(df_str.columns).index(col)
-            tbl_styles.append({
-                "selector": f"th.col_heading.col{col_idx}",
-                "props": f"background-color: {hbg} !important; color: {hfg} !important;",
-            })
+            tbl_styles.append(
+                {
+                    "selector": f"th.col_heading.col{col_idx}",
+                    "props": f"background-color: {hbg} !important; color: {hfg} !important;",
+                }
+            )
         except ValueError:
             pass
     if tbl_styles:
@@ -2574,10 +2663,10 @@ def _render_integration_before_after(
     # インラインプレビューボックスの可視行の高さ。
     # (a) スクロールで全行を表示し、(b) ネイティブのFullscreenボタンで全レコードを
     # 表示できるよう、常に完全なDataFrameを渡す。
-    _BEFORE_VISIBLE = 3   # 統合前カード: スクロール前に表示する行数
-    _AFTER_VISIBLE  = 5   # 統合後プレビュー: スクロール前に表示する行数
-    _ROW_PX = 35          # st.dataframe の1データ行のおよそのpx高さ
-    _HDR_PX = 38          # ヘッダー行の高さ
+    _BEFORE_VISIBLE = 3  # 統合前カード: スクロール前に表示する行数
+    _AFTER_VISIBLE = 5  # 統合後プレビュー: スクロール前に表示する行数
+    _ROW_PX = 35  # st.dataframe の1データ行のおよそのpx高さ
+    _HDR_PX = 38  # ヘッダー行の高さ
 
     # ── 軸ごとのユニーク値の順序を構築する ──────────────────────────────────
     axis_val_order: list = [[] for _ in col_names]
@@ -2604,17 +2693,17 @@ def _render_integration_before_after(
         vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
         pills = "".join(
             f'<span style="background:{_axis_color(ai, str(v))[0]};'
-            f'color:{_axis_color(ai, str(v))[1]};'
-            f'padding:2px 9px;border-radius:12px;font-size:0.72rem;font-weight:600;'
+            f"color:{_axis_color(ai, str(v))[1]};"
+            f"padding:2px 9px;border-radius:12px;font-size:0.72rem;font-weight:600;"
             f'margin-right:4px;display:inline-block;margin-bottom:3px;">'
-            f'{_html.escape(cn)}:&nbsp;{_html.escape(str(v))}</span>'
+            f"{_html.escape(cn)}:&nbsp;{_html.escape(str(v))}</span>"
             for ai, (cn, v) in enumerate(zip(col_names, vals))
         )
         st.markdown(
             f'<div style="background:#161c2c;border:1px solid #2d3748;'
             f'border-radius:6px 6px 0 0;padding:7px 10px;margin-bottom:0;">'
             f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:4px;">'
-            f'📋&nbsp;{_html.escape(tid)}</div>{pills}</div>',
+            f"📋&nbsp;{_html.escape(tid)}</div>{pills}</div>",
             unsafe_allow_html=True,
         )
         if t is not None and t.df is not None and not t.df.empty:
@@ -2623,8 +2712,9 @@ def _render_integration_before_after(
                 t.df.astype(str),
                 use_container_width=True,
                 hide_index=True,
-                height=min(n_rows * _ROW_PX + _HDR_PX,
-                           _BEFORE_VISIBLE * _ROW_PX + _HDR_PX),
+                height=min(
+                    n_rows * _ROW_PX + _HDR_PX, _BEFORE_VISIBLE * _ROW_PX + _HDR_PX
+                ),
             )
         else:
             st.caption("（データなし）")
@@ -2643,7 +2733,7 @@ def _render_integration_before_after(
         '<div style="width:5px;height:22px;background:#4a7de0;border-radius:3px;flex-shrink:0;"></div>'
         '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">統合前</span>'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(74,125,224,.4),transparent);"></div>'
-        '</div>',
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -2658,7 +2748,7 @@ def _render_integration_before_after(
         with st.expander(f"他 {len(extra_tids)} テーブルを見る", expanded=False):
             n_ex = min(len(extra_tids), 3)
             for start in range(0, len(extra_tids), n_ex):
-                _src_card_grid(extra_tids[start:start + n_ex])
+                _src_card_grid(extra_tids[start : start + n_ex])
 
     # ── 統合元テーブル一覧 (expander下) ─────────────────────────────────────
     # expander内のst.columns()は避ける — 同じ縦方向コンテナ内のネストした columns は
@@ -2679,14 +2769,14 @@ def _render_integration_before_after(
         '<div style="display:flex;align-items:center;gap:0;margin:22px 0 18px;">'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,transparent,rgba(39,174,96,.5));"></div>'
         '<div style="border:1.5px solid rgba(39,174,96,.7);border-radius:24px;'
-        'padding:6px 22px;margin:0 16px;font-size:1.05rem;font-weight:800;'
-        'color:#7FFFD4;letter-spacing:.08em;'
-        'background:linear-gradient(135deg,rgba(39,174,96,.12),rgba(26,188,156,.08));'
+        "padding:6px 22px;margin:0 16px;font-size:1.05rem;font-weight:800;"
+        "color:#7FFFD4;letter-spacing:.08em;"
+        "background:linear-gradient(135deg,rgba(39,174,96,.12),rgba(26,188,156,.08));"
         'display:flex;align-items:center;gap:8px;white-space:nowrap;">'
-        '↓&nbsp;&nbsp;統合処理'
-        '</div>'
+        "↓&nbsp;&nbsp;統合処理"
+        "</div>"
         '<div style="flex:1;height:1px;background:linear-gradient(to left,transparent,rgba(39,174,96,.5));"></div>'
-        '</div>',
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -2698,7 +2788,7 @@ def _render_integration_before_after(
         '<div style="width:5px;height:22px;background:#27ae60;border-radius:3px;flex-shrink:0;"></div>'
         '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">統合後</span>'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(39,174,96,.4),transparent);"></div>'
-        '</div>',
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -2756,13 +2846,15 @@ def _render_integration_before_after(
                 ci = list(df_str.columns).index(c)
                 ai = valid_cols.index(c)
                 hbg, hfg = _AXIS_FAMILIES[ai % len(_AXIS_FAMILIES)][0][:2]
-                tbl_styles.append({
-                    "selector": f"th.col_heading.col{ci}",
-                    "props": (
-                        f"background-color:{hbg} !important;"
-                        f"color:{hfg} !important;font-weight:bold !important;"
-                    ),
-                })
+                tbl_styles.append(
+                    {
+                        "selector": f"th.col_heading.col{ci}",
+                        "props": (
+                            f"background-color:{hbg} !important;"
+                            f"color:{hfg} !important;font-weight:bold !important;"
+                        ),
+                    }
+                )
             except ValueError:
                 pass
         if tbl_styles:
@@ -2776,8 +2868,7 @@ def _render_integration_before_after(
             styler,
             use_container_width=True,
             hide_index=True,
-            height=min(n_data * _ROW_PX + _HDR_PX,
-                       _AFTER_VISIBLE * _ROW_PX + _HDR_PX),
+            height=min(n_data * _ROW_PX + _HDR_PX, _AFTER_VISIBLE * _ROW_PX + _HDR_PX),
         )
         # 統合済みテーブルのサイズ — プレビューの右下に表示する
         if full_df_size:
@@ -2785,7 +2876,7 @@ def _render_integration_before_after(
             st.markdown(
                 f'<div style="text-align:right;font-size:0.72rem;'
                 f'color:#7a8599;margin-top:2px;">'
-                f'📊 {n_rows:,} 行 × {n_cols_full} 列</div>',
+                f"📊 {n_rows:,} 行 × {n_cols_full} 列</div>",
                 unsafe_allow_html=True,
             )
     except Exception:
@@ -2814,7 +2905,7 @@ def _render_derived_before_after(
         '<div style="width:5px;height:22px;background:#4a7de0;border-radius:3px;flex-shrink:0;"></div>'
         '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">推定前（検出テーブル）</span>'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(74,125,224,.4),transparent);"></div>'
-        '</div>',
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -2827,7 +2918,7 @@ def _render_derived_before_after(
             f'<div style="font-size:0.7rem;color:#7a8599;margin-bottom:4px;">📋&nbsp;{_html.escape(tid)}</div>'
             f'<span style="background:{color};color:#fff;padding:2px 9px;border-radius:12px;'
             f'font-size:0.72rem;font-weight:600;">{_html.escape(role_label)}</span>'
-            f'</div>',
+            f"</div>",
             unsafe_allow_html=True,
         )
         if t is not None and t.df is not None and not t.df.empty:
@@ -2854,10 +2945,14 @@ def _render_derived_before_after(
                 _child_title = (_child_t.title if _child_t else None) or tid
                 _table_card_mini(tid, f"集計元テーブル：{_child_title}", "#4a5a3a")
     if len(all_display) > n_disp:
-        with st.expander(f"他 {len(all_display) - n_disp} テーブルを見る", expanded=False):
+        with st.expander(
+            f"他 {len(all_display) - n_disp} テーブルを見る", expanded=False
+        ):
             for tid in all_display[n_disp:]:
                 if tid == dlt.parent_table_id:
-                    _table_card_mini(tid, f"集計テーブル：{dlt.parent_title}", "#2a607a")
+                    _table_card_mini(
+                        tid, f"集計テーブル：{dlt.parent_title}", "#2a607a"
+                    )
                 else:
                     _child_t = tables_dict.get(tid)
                     _child_title = (_child_t.title if _child_t else None) or tid
@@ -2868,19 +2963,19 @@ def _render_derived_before_after(
         '<div style="display:flex;align-items:center;gap:0;margin:18px 0 14px;">'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,transparent,rgba(229,168,60,.5));"></div>'
         '<div style="border:1.5px solid rgba(229,168,60,.7);border-radius:24px;'
-        'padding:6px 22px;margin:0 16px;font-size:0.95rem;font-weight:800;'
-        'color:#f5d06a;letter-spacing:.06em;'
-        'background:linear-gradient(135deg,rgba(229,168,60,.12),rgba(200,140,40,.08));'
+        "padding:6px 22px;margin:0 16px;font-size:0.95rem;font-weight:800;"
+        "color:#f5d06a;letter-spacing:.06em;"
+        "background:linear-gradient(135deg,rgba(229,168,60,.12),rgba(200,140,40,.08));"
         'white-space:nowrap;">↓&nbsp;&nbsp;差分計算</div>'
         '<div style="flex:1;height:1px;background:linear-gradient(to left,transparent,rgba(229,168,60,.5));"></div>'
-        '</div>',
+        "</div>",
         unsafe_allow_html=True,
     )
     st.markdown(
         f'<div style="background:#1a1508;border-left:3px solid rgba(229,168,60,.6);'
-        f'border-radius:0 6px 6px 0;padding:6px 14px;font-size:0.82rem;'
+        f"border-radius:0 6px 6px 0;padding:6px 14px;font-size:0.82rem;"
         f'color:#c8a030;font-family:monospace;margin-bottom:14px;">'
-        f'{_html.escape(dlt.derivation_formula)}</div>',
+        f"{_html.escape(dlt.derivation_formula)}</div>",
         unsafe_allow_html=True,
     )
 
@@ -2890,7 +2985,7 @@ def _render_derived_before_after(
         '<div style="width:5px;height:22px;background:#e5a83c;border-radius:3px;flex-shrink:0;"></div>'
         '<span style="font-size:1.05rem;font-weight:800;color:#c8d4e8;letter-spacing:.04em;">推定後（潜在テーブル）</span>'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,rgba(229,168,60,.4),transparent);"></div>'
-        '</div>',
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -2932,7 +3027,9 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
 
     def _sel_button():
         if is_sel:
-            if st.button("✅ 選択中", key=f"sel_{tid}", use_container_width=True, type="primary"):
+            if st.button(
+                "✅ 選択中", key=f"sel_{tid}", use_container_width=True, type="primary"
+            ):
                 st.session_state.selected_ids.discard(tid)
                 st.rerun()
         else:
@@ -3021,11 +3118,15 @@ def step5():
             for ir in _analysis.integration_recommendations
         }
         for k, info in final.items():
-            if info.get("is_integrated") and not info.get("new_col_names") and k in _ir_map:
+            if (
+                info.get("is_integrated")
+                and not info.get("new_col_names")
+                and k in _ir_map
+            ):
                 ir = _ir_map[k]
-                info["new_col_names"] = (
-                    getattr(ir, "new_column_names", []) or [ir.new_column_name]
-                )
+                info["new_col_names"] = getattr(ir, "new_column_names", []) or [
+                    ir.new_column_name
+                ]
 
     # 自動処理はStep 5で終了する
     if st.session_state.auto_processing:
@@ -3071,14 +3172,13 @@ def step5():
     _s5_ir_by_rec: dict = {}
     if _s5_analysis:
         _s5_ir_by_rec = {
-            ir.recommendation_id: ir
-            for ir in _s5_analysis.integration_recommendations
+            ir.recommendation_id: ir for ir in _s5_analysis.integration_recommendations
         }
     _s5_tbls = {t.table_id: t for t in st.session_state.get("detected_tables", [])}
 
     def _get_ir_for(k: str):
         if k.startswith("integrated_"):
-            return _s5_ir_by_rec.get(k[len("integrated_"):])
+            return _s5_ir_by_rec.get(k[len("integrated_") :])
         return None
 
     # --- 統合テーブル（列シグネチャでグループ化） ---
@@ -3108,7 +3208,9 @@ def step5():
             rep_tid, rep_info = group[0]
             similar_int = group[1:]
 
-            _table_card(rep_tid, rep_info, ir=_get_ir_for(rep_tid), tables_dict=_s5_tbls)
+            _table_card(
+                rep_tid, rep_info, ir=_get_ir_for(rep_tid), tables_dict=_s5_tbls
+            )
 
             if similar_int:
                 with st.expander(
@@ -3116,7 +3218,9 @@ def step5():
                     expanded=False,
                 ):
                     for tid, info in similar_int:
-                        _table_card(tid, info, ir=_get_ir_for(tid), tables_dict=_s5_tbls)
+                        _table_card(
+                            tid, info, ir=_get_ir_for(tid), tables_dict=_s5_tbls
+                        )
 
     # --- 最小粒度テーブル ---
     min_tables = {

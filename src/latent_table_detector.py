@@ -43,14 +43,14 @@ class LatentTableProposal:
     """注記内で参照されているが、まだ検出されていない提案テーブル。"""
 
     proposal_id: str
-    source_table_id: str        # この提案をトリガーした末尾注記を持つテーブル
-    source_title: str           # ソーステーブルの人間が読めるタイトル
-    note_text: str              # 注記の完全な原文テキスト
-    note_type: str              # 推定注記タイプ（aggregation / enumeration / reference / general）
-    all_referenced: List[str]   # 注記から抽出されたすべてのエンティティ名
-    detected_table_ids: List[str]   # 検出済みテーブルに一致したエンティティの table_id
-    detected_names: List[str]       # 検出済みテーブルに一致した参照名
-    missing_names: List[str]        # 検出済みテーブルに一致しなかった参照名
+    source_table_id: str  # この提案をトリガーした末尾注記を持つテーブル
+    source_title: str  # ソーステーブルの人間が読めるタイトル
+    note_text: str  # 注記の完全な原文テキスト
+    note_type: str  # 推定注記タイプ（aggregation / enumeration / reference / general）
+    all_referenced: List[str]  # 注記から抽出されたすべてのエンティティ名
+    detected_table_ids: List[str]  # 検出済みテーブルに一致したエンティティの table_id
+    detected_names: List[str]  # 検出済みテーブルに一致した参照名
+    missing_names: List[str]  # 検出済みテーブルに一致しなかった参照名
     reasoning: str
 
 
@@ -59,12 +59,12 @@ class LatentTableGroup:
     """複数シートにわたる類似した LatentTableProposal（同じ missing_names）のグループ。
     対応する DerivedLatentTable オブジェクトとまとめて管理する。"""
 
-    group_key: str           # "|".join(sorted(missing_names)) — セッション状態のキーとして使用
+    group_key: str  # "|".join(sorted(missing_names)) — セッション状態のキーとして使用
     missing_names: List[str]
     detected_names: List[str]  # 代表メンバーから取得
     note_type: str
-    note_text: str             # 代表メンバーから取得
-    members: List              # (LatentTableProposal, Optional[DerivedLatentTable]) のリスト
+    note_text: str  # 代表メンバーから取得
+    members: List  # (LatentTableProposal, Optional[DerivedLatentTable]) のリスト
 
     @property
     def has_derived(self) -> bool:
@@ -123,12 +123,16 @@ def _extract_entities(note_text: str) -> List[str]:
     #    集計の末尾を除去してから分割（例："AとBの合計" → "AとB"）
     clean = _AGG_SUFFIX_RE.sub("", text).strip()
     # 除外・参照系の末尾も除去
-    clean = re.sub(r"[をにの](除く|除いた|除外|参照|参考|含む|合わせた|まとめた).*$", "", clean).strip()
+    clean = re.sub(
+        r"[をにの](除く|除いた|除外|参照|参考|含む|合わせた|まとめた).*$", "", clean
+    ).strip()
     parts = _SPLIT_RE.split(clean)
     candidates.extend(p.strip() for p in parts if 2 <= len(p.strip()) <= 60)
 
     # 順序を保ちながら重複を除去し、短すぎるノイズトークンをフィルタリング
-    _NOISE_RE = re.compile(r"^(その|この|以下|上記|なお|ただし|また|※|注|合計|合算|小計|総計|集計)$")
+    _NOISE_RE = re.compile(
+        r"^(その|この|以下|上記|なお|ただし|また|※|注|合計|合算|小計|総計|集計)$"
+    )
     seen = set()
     result = []
     for c in candidates:
@@ -301,19 +305,19 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
 
         type_label = {
             "aggregation": "集計注記",
-            "exclusion":   "除外注記",
-            "reference":   "参照注記",
-            "general":     "注記",
+            "exclusion": "除外注記",
+            "reference": "参照注記",
+            "general": "注記",
         }.get(note_type, "注記")
 
         origin = "テーブル表題" if is_title else type_label
 
         reasoning = (
             f"テーブル「{source_title}」の{origin}「{note_short}」に "
-            f"{len(entities)} 件の名称が列挙されています。"
+            f"{len(entities)} 件の名称が列挙されています。  \n"
             f"うち {len(detected_names)} 件（{', '.join(detected_names)}）は検出済みですが、"
-            f"{len(missing_names)} 件（{', '.join(missing_names)}）は未検出です。"
-            f"{'この' if len(missing_names) == 1 else 'これら'}のテーブルが実際に存在する可能性があります。"
+            f"{len(missing_names)} 件（{', '.join(missing_names)}）は未検出です。  \n"
+            f"{'こ' if len(missing_names) == 1 else 'これら'}のテーブルが実際に存在する可能性があります。"
         )
 
         proposals.append(
@@ -397,7 +401,9 @@ def _try_derive_one(
 
     # 関係するすべてのテーブルを収集：注記元テーブル + 検出済み参照テーブル
     candidate_ids: List[str] = [lp.source_table_id] + list(lp.detected_table_ids)
-    candidate_ids_unique = list(dict.fromkeys(candidate_ids))  # 順序を保持しつつ重複除去
+    candidate_ids_unique = list(
+        dict.fromkeys(candidate_ids)
+    )  # 順序を保持しつつ重複除去
     candidates = [id_to_table.get(cid) for cid in candidate_ids_unique]
     if any(c is None or c.df is None or c.df.empty for c in candidates):
         return
@@ -425,9 +431,7 @@ def _try_derive_one(
     # 共通列の数値配列を抽出
     arrays: List[Tuple["DetectedTable", np.ndarray]] = []
     for c in candidates:
-        arr = np.nan_to_num(
-            c.df[common_num_cols].values.astype(float), nan=0.0
-        )
+        arr = np.nan_to_num(c.df[common_num_cols].values.astype(float), nan=0.0)
         arrays.append((c, arr))
 
     # 絶対値の数値合計が最大の候補を親（PARENT）として識別
@@ -468,15 +472,18 @@ def _try_derive_one(
         else "（" + " + ".join(lp.missing_names) + "）合算"
     )
     formula = (
-        f"{missing_name}  ≈  {parent_label}"
-        f"  −  ( {' + '.join(child_labels)} )"
+        f"{missing_name}  ≈  {parent_label}" f"  −  ( {' + '.join(child_labels)} )"
     )
 
     # DLTのIDをソースシート名を接頭辞として生成し、どのシートから派生したかを示す
     # Python 3の\wはUnicode対応のため、日本語文字はそのまま保持しスペース等のみ_に変換する
     _sheet_raw = getattr(parent_table, "sheet_name", "") or ""
-    _sheet_prefix = re.sub(r'\W', '_', _sheet_raw).strip('_')
-    _dlt_proposal_id = f"{_sheet_prefix}_DLT{len(derived) + 1}" if _sheet_prefix else f"DLT_{len(derived) + 1}"
+    _sheet_prefix = re.sub(r"\W", "_", _sheet_raw).strip("_")
+    _dlt_proposal_id = (
+        f"{_sheet_prefix}_DLT{len(derived) + 1}"
+        if _sheet_prefix
+        else f"DLT_{len(derived) + 1}"
+    )
 
     derived.append(
         DerivedLatentTable(
@@ -488,7 +495,8 @@ def _try_derive_one(
             detected_child_ids=[c.table_id for c, _ in children],
             note_text=lp.note_text,
             derivation_formula=formula,
-            source_display_order=[parent_table.table_id] + [c.table_id for c, _ in children],
+            source_display_order=[parent_table.table_id]
+            + [c.table_id for c, _ in children],
             reasoning=(
                 f"注記「{lp.note_text[:100]}{'…' if len(lp.note_text) > 100 else ''}」に"
                 f"よれば「{missing_name}」は「{parent_label}」の構成要素として記載されているが"
