@@ -1496,8 +1496,8 @@ def _build_auto_irs_from_latent(
     IRを生成する。
 
     優先度ルール（グループに2軸統合IRが生成できる場合）:
-      - 2軸統合が「統合する」 → 2軸IRのみ返す（1軸IRは非表示・非実行）
-      - 2軸統合が「統合しない」 → 1軸IRのみ返す（2軸IRは除外）
+      - 2軸IRは常に result に含める（ユーザーがいつでも選択を変更できるようにする）
+      - 2軸統合が「統合しない」の場合のみ、1軸IRも追加する
     2軸統合が生成できない（メンバーが1件のみ）場合は常に1軸IRを返す。
     """
     result = []
@@ -1633,12 +1633,11 @@ def _build_auto_irs_from_latent(
             )
             per_sheet_irs.append((ir, gk))
 
-        # ── 優先度ルール: 2軸が「統合する」なら2軸IRのみ、「統合しない」なら1軸IRのみ ──
+        # ── 優先度ルール: 2軸IRは常に表示し、「統合しない」の場合のみ1軸IRを追加 ──
         if cross_ir is not None:
-            if auto_int_dec.get(cross_rec_id, True):
-                result.append((cross_ir, gk))        # 2軸のみ
-            else:
-                result.extend(per_sheet_irs)          # 1軸のみ
+            result.append((cross_ir, gk))            # 常に2軸カードを表示
+            if not auto_int_dec.get(cross_rec_id, True):
+                result.extend(per_sheet_irs)          # 2軸「統合しない」の場合のみ1軸を追加
         else:
             result.extend(per_sheet_irs)              # 2軸なし → 常に1軸
 
