@@ -1430,6 +1430,9 @@ def _build_auto_irs_from_latent(
     (IntegrationRecommendation, group_key) タプルのフラットリストを返す。
     latent_group_decisions[group_key] が True かつDLTが少なくとも1つ存在するグループのみ
     IRを生成する。
+
+    グループメンバーが複数の異なるシートにまたがる場合は、シート横断の2軸統合IR
+    （構成要素軸 × シート軸）を先頭に追加する。
     """
     result = []
     lg_dec = st.session_state.get("latent_group_decisions", {})
@@ -1441,6 +1444,74 @@ def _build_auto_irs_from_latent(
         if not group.has_derived:
             continue
 
+        members_with_dlt = [(lp, dlt) for lp, dlt in group.members if dlt is not None]
+
+        # ── シート横断2軸統合IR（複数シートにまたがる場合のみ）─────────────────
+        if len(members_with_dlt) >= 2:
+            cross_ids: list = []
+            cross_multi_vals: dict = {}
+
+            for lp, dlt in members_with_dlt:
+                src = ext_tables_dict.get(lp.source_table_id)
+                sheet_val = src.sheet_name if src else lp.source_table_id
+
+                for i, tid in enumerate(lp.detected_table_ids):
+                    cat_val = lp.detected_names[i] if i < len(lp.detected_names) else tid
+                    cross_ids.append(tid)
+                    cross_multi_vals[tid] = [cat_val, sheet_val]
+
+                cross_ids.append(dlt.proposal_id)
+                cross_multi_vals[dlt.proposal_id] = [dlt.derived_name, sheet_val]
+
+            if len(cross_ids) >= 4:
+                cat_names_all = group.detected_names + group.missing_names
+                cat_col_name = _infer_col_name_from_values(cat_names_all)
+
+                sheet_names_unique = list(dict.fromkeys(
+                    cross_multi_vals[tid][1] for tid in cross_ids
+                ))
+                sheet_col_name = _infer_col_name_from_values(sheet_names_unique)
+                if not sheet_col_name or sheet_col_name == "種別":
+                    sheet_col_name = "シート"
+
+                cross_rec_id = f"latent_auto_cross2_{gk}"
+
+                if "latent_auto_int_decisions" not in st.session_state:
+                    st.session_state.latent_auto_int_decisions = {}
+                if cross_rec_id not in st.session_state.latent_auto_int_decisions:
+                    st.session_state.latent_auto_int_decisions[cross_rec_id] = True
+
+                cross_ir = IntegrationRecommendation(
+                    recommendation_id=cross_rec_id,
+                    group_name=(
+                        f"{'・'.join(group.missing_names)} × {sheet_col_name} "
+                        f"2軸統合テーブル"
+                    ),
+                    description=(
+                        f"差分推定した「{'・'.join(group.missing_names)}」を含む"
+                        f"「{'・'.join(cat_names_all)}」を"
+                        f"全{sheet_col_name}横断で統合した2軸テーブル"
+                    ),
+                    table_ids=cross_ids,
+                    new_column_name=cat_col_name,
+                    new_column_values={tid: cross_multi_vals[tid][0] for tid in cross_ids},
+                    reasoning=(
+                        f"潜在テーブル「{'・'.join(group.missing_names)}」の差分推定により、"
+                        f"「{cat_col_name}」軸と「{sheet_col_name}」軸の2軸で"
+                        f"全{sheet_col_name}のテーブルを統合できます。"
+                    ),
+                    new_column_names=[cat_col_name, sheet_col_name],
+                    new_column_multi_values={
+                        tid: list(v) for tid, v in cross_multi_vals.items()
+                    },
+                    # 構成要素軸(axis 0)の親を設定することでマスタ生成が機能する。
+                    # シート軸(axis 1)は親なし（シート自体が軸なのでマスタ不要）。
+                    axis_parent_table_ids=[members_with_dlt[0][0].source_table_id, None],
+                    axis_parent_label_columns=[None, None],
+                )
+                result.append((cross_ir, gk))
+
+        # ── シートごとの1軸統合IR（構成要素軸）──────────────────────────────
         for lp, dlt in group.members:
             if dlt is None:
                 continue
