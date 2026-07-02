@@ -1515,6 +1515,33 @@ def _build_auto_irs_from_latent(
 
         members_with_dlt = [(lp, dlt) for lp, dlt in group.members if dlt is not None]
 
+        # ── クロスシート集計メンバーを2軸統合から除外する ────────────────────────
+        # あるメンバーの親テーブルの数値合計が他の全メンバーの合計に近い場合（許容誤差5%以内）、
+        # そのメンバーは他シートを束ねたクロスシート集計であると判定し除外する。
+        # 例: 拠点A + 拠点B = 全拠点集計 の場合、全拠点集計メンバーは冗長として除外する。
+        if len(members_with_dlt) >= 3:
+            def _num_total(tid: str) -> float:
+                t = tables_dict.get(tid)
+                if t is None or t.df is None or t.df.empty:
+                    return 0.0
+                try:
+                    return float(t.df.select_dtypes(include="number").abs().values.sum())
+                except Exception:
+                    return 0.0
+
+            _parent_totals = [_num_total(dlt.parent_table_id) for _, dlt in members_with_dlt]
+            _non_summary = []
+            for _i, (lp, dlt) in enumerate(members_with_dlt):
+                _others = sum(v for _j, v in enumerate(_parent_totals) if _j != _i)
+                _this = _parent_totals[_i]
+                if _others > 1e-9 and _this > 1e-9:
+                    _ratio = abs(_this - _others) / max(_this, _others)
+                    if _ratio < 0.05:
+                        continue  # クロスシート集計 → 除外
+                _non_summary.append((lp, dlt))
+            if len(_non_summary) >= 2:
+                members_with_dlt = _non_summary
+
         # ── 2軸統合IR を構築する（メンバーが2件以上の場合）─────────────────────
         cross_ir = None
         cross_rec_id = f"latent_auto_cross2_{gk}"
@@ -1792,13 +1819,17 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
             unsafe_allow_html=True,
         )
 
+        # 代表メンバーの集計テーブル名（ソーステーブル = 注記の記載元 = 集計親）
+        _rep_source_title = group.members[0][0].source_title if group.members else ""
         c_det, c_miss = st.columns(2)
         with c_det:
-            st.markdown("**検出済み（照合済み）**")
+            st.markdown("**検出テーブル**")
+            if _rep_source_title:
+                st.markdown(f"📊 {_rep_source_title}（集計対象）")
             for name in group.detected_names:
                 st.markdown(f"✅ {name}")
         with c_miss:
-            st.markdown("**未検出（差分推定対象）**")
+            st.markdown("**潜在テーブル候補**")
             for name in group.missing_names:
                 st.markdown(
                     f"<span style='color:#e08080'>❓ {name}</span>",
@@ -1823,8 +1854,8 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
         st.divider()
         c_info, c_dec = st.columns([2, 1])
         with c_info:
-            with st.expander("💡 推奨理由", expanded=False):
-                st.caption(group.members[0][0].reasoning)
+            st.markdown("**💡 推奨理由**")
+            st.caption(group.members[0][0].reasoning)
         with c_dec:
             st.markdown("<br>", unsafe_allow_html=True)
             decision = st.radio(
@@ -2817,15 +2848,20 @@ def _render_derived_before_after(
     for i, tid in enumerate(all_display[:n_disp]):
         with cols[i]:
             if tid == dlt.parent_table_id:
-                _table_card_mini(tid, "集計テーブル", "#2a607a")
+                _table_card_mini(tid, f"集計テーブル：{dlt.parent_title}", "#2a607a")
             else:
-                _table_card_mini(tid, "検出済み構成要素", "#4a5a3a")
+                _child_t = tables_dict.get(tid)
+                _child_title = (_child_t.title if _child_t else None) or tid
+                _table_card_mini(tid, f"集計元テーブル：{_child_title}", "#4a5a3a")
     if len(all_display) > n_disp:
         with st.expander(f"他 {len(all_display) - n_disp} テーブルを見る", expanded=False):
             for tid in all_display[n_disp:]:
-                role = "集計テーブル" if tid == dlt.parent_table_id else "検出済み構成要素"
-                color = "#2a607a" if tid == dlt.parent_table_id else "#4a5a3a"
-                _table_card_mini(tid, role, color)
+                if tid == dlt.parent_table_id:
+                    _table_card_mini(tid, f"集計テーブル：{dlt.parent_title}", "#2a607a")
+                else:
+                    _child_t = tables_dict.get(tid)
+                    _child_title = (_child_t.title if _child_t else None) or tid
+                    _table_card_mini(tid, f"集計元テーブル：{_child_title}", "#4a5a3a")
 
     # ── 差分計算セパレーター ─────────────────────────────────────────────────
     st.markdown(

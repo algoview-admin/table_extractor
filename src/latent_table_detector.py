@@ -313,7 +313,7 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
             f"{len(entities)} 件の名称が列挙されています。"
             f"うち {len(detected_names)} 件（{', '.join(detected_names)}）は検出済みですが、"
             f"{len(missing_names)} 件（{', '.join(missing_names)}）は未検出です。"
-            f"これらのテーブルが実際に存在する可能性があります。"
+            f"{'この' if len(missing_names) == 1 else 'これら'}のテーブルが実際に存在する可能性があります。"
         )
 
         proposals.append(
@@ -472,9 +472,15 @@ def _try_derive_one(
         f"  −  ( {' + '.join(child_labels)} )"
     )
 
+    # DLTのIDをソースシート名を接頭辞として生成し、どのシートから派生したかを示す
+    # Python 3の\wはUnicode対応のため、日本語文字はそのまま保持しスペース等のみ_に変換する
+    _sheet_raw = getattr(parent_table, "sheet_name", "") or ""
+    _sheet_prefix = re.sub(r'\W', '_', _sheet_raw).strip('_')
+    _dlt_proposal_id = f"{_sheet_prefix}_DLT{len(derived) + 1}" if _sheet_prefix else f"DLT_{len(derived) + 1}"
+
     derived.append(
         DerivedLatentTable(
-            proposal_id=f"DLT_{len(derived) + 1}",
+            proposal_id=_dlt_proposal_id,
             derived_name=missing_name,
             df=derived_df,
             parent_table_id=parent_table.table_id,
