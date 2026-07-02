@@ -2267,6 +2267,10 @@ def _build_final_tables():
         for _lp, _dlt in _grp.members:
             if _dlt is None:
                 continue
+            # DLTは統合の統合元として使用する中間テーブルのため、
+            # 単体では最小粒度データではなく非推奨テーブルとして扱う。
+            # クロスシート集計除外で auto-IR の table_ids に含まれないDLTも
+            # 同様に非推奨とする。
             final[_dlt.proposal_id] = {
                 "df": _dlt.df,
                 "display_name": _dlt.derived_name,
@@ -2274,9 +2278,9 @@ def _build_final_tables():
                 "reasoning": _dlt.reasoning,
                 "is_integrated": False,
                 "source_ids": _dlt.source_display_order,
-                "recommended": True,
+                "recommended": False,
                 "granularity": "detail",
-                "is_minimum": True,
+                "is_minimum": False,
                 "is_master": False,
             }
 
