@@ -1649,15 +1649,20 @@ def _clip_ai_irs_by_latent_groups(
     latent_groups: List[LatentTableGroup],
     tables_dict: dict,
 ) -> list:
-    """同一sheet内の余分なテーブルを含むAI統合提案を刈り込む。
+    """潜在グループの検証済み兄弟関係と一致しないテーブルをAI統合提案から除去する。
 
-    潜在グループがテーブルD1, D2を兄弟（同じ集計の検出済み構成要素）と
-    認識している場合、{D1, D2, ...extras}を含むAI IRのうち、extrasが
-    D1/D2と同じsheetにある場合は {D1, D2} のみに刈り込む。
-    これにより、誤ってグループ化されたテーブル（例: X_1+X_2が兄弟のときのX_D）が
-    統合提案を汚染するのを防ぐ。
+    2段階の刈り込みを行う：
 
-    異なるsheetからのextrasを含むクロスsheet統合はそのまま変更しない。
+    ステップ1（同一シート刈り込み）:
+      潜在グループがD1, D2を兄弟（検証済み集計構成要素）と認識している場合、
+      {D1, D2, ...extras}を含むAI IRのうち、extrasがD1/D2と同一シートにある
+      場合は {D1, D2} のみに刈り込む。
+
+    ステップ2（クロスシート刈り込み）:
+      ステップ1で刈り込まれなかったIRが、兄弟テーブル以外のテーブルを含む場合、
+      全グループ横断の兄弟集合（all_sib_tables）外のテーブルを除去する。
+      これにより、複数シートにまたがる誤ったIR（例: 兄弟X_1+X_2に加えて
+      別集計軸テーブルX_Dを含むクロスシートIR）も正しく刈り込まれる。
     """
     # 全潜在グループメンバーから兄弟セットを収集する
     sibling_sets: List[frozenset] = []
@@ -1669,43 +1674,69 @@ def _clip_ai_irs_by_latent_groups(
     if not sibling_sets:
         return irs
 
+    # 全兄弟セットの和集合（クロスシート刈り込みに使用）
+    all_sib_tables: set = set()
+    for ss in sibling_sets:
+        all_sib_tables.update(ss)
+
+    def _make_trimmed(base_ir, keep_set):
+        """keep_set のテーブルのみ残した IntegrationRecommendation を返す。"""
+        new_ids = [t for t in base_ir.table_ids if t in keep_set]
+        if len(new_ids) < 2:
+            return None
+        return IntegrationRecommendation(
+            recommendation_id=base_ir.recommendation_id,
+            group_name=base_ir.group_name,
+            description=base_ir.description,
+            table_ids=new_ids,
+            new_column_name=base_ir.new_column_name,
+            new_column_values={k: v for k, v in base_ir.new_column_values.items() if k in keep_set},
+            reasoning=base_ir.reasoning,
+            parent_table_id=base_ir.parent_table_id,
+            parent_label_column=base_ir.parent_label_column,
+            user_decision=base_ir.user_decision,
+            new_column_names=base_ir.new_column_names,
+            new_column_multi_values={
+                k: v for k, v in base_ir.new_column_multi_values.items() if k in keep_set
+            },
+            axis_parent_table_ids=base_ir.axis_parent_table_ids,
+            axis_parent_label_columns=base_ir.axis_parent_label_columns,
+        )
+
     result = []
     for ir in irs:
         ir_set = frozenset(ir.table_ids)
         trimmed_ir = ir
+
+        # ── ステップ1: 同一シート内の余分なテーブルを刈り込む ────────────────
         for sib_set in sibling_sets:
-            # sib_setがこのIRのテーブルの真部分集合の場合のみ刈り込む
             if not (sib_set < ir_set and len(sib_set) >= 2):
                 continue
             extras = ir_set - sib_set
-            # ガード: extrasが兄弟と同じsheet(s)にある場合のみ刈り込む
             sib_sheets = {tables_dict[t].sheet_name for t in sib_set if t in tables_dict}
             extra_sheets = {tables_dict[t].sheet_name for t in extras if t in tables_dict}
             if not sib_sheets or not (extra_sheets <= sib_sheets):
-                continue  # クロスsheetのextras — そのまま変更しない
-            # 刈り込み: 兄弟テーブルのみを残す
-            new_ids = [t for t in ir.table_ids if t in sib_set]
-            if len(new_ids) < 2:
-                continue
-            trimmed_ir = IntegrationRecommendation(
-                recommendation_id=ir.recommendation_id,
-                group_name=ir.group_name,
-                description=ir.description,
-                table_ids=new_ids,
-                new_column_name=ir.new_column_name,
-                new_column_values={k: v for k, v in ir.new_column_values.items() if k in sib_set},
-                reasoning=ir.reasoning,
-                parent_table_id=ir.parent_table_id,
-                parent_label_column=ir.parent_label_column,
-                user_decision=ir.user_decision,
-                new_column_names=ir.new_column_names,
-                new_column_multi_values={
-                    k: v for k, v in ir.new_column_multi_values.items() if k in sib_set
-                },
-                axis_parent_table_ids=ir.axis_parent_table_ids,
-                axis_parent_label_columns=ir.axis_parent_label_columns,
-            )
+                continue  # クロスsheetのextras — ステップ2で処理
+            clipped = _make_trimmed(ir, sib_set)
+            if clipped is not None:
+                trimmed_ir = clipped
             break  # 最初に一致した兄弟セットを使用する
+
+        # ── ステップ2: クロスシートIRから非兄弟テーブルを除去 ────────────────
+        # ステップ1で刈り込まれていない場合のみ実行する。
+        # IRが兄弟テーブルと非兄弟テーブルの両方を含む場合、
+        # 全グループ横断の兄弟集合に含まれないテーブルを除去する。
+        # （例: 複数シートにまたがる {X_1_A, X_2_A, X_D_A, X_1_B, X_2_B, X_D_B}
+        #        → 非兄弟の X_D_A, X_D_B を除去して {X_1_A, X_2_A, X_1_B, X_2_B} にする）
+        if trimmed_ir is ir:
+            cur_set = frozenset(trimmed_ir.table_ids)
+            in_sib = cur_set & all_sib_tables
+            out_sib = cur_set - all_sib_tables
+            if in_sib and out_sib:
+                clipped = _make_trimmed(trimmed_ir, all_sib_tables)
+                if clipped is not None:
+                    trimmed_ir = clipped
+
         result.append(trimmed_ir)
     return result
 
@@ -1961,8 +1992,9 @@ def step4():
         if len(_sup_real) < 2:
             continue
         for _ai_ir in _ai_irs_trimmed:
-            # auto-IRの実テーブルが全てAI IRに含まれる場合は抑制する
-            if _sup_real.issubset(set(_ai_ir.table_ids)):
+            # AI IRの全テーブルがauto-IRの実テーブルに含まれる場合は抑制する
+            # （auto-IRがDLTを加えてAI IRを上書きするため）
+            if set(_ai_ir.table_ids).issubset(_sup_real):
                 _superseded_ai_ids.add(_ai_ir.recommendation_id)
 
     # マージ: auto-IRを先頭に（潜在テーブルが承認された際に上部に表示されるよう）、
@@ -2136,8 +2168,8 @@ def _build_final_tables():
         if len(_auto_real) < 2:
             continue
         for _ai_check in _bft_ai_irs_trimmed:
-            # auto-IRの実テーブルが全てAI IRに含まれる場合は抑制する
-            if _auto_real.issubset(set(_ai_check.table_ids)):
+            # AI IRの全テーブルがauto-IRの実テーブルに含まれる場合は抑制する
+            if set(_ai_check.table_ids).issubset(_auto_real):
                 _superseded_in_bft.add(_ai_check.recommendation_id)
 
     # 承認済みの統合を適用する（置き換えられたものはスキップ）
