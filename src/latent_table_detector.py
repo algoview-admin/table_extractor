@@ -1,27 +1,26 @@
 """
-Latent table detection from out-of-table notes and annotations.
+テーブル外の注記・注釈からの潜在テーブル検出。
 
-Notes/annotations adjacent to detected tables often hint at tables that
-exist elsewhere in the file but were not captured — either because they are
-in a section that was not parsed, or because they lie outside the visible
-scroll range of a single session.
+検出済みテーブルに隣接する注記・注釈は、ファイル内の他の場所に存在するが
+まだ取得されていないテーブルを示唆することが多い — パースされなかったセクションにある場合や、
+単一セッションの表示範囲外にある場合などが該当する。
 
-This module extracts "entity references" (potential table names) from any
-trailing note, cross-references them against the detected table list, and
-returns a LatentTableProposal for every case where:
-  - At least one referenced entity matches a detected table   (confirming relevance)
-  - At least one referenced entity has NO match               (the latent table)
+このモジュールは、末尾の注記から「エンティティ参照」（潜在的なテーブル名）を抽出し、
+検出済みテーブルリストと照合して、以下の条件を満たすすべてのケースに対して
+LatentTableProposal を返す：
+  - 参照エンティティの少なくとも1件が検出済みテーブルに一致する（関連性の確認）
+  - 参照エンティティの少なくとも1件が一致しない（潜在テーブル）
 
-Note-type coverage (rule-based, no API required):
-  1. Aggregation    : "A、B、Cの合計"  →  C might be missing
-  2. Enumeration    : "以下4種: A・B・C・D"  →  D might be missing
-  3. Exclusion      : "AとBを除いた値"  →  A / B might be separate tables
-  4. Reference      : "「A」および「B」を参照"  →  A / B might be tables
-  5. Parallel list  : any 、-separated list where some items match tables
+注記タイプの対応（ルールベース、API 不要）：
+  1. 集計       : "A、B、Cの合計"  →  C が欠損している可能性あり
+  2. 列挙       : "以下4種: A・B・C・D"  →  D が欠損している可能性あり
+  3. 除外       : "AとBを除いた値"  →  A / B が別テーブルの可能性あり
+  4. 参照       : "「A」および「B」を参照"  →  A / B がテーブルの可能性あり
+  5. 並列リスト : 一部の項目がテーブルに一致する、「、」区切りのリスト
 
-For complex natural-language notes that fall outside the patterns above,
-callers can optionally pass them to an LLM (not done here; kept pure rule-based
-to avoid extra latency).
+上記パターンに当てはまらない複雑な自然言語の注記については、
+呼び出し元が LLM に渡すことも可能（ここでは実装しない；余分なレイテンシを避けるため
+純粋なルールベースを維持）。
 """
 
 import difflib
@@ -41,31 +40,31 @@ from .models import DetectedTable, DerivedLatentTable
 
 @dataclass
 class LatentTableProposal:
-    """A proposed table that is referenced in a note but not yet detected."""
+    """注記内で参照されているが、まだ検出されていない提案テーブル。"""
 
     proposal_id: str
-    source_table_id: str        # Table whose trailing note triggered this proposal
-    source_title: str           # Human-readable title of the source table
-    note_text: str              # Full original note text
-    note_type: str              # Inferred note type (aggregation / enumeration / reference / general)
-    all_referenced: List[str]   # All entity names extracted from the note
-    detected_table_ids: List[str]   # table_ids of entities that matched detected tables
-    detected_names: List[str]       # Referenced names that matched detected tables
-    missing_names: List[str]        # Referenced names with NO detected-table match
+    source_table_id: str        # この提案をトリガーした末尾注記を持つテーブル
+    source_title: str           # ソーステーブルの人間が読めるタイトル
+    note_text: str              # 注記の完全な原文テキスト
+    note_type: str              # 推定注記タイプ（aggregation / enumeration / reference / general）
+    all_referenced: List[str]   # 注記から抽出されたすべてのエンティティ名
+    detected_table_ids: List[str]   # 検出済みテーブルに一致したエンティティの table_id
+    detected_names: List[str]       # 検出済みテーブルに一致した参照名
+    missing_names: List[str]        # 検出済みテーブルに一致しなかった参照名
     reasoning: str
 
 
 @dataclass
 class LatentTableGroup:
-    """A group of similar LatentTableProposals (same missing_names) across multiple sheets,
-    bundled with their matching DerivedLatentTable objects."""
+    """複数シートにわたる類似した LatentTableProposal（同じ missing_names）のグループ。
+    対応する DerivedLatentTable オブジェクトとまとめて管理する。"""
 
-    group_key: str           # "|".join(sorted(missing_names)) — used as session-state key
+    group_key: str           # "|".join(sorted(missing_names)) — セッション状態のキーとして使用
     missing_names: List[str]
-    detected_names: List[str]  # from the representative member
+    detected_names: List[str]  # 代表メンバーから取得
     note_type: str
-    note_text: str             # from the representative member
-    members: List              # List of (LatentTableProposal, Optional[DerivedLatentTable])
+    note_text: str             # 代表メンバーから取得
+    members: List              # (LatentTableProposal, Optional[DerivedLatentTable]) のリスト
 
     @property
     def has_derived(self) -> bool:
@@ -79,20 +78,20 @@ class LatentTableGroup:
 _NOTE_PREFIX_RE = re.compile(r"^[※＊\*注）注\)（注\(注意＜<]+\s*")
 _SPLIT_RE = re.compile(r"[、，,・／/＋+及びおよびとや]+")
 
-# Keywords that suggest an aggregation/summation relationship
+# 集計・合計の関係を示すキーワード
 _AGG_KEYWORDS = ("合計", "合算", "総計", "小計", "集計", "の計", "sum")
-# Suffixes to strip before splitting (aggregation variants)
+# 分割前に除去する集計系の末尾表現
 _AGG_SUFFIX_RE = re.compile(
     r"[のをにおける]*(合計|合算|総計|小計|集計|計)\s*$", re.IGNORECASE
 )
-# Keywords that suggest an exclusion relationship
+# 除外の関係を示すキーワード
 _EXCL_KEYWORDS = ("除く", "除いた", "除外", "を除")
-# Keywords that suggest a reference/cross-reference relationship
+# 参照・クロスリファレンスの関係を示すキーワード
 _REF_KEYWORDS = ("参照", "参考", "を見る", "については", "に記載")
 
 
 def _detect_note_type(text: str) -> str:
-    """Classify the note's semantic type for display / filtering purposes."""
+    """注記の意味タイプを分類する（表示・フィルタリング用）。"""
     if any(k in text for k in _AGG_KEYWORDS):
         return "aggregation"
     if any(k in text for k in _EXCL_KEYWORDS):
@@ -103,32 +102,32 @@ def _detect_note_type(text: str) -> str:
 
 
 def _extract_entities(note_text: str) -> List[str]:
-    """Extract candidate entity names from a note.
+    """注記から候補エンティティ名を抽出する。
 
-    Handles the following patterns:
-      - 「quoted names」
-      - (parenthesised names)
-      - Delimiter-separated lists after stripping aggregation suffixes
+    以下のパターンを処理する：
+      - 「引用符付き名称」
+      - （括弧内の名称）
+      - 集計系の末尾を除去した後の区切り文字による列挙
     """
     text = _NOTE_PREFIX_RE.sub("", note_text).strip()
 
     candidates: List[str] = []
 
-    # 1. 「Japanese quote」extraction
+    # 1. 「日本語引用符」の抽出
     candidates.extend(re.findall(r"「([^」]{2,40})」", text))
 
-    # 2. (parenthesised) extraction
+    # 2. （括弧内）の抽出
     candidates.extend(re.findall(r"[（(]([^）)]{2,40})[）)]", text))
 
-    # 3. Delimiter-separated enumeration
-    #    Strip aggregation suffix so "AとBの合計" → "AとB" before split
+    # 3. 区切り文字による列挙の抽出
+    #    集計の末尾を除去してから分割（例："AとBの合計" → "AとB"）
     clean = _AGG_SUFFIX_RE.sub("", text).strip()
-    # Also strip exclusion/reference tails
+    # 除外・参照系の末尾も除去
     clean = re.sub(r"[をにの](除く|除いた|除外|参照|参考|含む|合わせた|まとめた).*$", "", clean).strip()
     parts = _SPLIT_RE.split(clean)
     candidates.extend(p.strip() for p in parts if 2 <= len(p.strip()) <= 60)
 
-    # Deduplicate while preserving order; filter very short/noisy tokens
+    # 順序を保ちながら重複を除去し、短すぎるノイズトークンをフィルタリング
     _NOISE_RE = re.compile(r"^(その|この|以下|上記|なお|ただし|また|※|注|合計|合算|小計|総計|集計)$")
     seen = set()
     result = []
@@ -147,7 +146,7 @@ def _extract_entities(note_text: str) -> List[str]:
 
 
 def _exact_match(name: str, tables: List[DetectedTable]) -> Optional[str]:
-    """Exact or substring match only. Returns table_id or None."""
+    """完全一致または部分文字列一致のみ。table_id または None を返す。"""
     for t in tables:
         title = t.title or ""
         if name == title or name == t.table_id:
@@ -160,11 +159,11 @@ def _exact_match(name: str, tables: List[DetectedTable]) -> Optional[str]:
 
 
 def _fuzzy_match(name: str, tables: List[DetectedTable]) -> Optional[str]:
-    """Fuzzy match against a (pre-filtered) table list. Returns table_id or None.
+    """（事前フィルタリング済みの）テーブルリストに対してファジーマッチを行う。table_id または None を返す。
 
-    Threshold is intentionally high (0.92) to avoid false positives between
-    near-homograph names that differ only in a series suffix (e.g. "X-3" vs
-    "X合計" or "X-D" share a long common prefix but are genuinely different).
+    閾値を意図的に高く設定（0.92）することで、シリーズ末尾の違いのみで
+    区別される準同形名称（例："X-3" と "X合計" や "X-D" は長い共通接頭辞を
+    持つが本質的に異なる）間の誤検知を防ぐ。
     """
     best_ratio = 0.0
     best_id: Optional[str] = None
@@ -183,37 +182,37 @@ def _fuzzy_match(name: str, tables: List[DetectedTable]) -> Optional[str]:
 
 
 def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]:
-    """Scan all detected tables' trailing notes and titles for latent-table proposals.
+    """検出済みテーブルの末尾注記とタイトルをスキャンして潜在テーブルの提案を生成する。
 
-    A proposal is generated when a note (or aggregation-style title) mentions N ≥ 2
-    entity names AND:
-      - at least 1 entity matches a detected table   (confirms the note is relevant)
-      - at least 1 entity has NO detected-table match (the latent/missing table)
+    以下の条件を満たす場合に提案が生成される：注記（または集計系タイトル）が N ≥ 2 件の
+    エンティティ名を含み、かつ：
+      - 少なくとも1件のエンティティが検出済みテーブルに一致する（注記の関連性を確認）
+      - 少なくとも1件のエンティティが検出済みテーブルに一致しない（潜在/欠損テーブル）
 
-    Two scan passes:
-      1. Trailing notes  (t.notes)  — primary path after excel_parser fix
-      2. Table titles    (t.title)  — fallback for notes that were misclassified as
-                                      titles in older project files; only fires when
-                                      the title looks like an enumeration/aggregation
+    2段階スキャン：
+      1. 末尾注記 (t.notes)  — excel_parser 修正後のメインパス
+      2. テーブルタイトル (t.title)  — 旧プロジェクトファイルでタイトルに
+                                        誤分類された注記のフォールバック；
+                                        タイトルが列挙・集計の形式の場合のみ実行
 
-    Matching uses a two-pass strategy to avoid cross-contamination between
-    similarly-named series entries (e.g. C-1 / C-2 / C-3):
-      Pass 1 — exact / substring match for ALL entities, building a
-                "reserved" set of already-claimed table_ids.
-      Pass 2 — fuzzy match only for entities that had no exact match,
-                searching only tables NOT claimed in pass 1.
+    マッチングは類似名シリーズエントリ（例：C-1 / C-2 / C-3）間の
+    クロスコンタミネーションを避けるため2パス戦略を使用：
+      パス1 — 全エンティティに対して完全一致・部分文字列一致を行い、
+               すでに使用された table_id の「予約済み」セットを構築する。
+      パス2 — パス1で一致しなかったエンティティのみファジーマッチを行い、
+               パス1で予約されていないテーブルのみを対象とする。
     """
     proposals: List[LatentTableProposal] = []
-    # Track (source_table_id, frozenset(entities)) already proposed to avoid duplicates
+    # 重複提案を避けるため、(source_table_id, frozenset(entities)) を追跡
     _seen: set = set()
 
-    # Aggregation/enumeration pattern — same regex used in excel_parser._AGG_ENUM_RE
+    # 集計・列挙パターン — excel_parser._AGG_ENUM_RE と同じ正規表現
     _title_note_re = re.compile(
         r"[・、,＋+].+[のをにおける]*(合計|内訳|合算|総計|小計|集計|含む|合わせた|除く|除外)"
     )
 
     def _scan_text(t: DetectedTable, text: str, is_title: bool = False) -> None:
-        """Process a single note/title text against the full table list."""
+        """単一の注記・タイトルテキストをテーブル全件リストと照合して処理する。"""
         entities = _extract_entities(text)
         if len(entities) < 2:
             return
@@ -223,11 +222,11 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
             return
         _seen.add(key)
 
-        # ── Pass 1: exact / substring matches ──────────────────────────
-        # Same-sheet tables are tried first so that when multiple sheets
-        # have identically-named component tables (e.g. "カテゴリX_1" in
-        # both 拜点A and 拜点B), each sheet's note matches its OWN components
-        # rather than borrowing another sheet's tables.
+        # ── パス1：完全一致・部分文字列一致 ──────────────────────────
+        # 同一シートのテーブルを優先して照合する。複数シートに同名の
+        # 同名の構成テーブルが複数シートにまたがって存在する場合、
+        # 各シートの注記が他シートのテーブルを借用するのではなく、
+        # 自シートの構成テーブルに一致するようにする。
         same_sheet = [t2 for t2 in tables if t2.sheet_name == t.sheet_name]
         other_sheet = [t2 for t2 in tables if t2.sheet_name != t.sheet_name]
 
@@ -239,15 +238,15 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
                 exact_map[entity] = mid
                 reserved_ids.add(mid)
 
-        # ── Pass 2: fuzzy on un-reserved tables only ────────────────────
+        # ── パス2：予約済み以外のテーブルのみファジーマッチ ────────────────────
         available = [t2 for t2 in tables if t2.table_id not in reserved_ids]
 
-        # Pre-compute name prefixes of exact-matched tables (first 10 chars).
-        # When at least one entity has already been exact-matched, a fuzzy
-        # candidate that shares the same long prefix is very likely a sibling
-        # in the same series (e.g. "TypeC合計" shares prefix with "TypeC-1").
-        # Accepting such a fuzzy match would incorrectly consume a missing
-        # series member — so we reject it and let it fall through to missing.
+        # 完全一致済みテーブルの名称接頭辞（先頭10文字）を事前計算する。
+        # 1件以上が完全一致済みの場合、同じ長い接頭辞を持つファジー候補は
+        # 同シリーズの兄弟テーブルである可能性が高い（例："TypeC合計" は
+        # "TypeC-1" と接頭辞を共有）。
+        # このようなファジーマッチを受け入れると欠損シリーズメンバーを誤って
+        # 消費してしまうため、拒否して missing に分類する。
         exact_title_prefixes: List[str] = []
         if exact_map:
             id_to_table = {tb.table_id: tb for tb in tables}
@@ -258,7 +257,7 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
                     exact_title_prefixes.append(title[:10])
 
         def _prefix_conflict(candidate_table: DetectedTable) -> bool:
-            """True when the candidate shares a 10-char prefix with an exact-matched table."""
+            """候補テーブルが完全一致済みテーブルと10文字の接頭辞を共有する場合 True を返す。"""
             if not exact_title_prefixes:
                 return False
             c_title = candidate_table.title or ""
@@ -272,15 +271,15 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
             if entity not in exact_map:
                 mid = _fuzzy_match(entity, available)
                 if mid:
-                    # Reject matches where the candidate shares a long-prefix
-                    # with already exact-matched tables (series-sibling guard).
+                    # 完全一致済みテーブルと長い接頭辞を共有する候補を拒否
+                    # （シリーズ兄弟ガード）。
                     cand = next((tb for tb in available if tb.table_id == mid), None)
                     if cand is not None and _prefix_conflict(cand):
                         mid = None
                 if mid:
                     fuzzy_map[entity] = mid
 
-        # ── Classify each entity ────────────────────────────────────────
+        # ── 各エンティティを分類 ────────────────────────────────────────
         detected_ids: List[str] = []
         detected_names: List[str] = []
         missing_names: List[str] = []
@@ -333,11 +332,11 @@ def find_latent_tables(tables: List[DetectedTable]) -> List[LatentTableProposal]
         )
 
     for t in tables:
-        # Primary: trailing notes
+        # メイン：末尾注記
         for note in getattr(t, "notes", None) or []:
             _scan_text(t, note, is_title=False)
 
-        # Fallback: aggregation-style titles (catches notes misclassified by older parser)
+        # フォールバック：集計系タイトル（旧パーサーで注記がタイトルに誤分類されたケースを捕捉）
         title = getattr(t, "title", None) or ""
         if title and _title_note_re.search(title):
             _scan_text(t, title, is_title=True)
@@ -354,21 +353,19 @@ def derive_latent_tables(
     tables: List[DetectedTable],
 ) -> List[DerivedLatentTable]:
     """
-    For each latent table proposal where at least ONE component is missing
-    from a set of tables related by a note, attempt to derive the missing
-    table's data by numeric subtraction:
+    注記によって関連付けられたテーブル群の中で、少なくとも1件の構成要素が
+    欠損している各潜在テーブル提案に対して、数値の引き算によって欠損テーブルの
+    データを導出しようとする：
 
-        missing ≈ aggregate_table − sum(detected_components)
+        欠損 ≈ 集計テーブル − sum(検出済み構成要素)
 
-    The aggregate table (parent) is identified as the candidate with the
-    largest absolute numeric total. When more than one component is missing,
-    the computed residual represents their combined total.
+    集計テーブル（親）は、絶対値の数値合計が最大の候補として識別される。
+    複数の構成要素が欠損している場合、計算された残差はそれらの合算を表す。
 
-    Shape flexibility: only the numeric columns common to ALL candidates are
-    used, so tables that differ only in non-numeric or extra columns can still
-    participate. Row counts must match.
+    形状の柔軟性：全候補に共通する数値列のみを使用するため、数値以外の列や
+    追加列が異なるテーブルでも参加できる。行数は一致する必要がある。
 
-    Returns a list of DerivedLatentTable instances (empty if none can be derived).
+    DerivedLatentTable インスタンスのリストを返す（導出できない場合は空リスト）。
     """
     latent_proposals = find_latent_tables(tables)
     id_to_table = {t.table_id: t for t in tables}
@@ -378,7 +375,7 @@ def derive_latent_tables(
         try:
             _try_derive_one(lp, id_to_table, derived)
         except Exception:
-            pass  # Skip any proposal that raises an unexpected error
+            pass  # 予期しないエラーが発生した提案はスキップ
 
     return derived
 
@@ -388,44 +385,44 @@ def _try_derive_one(
     id_to_table: dict,
     derived: List[DerivedLatentTable],
 ) -> None:
-    """Attempt to derive one latent table from a LatentTableProposal.
-    Appends to `derived` in-place; raises on unrecoverable errors (caller catches)."""
+    """LatentTableProposal から1件の潜在テーブルの導出を試みる。
+    `derived` にインプレースで追記する；回復不能なエラーは raise する（呼び出し元でキャッチ）。"""
 
-    # Need at least one missing component to derive
+    # 導出には少なくとも1件の欠損構成要素が必要
     if not lp.missing_names:
         return
 
-    # Accept any note type — aggregation wording is not required for the math
-    # to work, and some notes phrase the relationship differently ("C-3を含む").
+    # 注記タイプは問わない — 集計の文言がなくても数学的には成立し、
+    # 一部の注記は異なる表現を使う（例："C-3を含む"）。
 
-    # Gather all tables in the relationship: the note source + every detected ref
+    # 関係するすべてのテーブルを収集：注記元テーブル + 検出済み参照テーブル
     candidate_ids: List[str] = [lp.source_table_id] + list(lp.detected_table_ids)
-    candidate_ids_unique = list(dict.fromkeys(candidate_ids))  # preserve order, dedup
+    candidate_ids_unique = list(dict.fromkeys(candidate_ids))  # 順序を保持しつつ重複除去
     candidates = [id_to_table.get(cid) for cid in candidate_ids_unique]
     if any(c is None or c.df is None or c.df.empty for c in candidates):
         return
 
-    # Find numeric columns common to ALL candidates
+    # 全候補に共通する数値列を検索
     common_num_cols: Optional[List] = None
     for c in candidates:
         nc = list(c.df.select_dtypes(include=[np.number]).columns)
         if not nc:
-            return  # This candidate has no numeric data
+            return  # この候補に数値データがない
         if common_num_cols is None:
             common_num_cols = nc
         else:
-            # Keep only columns present in both, in the order of the first candidate
+            # 両方に存在する列のみ残す（最初の候補の順序を維持）
             common_num_cols = [col for col in common_num_cols if col in nc]
 
     if not common_num_cols:
-        return  # No shared numeric columns
+        return  # 共通の数値列がない
 
-    # Row counts must match for element-wise subtraction
+    # 要素ごとの引き算のために行数が一致する必要がある
     row_counts = [len(c.df) for c in candidates]
     if len(set(row_counts)) != 1:
         return
 
-    # Extract numeric arrays for common columns
+    # 共通列の数値配列を抽出
     arrays: List[Tuple["DetectedTable", np.ndarray]] = []
     for c in candidates:
         arr = np.nan_to_num(
@@ -433,10 +430,10 @@ def _try_derive_one(
         )
         arrays.append((c, arr))
 
-    # Identify the PARENT as the candidate with the largest absolute numeric total
+    # 絶対値の数値合計が最大の候補を親（PARENT）として識別
     totals = [float(np.nansum(np.abs(arr))) for _, arr in arrays]
     if max(totals) < 1e-9:
-        return  # All zeros — nothing to derive
+        return  # 全てゼロ — 導出するものがない
 
     parent_idx = int(np.argmax(totals))
     parent_table, parent_arr = arrays[parent_idx]
@@ -446,23 +443,23 @@ def _try_derive_one(
     if not children:
         return
 
-    # Sanity check: parent total must be ≥ 80% of sum of child totals.
+    # サニティチェック：親の合計は子の合計の80%以上でなければならない。
     child_sum_total = sum(float(np.nansum(np.abs(arr))) for _, arr in children)
     if child_sum_total > 0 and totals[parent_idx] < child_sum_total * 0.8:
-        return  # Parent smaller than children — wrong table identified as parent
+        return  # 親が子より小さい — 親として誤ったテーブルが識別されている
 
-    # Compute: missing = parent − sum(detected_children)
+    # 計算：欠損 = 親 − sum(検出済み子テーブル)
     c_sum = np.zeros_like(parent_arr, dtype=float)
     for _, arr in children:
         c_sum += arr
     derived_arr = parent_arr - c_sum
 
-    # Build the derived DataFrame: parent's full structure, numeric cols replaced
+    # 導出 DataFrame を構築：親の全構造を使い、数値列を置換
     derived_df = parent_table.df.copy()
     for ci, col in enumerate(common_num_cols):
         derived_df[col] = derived_arr[:, ci]
 
-    # Human-readable names and formula
+    # 人間が読める名称と数式
     parent_label = parent_table.title or parent_table.table_id
     child_labels = [c.title or c.table_id for c, _ in children]
     missing_name = (
@@ -505,12 +502,12 @@ def group_latent_proposals(
     proposals: List[LatentTableProposal],
     derived_latent: List[DerivedLatentTable],
 ) -> List[LatentTableGroup]:
-    """Group LatentTableProposals by their missing_names set, attaching matching DLTs.
+    """LatentTableProposal を missing_names セットでグループ化し、対応する DLT を付与する。
 
-    Proposals that share the same frozenset of missing_names are considered
-    'similar' (e.g. the same latent table appearing across multiple sheets).
-    Each group is assigned the DerivedLatentTable that was computed from the
-    same source table (parent_table_id == proposal.source_table_id).
+    同じ frozenset の missing_names を持つ提案は「類似」とみなす
+    （例：複数シートにわたって現れる同一の潜在テーブル）。
+    各グループには、同じソーステーブルから計算された DerivedLatentTable が
+    割り当てられる（parent_table_id == proposal.source_table_id）。
     """
     dlt_by_source: dict = {dlt.parent_table_id: dlt for dlt in derived_latent}
     groups: dict = {}

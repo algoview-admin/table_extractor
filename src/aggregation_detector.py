@@ -1,10 +1,10 @@
 """
-Pre-compute hierarchical (sum) relationships between tables based on numeric values.
+数値に基づいてテーブル間の階層的な合計関係を事前計算するモジュール。
 
-A "parent" table is one whose numeric cell values equal (within tolerance) the
-element-wise sum of a subset of other tables that share the same column schema.
-These relationships are detected algorithmically and injected into the AI prompt
-as verified facts, so the AI does not need to infer them from keywords or names.
+「親」テーブルとは、同一の列スキーマを持つ他のテーブルの部分集合の要素ごとの合計に
+（許容誤差の範囲内で）等しい数値セルを持つテーブルである。
+これらの関係はアルゴリズムにより検出され、検証済みの事実としてAIプロンプトに
+注入されるため、AIがキーワードや名称から推測する必要がなくなる。
 """
 
 import math
@@ -18,12 +18,12 @@ from .models import DetectedTable
 
 def detect_sum_relations(tables: List[DetectedTable]) -> List[Dict]:
     """
-    Return all verified sum relationships:
+    検証済みの全合計関係を返す:
       [{"parent_id": str, "child_ids": [str, ...], "match_ratio": float}, ...]
 
-    A relation means: parent.numeric_values ≈ element-wise sum of children.
-    Only tables that share identical column schemas are compared.
-    Multiple relations per parent are possible (different aggregation axes).
+    関係の意味: parent.numeric_values ≈ 子テーブルの要素ごとの合計。
+    同一の列スキーマを持つテーブルのみを比較する。
+    1つの親に対して複数の関係（異なる集計軸）が存在する場合もある。
     """
     groups = _group_by_columns(tables)
     relations: List[Dict] = []
@@ -35,8 +35,8 @@ def detect_sum_relations(tables: List[DetectedTable]) -> List[Dict]:
 
 def format_relation_facts(relations: List[Dict], tables: List[DetectedTable]) -> str:
     """
-    Format pre-computed sum relations as a prompt section for the AI.
-    Returns empty string if no relations found.
+    事前計算済みの合計関係をAI向けのプロンプトセクションとしてフォーマットする。
+    関係が見つからない場合は空文字列を返す。
     """
     if not relations:
         return ""
@@ -73,7 +73,7 @@ def format_relation_facts(relations: List[Dict], tables: List[DetectedTable]) ->
 # ---------------------------------------------------------------------------
 
 def _group_by_columns(tables: List[DetectedTable]) -> List[List[DetectedTable]]:
-    """Group tables that have the exact same column names (same schema)."""
+    """完全に同一の列名（同一スキーマ）を持つテーブルをグループ化する。"""
     buckets: Dict[Tuple, List[DetectedTable]] = {}
     for t in tables:
         if t.df is None or t.df.empty:
@@ -97,9 +97,9 @@ def _total(t: DetectedTable) -> float:
 
 def _match_ratio(parent: DetectedTable, children: List[DetectedTable], tol: float = 0.03) -> float:
     """
-    Returns the fraction of non-trivial numeric cells where
-    parent_value ≈ sum(child_values), within relative tolerance `tol`.
-    Returns -1.0 if shapes are incompatible.
+    相対許容誤差 `tol` の範囲内で parent_value ≈ sum(child_values) を満たす、
+    意味のある数値セルの割合を返す。
+    形状が一致しない場合は -1.0 を返す。
     """
     p = _numeric_array(parent)
     if p is None:
@@ -114,7 +114,7 @@ def _match_ratio(parent: DetectedTable, children: List[DetectedTable], tol: floa
         child_sum += np.nan_to_num(a, nan=0.0)
 
     p_clean = np.nan_to_num(p, nan=0.0)
-    mask = np.abs(p_clean) > 0.5  # only compare cells with meaningful values
+    mask = np.abs(p_clean) > 0.5  # 意味のある値を持つセルのみを比較する
 
     if mask.sum() == 0:
         return -1.0
@@ -124,17 +124,17 @@ def _match_ratio(parent: DetectedTable, children: List[DetectedTable], tol: floa
 
 
 def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
-    """Find all sum relationships within a set of structurally identical tables.
+    """構造的に同一のテーブル集合内で全ての合計関係を検出する。
 
-    Performance guards to prevent combinatorial explosion in large groups:
-    - MAX_SMALLER: cap candidate children per parent to the MAX_SMALLER tables
-      with the largest totals (direct children almost always have large sub-totals)
-    - MAX_K: real-world aggregation chains rarely exceed MAX_K direct children
-    - COMBO_CAP: dynamically reduce max_k if the search space still exceeds this
+    大規模グループでの組み合わせ爆発を防ぐためのパフォーマンス制限:
+    - MAX_SMALLER: 親ごとの子候補を合計値の大きい上位 MAX_SMALLER 件に制限する
+      （直接の子はほぼ常に大きい小計を持つ）
+    - MAX_K: 実際の集計チェーンで MAX_K を超える直接の子は稀
+    - COMBO_CAP: 探索空間がこの値を超える場合は max_k を動的に削減する
     """
-    MAX_SMALLER = 14    # candidate pool per parent
-    MAX_K = 9           # rarely more than 9 direct children in practice
-    COMBO_CAP = 50_000  # combinations cap per parent; reduce max_k if exceeded
+    MAX_SMALLER = 14    # 親ごとの候補プール数
+    MAX_K = 9           # 実際には直接の子が9を超えることは稀
+    COMBO_CAP = 50_000  # 親ごとの組み合わせ上限; 超過時は max_k を削減
 
     totals = {t.table_id: _total(t) for t in group}
     sorted_group = sorted(group, key=lambda t: totals[t.table_id])
@@ -151,12 +151,12 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
         if len(smaller) < 2:
             continue
 
-        # Limit candidate pool: prioritise tables from the SAME sheet as the
-        # parent, then fill remaining slots with the largest other-sheet tables.
-        # Without this, multi-sheet groups cause other sheets' larger intermediate
-        # aggregates to displace the smaller but correct direct children of
-        # within-sheet aggregates (e.g. a 5-child relationship fails because two
-        # of the smaller children are pushed out by a sibling branch's tables).
+        # 候補プールを制限: 親と同一sheetのテーブルを優先し、残りのスロットは
+        # 他sheetのうち合計値の大きいテーブルで埋める。
+        # これを行わないと、複数sheetのグループで他sheetの大きな中間集計が
+        # 同一sheet内の小さいが正しい直接の子を押しのけてしまう
+        # （例: 2つの小さい子が兄弟ブランチのテーブルに追い出されて
+        # 5つの子関係の検出が失敗するケース）。
         if len(smaller) > MAX_SMALLER:
             same = sorted(
                 [t for t in smaller if t.sheet_name == parent.sheet_name],
@@ -171,7 +171,7 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
 
         max_k = min(len(smaller), MAX_K)
 
-        # Reduce max_k dynamically until the total combination count fits COMBO_CAP.
+        # 組み合わせ総数が COMBO_CAP 以内に収まるまで max_k を動的に削減する。
         while max_k > 2:
             n_combos = sum(math.comb(len(smaller), k) for k in range(2, max_k + 1))
             if n_combos <= COMBO_CAP:
@@ -184,22 +184,22 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
         for k in range(2, max_k + 1):
             for subset in combinations(smaller, k):
                 s_total = sum(totals[t.table_id] for t in subset)
-                # Fast total-level pruning (tighter window than before)
+                # 合計値レベルでの高速枝刈り（以前より狭いウィンドウ）
                 if s_total > p_total * 1.15 or s_total < p_total * 0.72:
                     continue
 
-                # Cross-sheet coverage guard:
-                # A valid relation must be either (a) purely within the parent's sheet,
-                # or (b) purely cross-sheet with exactly one child per every other sheet.
-                # This prevents false positives where a branch-level leaf table
-                # coincidentally equals the numeric sum of the same leaf table in a
-                # subset of sibling branches — a common occurrence with small totals.
+                # sheet横断カバレッジのガード:
+                # 有効な関係は (a) 親と同一sheet内のみ、または
+                # (b) 他の全sheetにそれぞれ1つの子が存在する純粋なsheet横断、のいずれかに限る。
+                # これにより、ブランチレベルのリーフテーブルが兄弟ブランチの一部における
+                # 同じリーフテーブルの数値合計に偶然一致してしまう誤検知を防ぐ
+                # （小さい合計値でよく起こるケース）。
                 cross_kids = [t for t in subset if t.sheet_name != parent.sheet_name]
                 if cross_kids:
-                    # Reject mixed (within + cross) combinations.
+                    # 同一sheet内と他sheetの混在を除外する。
                     if len(cross_kids) != len(subset):
                         continue
-                    # Reject partial cross-sheet: all other sheets must contribute.
+                    # 部分的なsheet横断を除外: 他の全sheetが必ず含まれていなければならない。
                     required = all_sheets_in_group - {parent.sheet_name}
                     if {t.sheet_name for t in cross_kids} != required:
                         continue
@@ -208,7 +208,7 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
                 if ratio >= 0.88:
                     found_sets.append((frozenset(t.table_id for t in subset), ratio))
 
-        # Keep only minimal valid subsets (remove supersets of other found subsets)
+        # 最小の有効部分集合のみを保持する（他の見つかった部分集合の上位集合を除去する）
         minimal = [
             (s, r) for s, r in found_sets
             if not any(other < s for other, _ in found_sets)
@@ -225,15 +225,15 @@ def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
 
 def detect_sheet_levels(tables: List[DetectedTable]) -> List[Dict]:
     """
-    Identify potential aggregate sheets by comparing per-sheet numeric totals
-    within same-schema table groups.
+    同一スキーマのテーブルグループ内でsheet単位の数値合計を比較し、
+    集計sheetの候補を特定する。
 
-    A sheet is flagged as aggregate candidate when its combined numeric total is
-    consistently ≥ 1.5× the average of other sheets across at least two schema
-    groups.  This detects organisational roll-ups (e.g. a division sheet that
-    sums branch sheets) even when only a subset of source sheets is present.
+    sheetの合計数値が少なくとも2つのスキーマグループにわたって
+    他のsheetの平均値の1.5倍以上になる場合、そのsheetを集計候補としてフラグを立てる。
+    これにより、元sheetの一部しか存在しない場合でも、組織的なロールアップ
+    （例: 支店sheetを集計する部門sheet）を検出できる。
 
-    Returns list of {"aggregate_sheet": str, "source_sheets": [str]} dicts.
+    {"aggregate_sheet": str, "source_sheets": [str]} の dict のリストを返す。
     """
     groups = _group_by_columns(tables)
 
@@ -277,9 +277,9 @@ def detect_sheet_levels(tables: List[DetectedTable]) -> List[Dict]:
 
 
 def format_sheet_level_hints(hints: List[Dict]) -> str:
-    """Format aggregate-sheet hints as a prompt section for the AI.
+    """集計sheetのヒントをAI向けのプロンプトセクションとしてフォーマットする。
 
-    Returns empty string when no aggregate sheets were detected.
+    集計sheetが検出されなかった場合は空文字列を返す。
     """
     if not hints:
         return ""
@@ -306,16 +306,15 @@ def format_sheet_level_hints(hints: List[Dict]) -> str:
 
 def _drop_supersets(relations: List[Dict]) -> List[Dict]:
     """
-    For each parent, remove only child sets that are strict supersets of another
-    valid set for the same parent.  This preserves ALL minimal decompositions,
-    including those that represent DIFFERENT aggregation axes — e.g. a geographic
-    axis (3 branches) and a product axis (4 service types) are both kept even
-    though they have different cardinalities.
+    各親に対して、同じ親に対する別の有効な集合の真の上位集合となる子集合のみを除去する。
+    これにより、異なる集計軸を表すものも含め、全ての最小分解を保持する。
+    例えば、地理軸（3支店）と商品軸（4サービス種別）はカーディナリティが異なっても
+    両方が保持される。
 
-    Previous behaviour (keep only min-size) incorrectly discarded the larger-axis
-    relation, causing the AI to miss multi-level hierarchies such as:
+    以前の動作（最小サイズのみ保持）では、大きい軸の関係を誤って破棄していた。
+    その結果、AIが以下のような多階層構造を見逃していた:
       • C-1 + C-2 → TypeC-total → Next-total → ServiceA-total
-    where TypeC-total is both a child (of Next-total) and a parent (of C-1/C-2).
+    ここで TypeC-total は子（Next-total の）であると同時に親（C-1/C-2 の）でもある。
     """
     from itertools import groupby
 
@@ -324,8 +323,8 @@ def _drop_supersets(relations: List[Dict]) -> List[Dict]:
     for _, group_iter in groupby(sorted(relations, key=keyfn), key=keyfn):
         group_rels = list(group_iter)
         sets = [(frozenset(r["child_ids"]), r) for r in group_rels]
-        # Keep r only when no other relation for the same parent has a STRICT
-        # subset of r's children (i.e. r is not a superset of another relation).
+        # 同じ親に対して r の子の真部分集合を持つ別の関係が存在しない場合のみ r を保持する
+        # （つまり、r が別の関係の上位集合でない場合）。
         result.extend(
             r for s, r in sets
             if not any(other < s for other, _ in sets)

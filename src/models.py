@@ -12,8 +12,8 @@ class DetectedTable:
     start_col: int
     end_col: int
     df: Optional[pd.DataFrame] = field(default=None, repr=False)
-    title: Optional[str] = None  # Section title row detected immediately above the table
-    notes: List[str] = field(default_factory=list)  # annotation/footnote rows trailing the table
+    title: Optional[str] = None  # テーブルの直上で検出されたセクションタイトル行
+    notes: List[str] = field(default_factory=list)  # テーブル末尾に続く注釈・脚注行
 
     @property
     def row_count(self) -> int:
@@ -67,7 +67,7 @@ class TableAnalysisResult:
     table_id: str
     display_name: str
     description: str
-    granularity_level: str  # "detail", "summary", "master", "reference", "unknown"
+    granularity_level: str  # "detail"（明細）, "summary"（集計）, "master"（マスタ）, "reference"（参照）, "unknown"（不明）
     is_master_table: bool
     parent_table_ids: List[str]
     child_table_ids: List[str]
@@ -86,16 +86,16 @@ class IntegrationRecommendation:
     group_name: str
     description: str
     table_ids: List[str]
-    new_column_name: str          # kept for backward compat (= new_column_names[0])
-    new_column_values: Dict[str, str]  # kept for backward compat (first axis only)
+    new_column_name: str          # 後方互換のために保持（= new_column_names[0]）
+    new_column_values: Dict[str, str]  # 後方互換のために保持（最初の軸のみ）
     reasoning: str
     parent_table_id: Optional[str] = None
     parent_label_column: Optional[str] = None
     user_decision: Optional[bool] = None
-    # Multi-axis support: if populated these take precedence over the single-axis fields above
+    # 多軸対応: 設定されている場合、上記の単一軸フィールドより優先される
     new_column_names: List[str] = field(default_factory=list)
     new_column_multi_values: Dict[str, List[str]] = field(default_factory=dict)
-    # Per-axis parent info: index corresponds to new_column_names index
+    # 軸ごとの親情報: インデックスは new_column_names のインデックスに対応
     axis_parent_table_ids: List[Optional[str]] = field(default_factory=list)
     axis_parent_label_columns: List[Optional[str]] = field(default_factory=list)
 
@@ -110,21 +110,21 @@ class MasterTableInfo:
 
 @dataclass
 class DerivedLatentTable:
-    """A table that does not exist explicitly but can be computed by numeric
-    subtraction from a parent aggregate table and its detected components,
-    as suggested by an aggregation note attached to one of the related tables."""
+    """明示的には存在しないが、親の集計テーブルと検出済みの構成要素から
+    数値の差し引きにより算出可能なテーブル。
+    関連テーブルに付属する集計注記によって示唆される。"""
 
     proposal_id: str
-    derived_name: str              # Inferred name of the missing component
-    df: pd.DataFrame               # Computed data (parent − sum_of_detected_children)
-    parent_table_id: str           # Table ID of the aggregate/parent
-    parent_title: str              # Display title of the aggregate table
-    detected_child_ids: List[str]  # IDs of the detected components used
-    note_text: str                 # The original annotation text
-    derivation_formula: str        # Human-readable formula showing the computation
+    derived_name: str              # 欠落している構成要素の推定名
+    df: pd.DataFrame               # 算出済みデータ（親 − 検出済み子の合計）
+    parent_table_id: str           # 集計／親テーブルの table ID
+    parent_title: str              # 集計テーブルの表示タイトル
+    detected_child_ids: List[str]  # 使用した検出済み構成要素の ID
+    note_text: str                 # 元の注釈テキスト
+    derivation_formula: str        # 計算内容を示す人間可読な数式
     source_display_order: List[str]  # [parent_id, child1_id, child2_id, ...]
     reasoning: str
-    user_decision: Optional[bool] = None  # True=include, False=exclude, None=pending
+    user_decision: Optional[bool] = None  # True=含める, False=除外, None=未決定
 
 
 @dataclass

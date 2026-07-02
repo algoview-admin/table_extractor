@@ -24,7 +24,7 @@ from src.models import DerivedLatentTable, IntegrationRecommendation
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Page config & CSS
+# ページ設定 & CSS
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
@@ -173,7 +173,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Session state
+# Session state の初期化
 # ---------------------------------------------------------------------------
 
 STEP_LABELS = [
@@ -218,8 +218,8 @@ def _reset():
 
 
 def _go_to(step: int, stop_auto: bool = True) -> None:
-    """Navigation callback — runs before the next render, so the header
-    always shows the correct active tab on the very first rerun after a click."""
+    """ナビゲーションコールバック — 次のレンダリング前に実行されるため、
+    クリック後の最初のrerunで常に正しいアクティブタブがヘッダーに表示される。"""
     if stop_auto:
         st.session_state.auto_processing = False
     st.session_state.step = step
@@ -231,7 +231,7 @@ def _build_and_go_step5() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Project save / load
+# プロジェクトの保存 / 読み込み
 # ---------------------------------------------------------------------------
 
 _PROJECT_VERSION = "1.0"
@@ -256,7 +256,7 @@ _SAVE_KEYS = [
 
 
 def _serialize_project() -> bytes:
-    """Pickle the current session state into a .tep project blob."""
+    """現在のsession stateを.tepプロジェクトblobにPickle化する。"""
     payload = {
         "__tep_version__": _PROJECT_VERSION,
         "__saved_at__": datetime.now().isoformat(timespec="seconds"),
@@ -267,7 +267,7 @@ def _serialize_project() -> bytes:
 
 
 def _save_project_to_disk() -> str:
-    """Save current session to _PROJECT_DIR. Returns a status message."""
+    """現在のセッションを_PROJECT_DIRに保存する。ステータスメッセージを返す。"""
     try:
         _PROJECT_DIR.mkdir(parents=True, exist_ok=True)
         fname = st.session_state.get("filename", "project")
@@ -281,7 +281,7 @@ def _save_project_to_disk() -> str:
 
 
 def _load_project(raw: bytes) -> str:
-    """Restore session state from a .tep blob. Returns a status message."""
+    """.tepblobからsession stateを復元する。ステータスメッセージを返す。"""
     try:
         payload = pickle.loads(raw)
     except Exception as e:
@@ -295,19 +295,19 @@ def _load_project(raw: bytes) -> str:
         if k in payload:
             st.session_state[k] = payload[k]
 
-    # Ensure auto_processing is off and mark source when restoring
+    # 復元時はauto_processingをオフにし、ソースを記録する
     st.session_state["auto_processing"] = False
     st.session_state["source_mode"] = "project"
     return f"✅ プロジェクトを復元しました（保存日時: {payload.get('__saved_at__', '不明')}）"
 
 
 # ---------------------------------------------------------------------------
-# Resizable left/right splitter
+# 左右リサイズ可能スプリッター
 # ---------------------------------------------------------------------------
 
 
 def _splitter_marker(split_id: str) -> None:
-    """Invisible marker that JS uses to locate the immediately following st.columns()."""
+    """JSが直後のst.columns()を特定するために使う不可視マーカー。"""
     st.markdown(
         f'<div class="split-init-marker" data-split-id="{split_id}"></div>',
         unsafe_allow_html=True,
@@ -315,10 +315,10 @@ def _splitter_marker(split_id: str) -> None:
 
 
 def _inject_splitter_js() -> None:
-    """Inject drag-to-resize behaviour for every split-init-marker on the page.
+    """ページ上のすべてのsplit-init-markerにドラッグリサイズ機能を注入する。
 
-    Uses height=42 as a unique tag so the CSS rule collapses the iframe wrapper
-    to 0 px while keeping the script alive and executing.
+    height=42を一意のタグとして使用し、CSSルールがiframeラッパーを0pxに
+    折りたたむ一方でスクリプトが動き続けるようにする。
     """
     components.html(
         """
@@ -604,12 +604,12 @@ def _inject_splitter_js() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Header & step indicator
+# ヘッダー & ステップインジケーター
 # ---------------------------------------------------------------------------
 
 
 def _can_navigate_to(target: int) -> bool:
-    """Return True if the target step has its prerequisite data available."""
+    """対象ステップに必要なデータが揃っている場合True を返す。"""
     s = st.session_state
     if target == 1:
         return True
@@ -627,7 +627,7 @@ def _can_navigate_to(target: int) -> bool:
 
 
 def _render_header():
-    # Sentinel: JS uses this to locate the header's stVerticalBlock reliably
+    # センチネル: JSがヘッダーのstVerticalBlockを確実に特定するために使用
     st.markdown(
         '<span class="app-hdr-sentinel" style="display:none"></span>',
         unsafe_allow_html=True,
@@ -663,7 +663,7 @@ def _render_header():
             accessible = _can_navigate_to(i)
 
             if is_current:
-                # Current step — green border highlight (HTML div, not a button)
+                # 現在のステップ — 緑色のボーダーでハイライト（ボタンではなくHTML div）
                 st.markdown(
                     f'<div style="'
                     f"background:#7FFFD4;"
@@ -682,7 +682,7 @@ def _render_header():
                     unsafe_allow_html=True,
                 )
             elif is_done:
-                # Completed step — clickable; stop auto-processing when navigating back
+                # 完了済みのステップ — クリック可能; 戻る際にauto_processingを停止
                 col.button(
                     f"✅ {label}",
                     key=f"nav_{i}",
@@ -691,7 +691,7 @@ def _render_header():
                     use_container_width=True,
                 )
             elif accessible:
-                # Future step with data available — clickable
+                # データが利用可能な将来のステップ — クリック可能
                 col.button(
                     f"○ {label}",
                     key=f"nav_{i}",
@@ -700,7 +700,7 @@ def _render_header():
                     use_container_width=True,
                 )
             else:
-                # Future step, data not yet available — disabled
+                # 将来のステップ、データ未準備 — 無効
                 st.button(
                     f"○ {label}",
                     key=f"nav_{i}",
@@ -717,7 +717,7 @@ def _render_header():
         unsafe_allow_html=True,
     )
 
-    # Auto-processing banner
+    # 自動処理バナー
     if st.session_state.get("auto_processing"):
         _mode = st.session_state.get("run_mode", "manual")
         _mode_label = "セミオート" if _mode == "semiauto" else "フルオート"
@@ -734,14 +734,14 @@ def _render_header():
 
 
 # ---------------------------------------------------------------------------
-# Step 1 – File upload
+# Step 1 — ファイルアップロード
 # ---------------------------------------------------------------------------
 
 
 def _check_api_config() -> tuple:
-    """Validate API credentials from env vars.
+    """環境変数からAPI認証情報を検証する。
 
-    Returns (is_valid: bool, label: str, error_msg: str, hint_code: str).
+    (is_valid: bool, label: str, error_msg: str, hint_code: str) を返す。
     """
     api_type = os.getenv("OPENAI_API_TYPE", "openai").strip().lower()
 
@@ -787,9 +787,9 @@ def step1():
 
     tab_new, tab_load = st.tabs(["📂 新規ファイル", "📁 プロジェクト読込"])
 
-    # Auto-select プロジェクト読込 tab when session was restored from a .tep file.
-    # st.tabs always defaults to the first tab on rerun, so we click the button via JS.
-    # Using multiple retry delays handles timing variance in Streamlit's React render cycle.
+    # .tepファイルからセッションが復元された際にプロジェクト読込タブを自動選択する。
+    # st.tabsはrerun時に常に最初のタブをデフォルトにするため、JSでボタンをクリックする。
+    # 複数のリトライ遅延を使ってStreamlitのReactレンダリングのタイミング差異に対応する。
     if st.session_state.get("source_mode") == "project":
         components.html(
             """<script>
@@ -813,9 +813,9 @@ def step1():
             height=1,
         )
 
-    # ── Tab 1: New file ───────────────────────────────────────────────────────
+    # ── Tab 1: 新規ファイル ───────────────────────────────────────────────────
     with tab_new:
-        # Show currently loaded file when returning from a later step
+        # 後のステップから戻ってきたとき、現在読み込み中のファイルを表示
         if (
             st.session_state.get("filename")
             and st.session_state.get("source_mode") == "new_file"
@@ -827,7 +827,7 @@ def step1():
             )
             st.divider()
 
-        # Mode selection
+        # モード選択
         st.markdown("#### 実行モード")
         mode_labels = {
             "manual": "マニュアル  —  各ステップを手動で確認しながら進む",
@@ -895,9 +895,9 @@ def step1():
                 args=(content, uploaded.name, ext, selected_mode),
             )
 
-    # ── Tab 2: Load project (プロジェクト読込) ────────────────────────────────
+    # ── Tab 2: プロジェクト読込 ────────────────────────────────────────────────
     with tab_load:
-        # Show currently loaded project when returning from a later step
+        # 後のステップから戻ってきたとき、現在読み込み済みのプロジェクトを表示
         if (
             st.session_state.get("filename")
             and st.session_state.get("source_mode") == "project"
@@ -950,7 +950,7 @@ def step1():
 
 
 # ---------------------------------------------------------------------------
-# Step 2 – Table detection
+# Step 2 — テーブル検出
 # ---------------------------------------------------------------------------
 
 
@@ -978,7 +978,7 @@ def step2():
     tables: List[DetectedTable] = st.session_state.detected_tables
     sheets: List[str] = st.session_state.sheet_names
 
-    # Auto-advance during the initial forward pass only (before any UI output)
+    # 初回の前進パス中のみ自動的に次のステップへ進む（UI出力より前に実行）
     if st.session_state.auto_processing:
         st.session_state.step = 3
         st.rerun()
@@ -987,12 +987,12 @@ def step2():
         f"✅ **{len(sheets)} シート** から **{len(tables)} テーブル** を検出しました"
     )
 
-    # Group by sheet
+    # シートでグループ化
     by_sheet: Dict[str, List[DetectedTable]] = {}
     for t in tables:
         by_sheet.setdefault(t.sheet_name, []).append(t)
 
-    # ── Tree view ──────────────────────────────────────────────────────────
+    # ── ツリービュー ───────────────────────────────────────────────────────
     tree_lines = [f"📁 {st.session_state.filename}"]
     for i, sheet in enumerate(sheets):
         sh_tables = by_sheet.get(sheet, [])
@@ -1009,7 +1009,7 @@ def step2():
             tree_lines.append(f"{t_pfx}📊 {t.table_id}  {dims}{title_part}")
     st.code("\n".join(tree_lines), language=None)
 
-    # ── Per-sheet expanders (collapsed by default) ─────────────────────────
+    # ── シートごとのexpander（デフォルトで折りたたみ） ─────────────────────
     for sheet in sheets:
         sheet_tables = by_sheet.get(sheet, [])
         cnt_str = f"{len(sheet_tables)} テーブル" if sheet_tables else "テーブルなし"
@@ -1049,7 +1049,7 @@ def step2():
 
 
 # ---------------------------------------------------------------------------
-# Step 3 – Table relationship analysis
+# Step 3 — テーブル関係分析
 # ---------------------------------------------------------------------------
 
 
@@ -1070,15 +1070,15 @@ def step3():
 
     analysis: AIAnalysisResult = st.session_state.ai_analysis
 
-    # Auto-advance during the initial forward pass only
+    # 初回の前進パス中のみ自動的に次のステップへ進む
     if st.session_state.auto_processing:
         st.session_state.step = 4
         st.rerun()
 
-    # Summary banner
+    # サマリーバナー
     st.info(f"📊 **分析サマリー**: {analysis.summary}")
 
-    # Sheet classifications
+    # シート分類
     with st.expander("📋 シート分類", expanded=True):
         for sc in analysis.sheet_classifications:
             icon = "📊" if sc.is_data_sheet else "📝"
@@ -1087,7 +1087,7 @@ def step3():
             if sc.description:
                 st.caption(sc.description)
 
-    # Hierarchy overview
+    # 階層概要
     with st.expander("🔗 テーブル階層・種別", expanded=True):
         detail_t = [
             ta for ta in analysis.table_analyses if ta.granularity_level == "detail"
@@ -1122,7 +1122,7 @@ def step3():
             for ta in other_t:
                 st.markdown(f"- {ta.display_name}")
 
-    # Minimum granularity
+    # 最小粒度
     min_cands = [
         ta for ta in analysis.table_analyses if ta.is_minimum_granularity_candidate
     ]
@@ -1140,7 +1140,7 @@ def step3():
                     st.caption(f"📤 上位テーブル: {', '.join(ta.parent_table_ids)}")
                 st.divider()
 
-    # Master tables
+    # マスタテーブル
     if analysis.master_tables:
         with st.expander(
             f"📚 マスタテーブル（{len(analysis.master_tables)} 件）", expanded=False
@@ -1152,7 +1152,7 @@ def step3():
                     st.caption(f"参照元: {', '.join(mt.referenced_by)}")
                 st.divider()
 
-    # Integration recommendations preview
+    # 統合推奨プレビュー
     if analysis.integration_recommendations:
         with st.expander(
             f"🔀 統合推奨（{len(analysis.integration_recommendations)} 件） — 次のステップで確認します",
@@ -1164,7 +1164,7 @@ def step3():
     else:
         st.info("統合推奨はありません")
 
-    # Master generation recommendations preview (per-axis)
+    # マスタ生成推奨プレビュー（軸ごと）
     _s3_tables_dict = {t.table_id: t for t in st.session_state.detected_tables}
     _s3_master_previews = _collect_unique_master_specs(
         analysis.integration_recommendations, _s3_tables_dict
@@ -1199,15 +1199,15 @@ def step3():
 
 
 # ---------------------------------------------------------------------------
-# Step 4 – Integration review
+# Step 4 — 統合レビュー
 # ---------------------------------------------------------------------------
 
 
 def _ir_column_signature(ir, tables_dict) -> frozenset:
-    """Column signature used to detect 'similar' integration recommendations.
+    """「類似」統合推奨を検出するために使用する列シグネチャ。
 
-    Two IRs are considered similar when they share the same discriminator columns
-    AND their source tables have the same schema.
+    同じ識別列を持ち、かつソーステーブルのスキーマが同一である場合、
+    2つのIRは類似とみなされる。
     """
     col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
     for tid in ir.table_ids:
@@ -1218,10 +1218,10 @@ def _ir_column_signature(ir, tables_dict) -> frozenset:
 
 
 def _group_irs_by_similarity(irs, tables_dict):
-    """Return list-of-lists: each inner list is a group of similar IRs.
+    """リストのリストを返す: 各内部リストは類似IRのグループ。
 
-    The first element of each group is the representative (shown expanded);
-    the rest are collapsed into a dropdown.
+    各グループの先頭要素が代表（展開表示）となり、
+    残りはドロップダウンに折りたたまれる。
     """
     groups: list = []
     sig_to_group: dict = {}
@@ -1237,7 +1237,7 @@ def _group_irs_by_similarity(irs, tables_dict):
 
 
 def _axis_type(axis_idx: int, multi_vals: dict, members: list) -> str:
-    """Return 'sheet' or 'title' by checking whether axis values match sheet names or section titles."""
+    """軸の値がsheet名またはセクションタイトルと一致するかを確認し、'sheet'または'title'を返す。"""
     sheet_matches = 0
     title_matches = 0
     total = 0
@@ -1257,9 +1257,9 @@ def _axis_type(axis_idx: int, multi_vals: dict, members: list) -> str:
 
 
 def _derive_master_specs_for_ir(ir, tables_dict) -> list:
-    """Return a list of master specs — one per axis that has a parent.
+    """親を持つ軸ごとに1つずつ、マスタspecのリストを返す。
 
-    Each spec is a dict with keys:
+    各specは以下のキーを持つdict:
       child_col, parent_col, mapping {child_val: parent_val},
       parent_id, parent_label, axis_idx
     """
@@ -1272,7 +1272,7 @@ def _derive_master_specs_for_ir(ir, tables_dict) -> list:
 
     child_sheets = {m.sheet_name for m in members}
 
-    # Resolve per-axis parent info; fall back to old single-axis fields for axis 0
+    # 軸ごとの親情報を解決する; axis 0については旧シングル軸フィールドにフォールバック
     axis_parents = list(getattr(ir, "axis_parent_table_ids", []) or [])
     axis_parent_cols = list(getattr(ir, "axis_parent_label_columns", []) or [])
     while len(axis_parents) < len(col_names):
@@ -1296,21 +1296,21 @@ def _derive_master_specs_for_ir(ir, tables_dict) -> list:
         child_col = col_names[axis_idx]
         parent_col = axis_parent_cols[axis_idx] or f"上位{child_col}"
 
-        # Determine axis type (sheet vs title) by comparing axis values to metadata
+        # 軸の値をメタデータと比較して軸タイプ（sheet vs title）を判定する
         atype = _axis_type(axis_idx, multi_vals, members)
 
-        # Validate: parent must NOT be a sibling (same level) of the children
+        # 検証: 親は子の兄弟（同レベル）であってはならない
         if atype == "sheet":
             if parent.sheet_name in child_sheets:
-                continue  # parent on same sheet as children → sibling, reject
+                continue  # 親が子と同じsheetにある → 兄弟のため除外
             parent_label = parent.sheet_name
-        else:  # title axis
+        else:  # title軸
             child_titles = {(m.title or "") for m in members}
             if (parent.title or parent.sheet_name) in child_titles:
-                continue  # parent has same title as a child → sibling, reject
+                continue  # 親が子と同じタイトルを持つ → 兄弟のため除外
             parent_label = parent.title or parent.sheet_name
 
-        # Build child → parent_label mapping from actual axis values
+        # 実際の軸の値から child → parent_label のマッピングを構築する
         mapping: dict = {}
         for m in members:
             vals = multi_vals.get(m.table_id) or [
@@ -1323,7 +1323,7 @@ def _derive_master_specs_for_ir(ir, tables_dict) -> list:
                 )
             if child_val:
                 mapping[child_val] = (
-                    parent_label  # duplicates (same branch, diff service) collapse
+                    parent_label  # 重複（同じ枝、異なるサービス）は集約する
                 )
 
         if not mapping:
@@ -1344,14 +1344,14 @@ def _derive_master_specs_for_ir(ir, tables_dict) -> list:
 
 
 def _derive_master_spec(ir, tables_dict):
-    """Backward-compat shim: return first spec for axis 0 only, or None."""
+    """後方互換シム: axis 0 の最初のspecのみを返す。存在しない場合はNone。"""
     specs = _derive_master_specs_for_ir(ir, tables_dict)
     return specs[0] if specs else None
 
 
 def _master_signature(spec):
-    """Identity of the master a spec produces, independent of which integration
-    it came from. Masters with the same child→parent label map are duplicates."""
+    """specが生成するマスタの同一性を表す。どの統合由来かに関わらず、
+    同じ child→parent ラベルマップを持つマスタは重複とみなす。"""
     return (
         spec["child_col"],
         spec["parent_col"],
@@ -1360,7 +1360,7 @@ def _master_signature(spec):
 
 
 def _collect_unique_master_specs(irs, tables_dict) -> list:
-    """Return deduplicated list of (ir, spec) pairs across all axes of all IRs."""
+    """全IRの全軸にわたって重複排除した (ir, spec) ペアのリストを返す。"""
     seen: set = set()
     result = []
     for ir in irs:
@@ -1374,7 +1374,7 @@ def _collect_unique_master_specs(irs, tables_dict) -> list:
 
 
 def _dedup_master_irs(master_irs, tables_dict):
-    """Backward-compat shim: return IRs that have at least one valid master spec."""
+    """後方互換シム: 有効なmaster specを少なくとも1つ持つIRを返す。"""
     seen_ir_ids: set = set()
     result = []
     for ir, _spec in _collect_unique_master_specs(master_irs, tables_dict):
@@ -1385,12 +1385,12 @@ def _dedup_master_irs(master_irs, tables_dict):
 
 
 # ---------------------------------------------------------------------------
-# Latent-table helpers (step 4)
+# 潜在テーブルヘルパー（Step 4）
 # ---------------------------------------------------------------------------
 
 
 def _dlt_virtual_table(dlt: DerivedLatentTable, tables_dict: dict) -> Optional[DetectedTable]:
-    """Wrap a DerivedLatentTable as a virtual DetectedTable for integration preview."""
+    """統合プレビュー用に DerivedLatentTable を仮想 DetectedTable としてラップする。"""
     parent = tables_dict.get(dlt.parent_table_id)
     if parent is None or dlt.df is None:
         return None
@@ -1407,10 +1407,10 @@ def _dlt_virtual_table(dlt: DerivedLatentTable, tables_dict: dict) -> Optional[D
 
 
 def _infer_col_name_from_values(values: List[str]) -> str:
-    """Infer a reasonable column name from value labels.
+    """値ラベルから妥当な列名を推定する。
 
-    Example: ['カテゴリX-1','カテゴリX-2','カテゴリX-3'] → 'カテゴリX'
-    Falls back to '種別' if no meaningful common prefix is found.
+    例: ['カテゴリX-1','カテゴリX-2','カテゴリX-3'] → 'カテゴリX'
+    意味のある共通プレフィックスが見つからない場合は '種別' にフォールバックする。
     """
     import os.path as _osp
     if len(values) < 2:
@@ -1425,11 +1425,11 @@ def _build_auto_irs_from_latent(
     ext_tables_dict: dict,
     tables_dict: dict,
 ) -> List[tuple]:
-    """Build IntegrationRecommendation objects for accepted latent groups.
+    """承認された潜在グループに対して IntegrationRecommendation オブジェクトを構築する。
 
-    Returns a flat list of (IntegrationRecommendation, group_key) tuples.
-    Only generates IRs for groups where latent_group_decisions[group_key] is True
-    and at least one DLT is available.
+    (IntegrationRecommendation, group_key) タプルのフラットリストを返す。
+    latent_group_decisions[group_key] が True かつDLTが少なくとも1つ存在するグループのみ
+    IRを生成する。
     """
     result = []
     lg_dec = st.session_state.get("latent_group_decisions", {})
@@ -1477,8 +1477,8 @@ def _build_auto_irs_from_latent(
                 ),
                 new_column_names=[col_name],
                 new_column_multi_values={tid: [v] for tid, v in col_vals.items()},
-                # Set parent so master-table generation can produce the correct mapping
-                # (child values → parent aggregate title) for this auto-IR.
+                # 親を設定することで、マスタテーブル生成がこのauto-IRに対して
+                # 正しいマッピング（child値 → 親集計タイトル）を生成できるようにする。
                 axis_parent_table_ids=[lp.source_table_id],
                 axis_parent_label_columns=[None],
             )
@@ -1492,17 +1492,17 @@ def _clip_ai_irs_by_latent_groups(
     latent_groups: List[LatentTableGroup],
     tables_dict: dict,
 ) -> list:
-    """Trim AI integration proposals that contain extra intra-sheet tables.
+    """同一sheet内の余分なテーブルを含むAI統合提案を刈り込む。
 
-    When a latent group knows that tables D1, D2 are siblings (detected components
-    of the same aggregate), any AI IR that contains {D1, D2, ...extras} where the
-    extras are from the same sheet(s) as D1/D2 is trimmed to just {D1, D2}.
-    This prevents incorrectly-grouped tables (e.g. X_D when X_1+X_2 are siblings)
-    from polluting integration proposals.
+    潜在グループがテーブルD1, D2を兄弟（同じ集計の検出済み構成要素）と
+    認識している場合、{D1, D2, ...extras}を含むAI IRのうち、extrasが
+    D1/D2と同じsheetにある場合は {D1, D2} のみに刈り込む。
+    これにより、誤ってグループ化されたテーブル（例: X_1+X_2が兄弟のときのX_D）が
+    統合提案を汚染するのを防ぐ。
 
-    Cross-sheet integrations (extras from different sheets) are left untouched.
+    異なるsheetからのextrasを含むクロスsheet統合はそのまま変更しない。
     """
-    # Collect sibling sets from all latent group members
+    # 全潜在グループメンバーから兄弟セットを収集する
     sibling_sets: List[frozenset] = []
     for grp in latent_groups:
         for lp, _ in grp.members:
@@ -1517,16 +1517,16 @@ def _clip_ai_irs_by_latent_groups(
         ir_set = frozenset(ir.table_ids)
         trimmed_ir = ir
         for sib_set in sibling_sets:
-            # Only trim if sib_set is a PROPER subset of this IR's tables
+            # sib_setがこのIRのテーブルの真部分集合の場合のみ刈り込む
             if not (sib_set < ir_set and len(sib_set) >= 2):
                 continue
             extras = ir_set - sib_set
-            # Guard: only trim if extras are all from the same sheet(s) as siblings
+            # ガード: extrasが兄弟と同じsheet(s)にある場合のみ刈り込む
             sib_sheets = {tables_dict[t].sheet_name for t in sib_set if t in tables_dict}
             extra_sheets = {tables_dict[t].sheet_name for t in extras if t in tables_dict}
             if not sib_sheets or not (extra_sheets <= sib_sheets):
-                continue  # Cross-sheet extras — leave untouched
-            # Trim: keep only sibling tables
+                continue  # クロスsheetのextras — そのまま変更しない
+            # 刈り込み: 兄弟テーブルのみを残す
             new_ids = [t for t in ir.table_ids if t in sib_set]
             if len(new_ids) < 2:
                 continue
@@ -1548,24 +1548,24 @@ def _clip_ai_irs_by_latent_groups(
                 axis_parent_table_ids=ir.axis_parent_table_ids,
                 axis_parent_label_columns=ir.axis_parent_label_columns,
             )
-            break  # Use first matching sibling set
+            break  # 最初に一致した兄弟セットを使用する
         result.append(trimmed_ir)
     return result
 
 
 def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> None:
-    """Render a unified card for a latent table group (proposals + derived across sheets)."""
+    """潜在テーブルグループ（全sheet横断の提案 + 派生）の統合カードをレンダリングする。"""
     gk = group.group_key
     if "latent_group_decisions" not in st.session_state:
         st.session_state.latent_group_decisions = {}
     if gk not in st.session_state.latent_group_decisions:
         st.session_state.latent_group_decisions[gk] = True
 
-    # Pre-initialize the radio widget key before st.radio() is called.
-    # This avoids the "index vs. key" conflict in Streamlit that causes a 1-rerun delay:
-    # using `index=` alongside `key=` can cause Streamlit to reset the widget to the index
-    # value even after the user has changed it, because the index is recomputed from the
-    # still-old latent_group_decisions value at render time.
+    # st.radio() が呼ばれる前にradioウィジェットのキーを事前初期化する。
+    # これにより、Streamlitの「index vs. key」競合による1rerun遅延を回避する:
+    # `key=` と共に `index=` を使用すると、レンダリング時に古い latent_group_decisions
+    # 値からindexが再計算されるため、ユーザーが変更した後もStreamlitがウィジェットを
+    # index値にリセットしてしまう可能性がある。
     _radio_key = f"radio_latent_group_{gk}"
     if _radio_key not in st.session_state:
         st.session_state[_radio_key] = (
@@ -1619,9 +1619,9 @@ def _render_latent_group_card(group: LatentTableGroup, tables_dict: dict) -> Non
 
         if n_derived > 0:
             derived_members = [(lp, dlt) for lp, dlt in group.members if dlt is not None]
-            # Representative: show first DLT directly
+            # 代表: 最初のDLTを直接表示
             _render_derived_before_after(derived_members[0][1], tables_dict)
-            # Others: collapsed expander
+            # その他: 折りたたみexpander
             if len(derived_members) > 1:
                 others = derived_members[1:]
                 with st.expander(
@@ -1655,7 +1655,7 @@ def _render_unified_ir_card(
     tables_for_render: dict,
     is_auto: bool = False,
 ) -> None:
-    """Render an integration recommendation card — handles both AI-proposed and auto-generated."""
+    """統合推奨カードをレンダリングする — AI提案と自動生成の両方に対応する。"""
     rec_id = ir.recommendation_id
     dec_store = "latent_auto_int_decisions" if is_auto else "integration_decisions"
     if dec_store not in st.session_state:
@@ -1727,26 +1727,25 @@ def step4():
         st.session_state.step = 5
         st.rerun()
     elif st.session_state.auto_processing:
-        # semiauto: stop here so the user can review proposals
+        # セミオート: ユーザーが提案を確認できるようここで停止する
         st.session_state.auto_processing = False
 
     tables_dict = {t.table_id: t for t in st.session_state.detected_tables}
 
-    # ── Compute latent groups (used across multiple sections) ───────────────
+    # ── 潜在グループを計算する（複数のセクションで使用） ───────────────────
     _latent_proposals = find_latent_tables(st.session_state.detected_tables)
     _derived_latent = derive_latent_tables(st.session_state.detected_tables)
     _latent_groups = group_latent_proposals(_latent_proposals, _derived_latent)
 
-    # Extended tables_dict: virtual DetectedTable entries for each DLT
+    # 拡張 tables_dict: 各DLT用の仮想 DetectedTable エントリ
     _ext_tables = dict(tables_dict)
     for _dlt in _derived_latent:
         _vt = _dlt_virtual_table(_dlt, tables_dict)
         if _vt is not None:
             _ext_tables[_dlt.proposal_id] = _vt
 
-    # Preliminary trimming used only for the early "nothing to show" check and
-    # for computing has_masters.  The full dynamic computation happens later,
-    # after latent group cards are rendered (decisions updated).
+    # 暫定刈り込み: 早期の「表示するものなし」チェックと has_masters の計算にのみ使用する。
+    # 完全な動的計算は後で、潜在グループカードがレンダリングされた後（決定が更新された後）に実行する。
     _ai_irs_prelim = _clip_ai_irs_by_latent_groups(
         analysis.integration_recommendations, _latent_groups, tables_dict
     )
@@ -1768,7 +1767,7 @@ def step4():
             )
         return
 
-    # ── Section 1: 潜在テーブル推定 (FIRST) ──────────────────────────────────
+    # ── セクション 1: 潜在テーブル推定（最初に表示） ──────────────────────────
     if has_latent:
         st.subheader("🔢 潜在テーブル推定")
         st.caption(
@@ -1778,32 +1777,32 @@ def step4():
         for _group in _latent_groups:
             _render_latent_group_card(_group, tables_dict)
 
-    # ── Section 2: 統合テーブル ───────────────────────────────────────────────
-    # Auto-IRs reflect the current latent group decisions (dynamic)
+    # ── セクション 2: 統合テーブル ────────────────────────────────────────────
+    # auto-IRは現在の潜在グループ決定を動的に反映する
     _auto_irs_flat = _build_auto_irs_from_latent(_latent_groups, _ext_tables, tables_dict)
 
-    # Trim AI IRs: remove intra-sheet tables that don't belong to verified sibling sets.
-    # e.g. if latent detection says T2+T3 are siblings, remove X_D (T4) from {T2,T3,T4}.
+    # AI IRを刈り込む: 検証済み兄弟セットに属さない同一sheet内テーブルを除外する。
+    # 例: 潜在検出がT2+T3を兄弟と判定した場合、{T2,T3,T4}からX_D（T4）を除外する。
     _ai_irs_trimmed = _clip_ai_irs_by_latent_groups(
         analysis.integration_recommendations, _latent_groups, tables_dict
     )
 
-    # Suppress AI IRs whose real detected tables are ALL contained in an accepted auto-IR.
-    # When latent X-3 is accepted: auto-IR real={T2,T3} ⊆ AI IR {T2,T3} → suppress AI IR.
-    # (The auto-IR supersedes it by adding the latent table.)
+    # 実検出テーブルが全て承認済みauto-IRに含まれるAI IRを抑制する。
+    # 潜在X-3が承認された場合: auto-IRの実={T2,T3} ⊆ AI IR {T2,T3} → AI IRを抑制する。
+    # （auto-IRが潜在テーブルを追加することでAI IRを置き換える。）
     _superseded_ai_ids: set = set()
     for _sup_ir, _ in _auto_irs_flat:
-        # Real (non-virtual) table IDs in the auto-IR
+        # auto-IR内の実（仮想でない）テーブルID
         _sup_real = {t for t in _sup_ir.table_ids if t in tables_dict}
         if len(_sup_real) < 2:
             continue
         for _ai_ir in _ai_irs_trimmed:
-            # Suppress if auto-IR's real tables are all present in the AI IR
+            # auto-IRの実テーブルが全てAI IRに含まれる場合は抑制する
             if _sup_real.issubset(set(_ai_ir.table_ids)):
                 _superseded_ai_ids.add(_ai_ir.recommendation_id)
 
-    # Merge: auto-IRs FIRST (so they appear at the top when latent table is accepted),
-    # then non-superseded AI IRs.
+    # マージ: auto-IRを先頭に（潜在テーブルが承認された際に上部に表示されるよう）、
+    # 次に抑制されていないAI IRを続ける。
     _all_irs_flagged: list = [(ir, True) for ir, _ in _auto_irs_flat]
     _all_irs_flagged += [
         (ir, False)
@@ -1822,7 +1821,7 @@ def step4():
             "潜在テーブルを「追加する」にすると、関連する統合提案が自動で追加されます。"
         )
 
-        # Group by column signature across the combined list
+        # 結合リスト全体で列シグネチャによりグループ化する
         _ir_groups = _group_irs_by_similarity(_all_irs, _ext_tables)
 
         for _grp in _ir_groups:
@@ -1844,10 +1843,10 @@ def step4():
                             is_auto=_is_auto_map.get(_ir.recommendation_id, False),
                         )
 
-    # ── Section 3: マスタ自動生成 ─────────────────────────────────────────────
-    # Recompute dynamically: use trimmed AI IRs (X_D excluded) + accepted auto-IRs
-    # (which have axis_parent_table_ids set so master gen can produce X_3 mapping).
-    # Use _ext_tables so virtual DLT tables (X_3) are resolved.
+    # ── セクション 3: マスタ自動生成 ─────────────────────────────────────────
+    # 動的に再計算する: 刈り込み済みAI IR（X_D除外）+ 承認済みauto-IR
+    # （axis_parent_table_idsが設定されているため、マスタ生成がX_3マッピングを生成できる）を使用する。
+    # 仮想DLTテーブル（X_3）を解決するため _ext_tables を使用する。
     _master_ir_list = [ir for ir, _ in _auto_irs_flat] + [
         ir for ir in _ai_irs_trimmed if ir.recommendation_id not in _superseded_ai_ids
     ]
@@ -1915,7 +1914,7 @@ def step4():
                         decision == "✅ マスタを作成する"
                     )
 
-    # ── Navigation ───────────────────────────────────────────────────────────
+    # ── ナビゲーション ────────────────────────────────────────────────────────
     _inject_splitter_js()
     st.divider()
     c1, c2 = st.columns([1, 4])
@@ -1931,7 +1930,7 @@ def step4():
 
 
 # ---------------------------------------------------------------------------
-# Build final table list (called on leaving step 4)
+# 最終テーブルリストを構築する（Step 4 離脱時に呼び出す）
 # ---------------------------------------------------------------------------
 
 
@@ -1944,10 +1943,10 @@ def _build_final_tables():
     integrated_ids: Set[str] = set()
     seen_master_sigs: Set = (
         set()
-    )  # Dedup masters that map identical child→parent labels
+    )  # 同一の child→parent ラベルマップを持つマスタを重複排除する
 
-    # Compute which AI IRs are superseded by accepted auto-IRs (same logic as step4).
-    # Build latent groups to determine accepted auto-IRs.
+    # 承認済みauto-IRによって置き換えられるAI IRを計算する（step4と同じロジック）。
+    # 承認済みauto-IRを特定するために潜在グループを構築する。
     _bft_sup_proposals = find_latent_tables(st.session_state.detected_tables)
     _bft_sup_derived = derive_latent_tables(st.session_state.detected_tables)
     _bft_sup_groups = group_latent_proposals(_bft_sup_proposals, _bft_sup_derived)
@@ -1958,7 +1957,7 @@ def _build_final_tables():
             _bft_sup_ext[_dsup.proposal_id] = _vsup
     _bft_auto_irs = _build_auto_irs_from_latent(_bft_sup_groups, _bft_sup_ext, tables_dict)
 
-    # Trim AI IRs using latent sibling sets (same logic as step4)
+    # 潜在兄弟セットを使ってAI IRを刈り込む（step4と同じロジック）
     _bft_ai_irs_trimmed = _clip_ai_irs_by_latent_groups(
         analysis.integration_recommendations, _bft_sup_groups, tables_dict
     )
@@ -1973,18 +1972,18 @@ def _build_final_tables():
         if len(_auto_real) < 2:
             continue
         for _ai_check in _bft_ai_irs_trimmed:
-            # Suppress if auto-IR's real tables are all present in the AI IR
+            # auto-IRの実テーブルが全てAI IRに含まれる場合は抑制する
             if _auto_real.issubset(set(_ai_check.table_ids)):
                 _superseded_in_bft.add(_ai_check.recommendation_id)
 
-    # Apply approved integrations (skip superseded ones)
+    # 承認済みの統合を適用する（置き換えられたものはスキップ）
     for ir in _bft_ai_irs_trimmed:
         if ir.recommendation_id in _superseded_in_bft:
-            continue  # replaced by an auto-IR that includes the derived table
+            continue  # 派生テーブルを含むauto-IRによって置き換えられた
         if not st.session_state.integration_decisions.get(ir.recommendation_id, True):
             continue
 
-        # Resolve multi-axis column names/values (fall back to single-axis compat fields)
+        # マルチ軸の列名/値を解決する（シングル軸互換フィールドにフォールバック）
         col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
         multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
 
@@ -1994,7 +1993,7 @@ def _build_final_tables():
             if t and t.df is not None and not t.df.empty:
                 df_copy = t.df.copy()
                 vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
-                # Insert columns right-to-left so they appear left-to-right in result
+                # 結果で左から右の順で表示されるよう、列を右から左へ挿入する
                 for i in range(len(col_names) - 1, -1, -1):
                     val = vals[i] if i < len(vals) else ""
                     df_copy.insert(0, col_names[i], val)
@@ -2006,7 +2005,7 @@ def _build_final_tables():
         try:
             merged_df = pd.concat(frames, ignore_index=True)
         except Exception:
-            # Column mismatch – skip integration, revert
+            # 列の不一致 — 統合をスキップして元に戻す
             for tid in ir.table_ids:
                 integrated_ids.discard(tid)
             continue
@@ -2027,8 +2026,8 @@ def _build_final_tables():
             "new_col_names": col_names,
         }
 
-        # Auto-generate dimension masters for ALL axes that have a parent.
-        # Each unique master (by child→parent mapping) is generated only once.
+        # 親を持つ全軸に対してディメンションマスタを自動生成する。
+        # 各ユニークマスタ（child→parentマッピングによる）は一度だけ生成される。
         for spec in _derive_master_specs_for_ir(ir, tables_dict):
             master_sig = _master_signature(spec)
             if master_sig in seen_master_sigs:
@@ -2065,12 +2064,12 @@ def _build_final_tables():
                     "is_master": True,
                 }
 
-    # Approved derived latent tables (numerically computed from aggregation notes)
+    # 承認済みの派生潜在テーブル（集計注記から数値計算されたもの）
     _bft_proposals = find_latent_tables(st.session_state.detected_tables)
     _bft_derived = derive_latent_tables(st.session_state.detected_tables)
     _bft_groups = group_latent_proposals(_bft_proposals, _bft_derived)
 
-    # Extended tables_dict for auto-integration building
+    # 自動統合構築用の拡張 tables_dict
     _bft_ext = dict(tables_dict)
     for _dlt in _bft_derived:
         _vt = _dlt_virtual_table(_dlt, tables_dict)
@@ -2082,7 +2081,7 @@ def _build_final_tables():
 
     for _grp in _bft_groups:
         _gk = _grp.group_key
-        # Group decision: new key first, fall back to per-DLT derived_decisions
+        # グループ決定: 新しいキーを優先し、DLTごとの derived_decisions にフォールバック
         if _gk in _lg_dec:
             _grp_accepted = _lg_dec[_gk]
         else:
@@ -2111,7 +2110,7 @@ def _build_final_tables():
                 "is_master": False,
             }
 
-        # Auto-integration tables from accepted IRs
+        # 承認済みIRからの自動統合テーブル
         _auto_irs_bft = _build_auto_irs_from_latent([_grp], _bft_ext, tables_dict)
         for _auto_ir, _ in _auto_irs_bft:
             _rec_id = _auto_ir.recommendation_id
@@ -2156,7 +2155,7 @@ def _build_final_tables():
                 "new_col_names": _col_names_bft,
             }
 
-    # Individual non-integrated tables
+    # 個別の非統合テーブル
     for ta in analysis.table_analyses:
         if ta.table_id in integrated_ids:
             continue
@@ -2176,7 +2175,7 @@ def _build_final_tables():
             "is_master": ta.is_master_table,
         }
 
-    # Safety net – tables not included in analysis
+    # セーフティネット — 分析対象外のテーブル
     analyzed_ids = set(ta_by_id.keys())
     for t in st.session_state.detected_tables:
         if t.table_id in analyzed_ids or t.table_id in integrated_ids:
@@ -2197,18 +2196,18 @@ def _build_final_tables():
         }
 
     st.session_state.final_tables = final
-    # Pre-select recommended tables
+    # 推奨テーブルを事前選択する
     st.session_state.selected_ids = {
         tid for tid, info in final.items() if info["recommended"]
     }
 
 
 # ---------------------------------------------------------------------------
-# Step 5 – Table selection
+# Step 5 — テーブル選択
 # ---------------------------------------------------------------------------
 
-# Each new column gets a distinct palette: (cell_bg, cell_fg, hdr_bg, hdr_fg)
-# hdr_bg is noticeably darker than cell_bg for visual contrast.
+# 各新規列にはそれぞれ異なるパレットを割り当てる: (cell_bg, cell_fg, hdr_bg, hdr_fg)
+# hdr_bgは視覚的なコントラストのためcell_bgより明らかに暗い色を使用する。
 _COL_PALETTES = [
     ("#d0faf0", "#0d4b36", "#2aab87", "#ffffff"),  # teal
     ("#fdebd0", "#7a3a0a", "#d4793a", "#ffffff"),  # orange
@@ -2216,14 +2215,14 @@ _COL_PALETTES = [
     ("#f0d5f8", "#5b0f7f", "#9b4fc4", "#ffffff"),  # purple
 ]
 
-# Per-axis color families for integration previews.
-# Each family has 8 DISTINCT colors (not shades): (hdr_bg, hdr_fg, cell_bg, cell_fg)
-# Axis 0 = WARM family (red/orange/pink/amber — visually distinct per value)
-# Axis 1 = COOL family (blue/teal/purple/cyan — visually distinct per value)
-# Axis 2 = NATURE family (green/lime/olive/forest)
-# Axis 3 = ACCENT family (deep-orange/indigo/rose/mint)
+# 統合プレビュー用の軸ごとのカラーファミリー。
+# 各ファミリーは8つの明確に区別できる色を持つ（シェードではなく個別の色）: (hdr_bg, hdr_fg, cell_bg, cell_fg)
+# Axis 0 = WARM ファミリー（赤/オレンジ/ピンク/アンバー — 値ごとに視覚的に区別可能）
+# Axis 1 = COOL ファミリー（青/ティール/紫/シアン — 値ごとに視覚的に区別可能）
+# Axis 2 = NATURE ファミリー（緑/ライム/オリーブ/フォレスト）
+# Axis 3 = ACCENT ファミリー（ディープオレンジ/インディゴ/ローズ/ミント）
 _AXIS_FAMILIES: list = [
-    [  # axis-0: WARM — each value is a clearly different warm hue
+    [  # axis-0: WARM — 各値は明確に異なるウォームな色相
         ("#e74c3c", "#fff", "#fadbd8", "#7b0c0c"),  # red
         ("#e67e22", "#fff", "#fae5d3", "#7a3a0a"),  # orange
         ("#e91e63", "#fff", "#fce4ec", "#7c0024"),  # magenta/pink
@@ -2233,7 +2232,7 @@ _AXIS_FAMILIES: list = [
         ("#ec407a", "#fff", "#fce8ef", "#7a0036"),  # rose
         ("#f57c00", "#fff", "#fff0d9", "#6b3800"),  # deep orange
     ],
-    [  # axis-1: COOL — each value is a clearly different cool hue
+    [  # axis-1: COOL — 各値は明確に異なるクールな色相
         ("#2980b9", "#fff", "#d6eaf8", "#0d2f6e"),  # blue
         ("#1abc9c", "#fff", "#d1f2eb", "#0a4038"),  # teal
         ("#8e44ad", "#fff", "#e8daef", "#4a1a72"),  # purple
@@ -2243,7 +2242,7 @@ _AXIS_FAMILIES: list = [
         ("#6c3483", "#fff", "#e4d0ef", "#3b1260"),  # deep purple
         ("#0288d1", "#fff", "#e1f1fb", "#013d6e"),  # light blue
     ],
-    [  # axis-2: NATURE — greens/lime/forest
+    [  # axis-2: NATURE — グリーン/ライム/フォレスト
         ("#27ae60", "#fff", "#d5f5e3", "#0b3c2e"),  # green
         ("#8bc34a", "#1a1a1a", "#f1f8e9", "#33691e"),  # lime green
         ("#00695c", "#fff", "#cce5e2", "#00332e"),  # forest
@@ -2253,7 +2252,7 @@ _AXIS_FAMILIES: list = [
         ("#1b5e20", "#fff", "#c3e8c4", "#0a1c0a"),  # deep forest
         ("#aed581", "#1a1a1a", "#ecf6dc", "#3a5f00"),  # light olive
     ],
-    [  # axis-3: ACCENT — misc vivid
+    [  # axis-3: ACCENT — 各種鮮やかな色
         ("#ff5722", "#fff", "#fbe9e7", "#bf360c"),  # deep orange
         ("#9c27b0", "#fff", "#f3e5f5", "#4a148c"),  # deep purple
         ("#009688", "#fff", "#e0f2f1", "#004d40"),  # teal accent
@@ -2267,8 +2266,8 @@ _AXIS_FAMILIES: list = [
 
 
 def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Styler":
-    """Return a Pandas Styler with new_cols highlighted; each column gets a distinct palette,
-    with the column header rendered darker than the cell background."""
+    """new_colsをハイライトした Pandas Styler を返す。各列に異なるパレットを割り当て、
+    列ヘッダーはセル背景より暗くレンダリングされる。"""
     df_str = df.astype(str)
     valid = [c for c in new_cols if c in df_str.columns]
     styler = df_str.style
@@ -2278,13 +2277,13 @@ def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Style
 
     col_pal = {c: _COL_PALETTES[i % len(_COL_PALETTES)] for i, c in enumerate(valid)}
 
-    # ── Cell background ──
+    # ── セル背景 ──
     for col, (cbg, cfg, _, _) in col_pal.items():
         styler = styler.set_properties(
             subset=[col], **{"background-color": cbg, "color": cfg}
         )
 
-    # ── Column header background ──
+    # ── 列ヘッダー背景 ──
     # Method A: apply_index (pandas ≥ 1.4, Streamlit ≥ 1.26)
     def _hdr(idx: "pd.Index") -> list:
         out = []
@@ -2301,9 +2300,9 @@ def _styled_df(df: "pd.DataFrame", new_cols: list) -> "pd.io.formats.style.Style
     except Exception:
         pass
 
-    # Method B: set_table_styles – targets Pandas HTML class selectors
-    # (th.col_heading.colN).  Works in some Streamlit versions that ignore
-    # apply_index but still honour table-level CSS injected via set_table_styles.
+    # Method B: set_table_styles — Pandas HTMLクラスセレクター（th.col_heading.colN）を対象とする。
+    # apply_indexを無視するが set_table_styles 経由で注入されたテーブルレベルの
+    # CSSには対応しているStreamlitバージョンで機能する。
     tbl_styles = []
     for col, (_, _, hbg, hfg) in col_pal.items():
         try:
@@ -2330,31 +2329,30 @@ def _render_integration_before_after(
     full_df_size: tuple = None,
     source_ids: list = None,
 ) -> None:
-    """Render a structured before → after integration preview.
+    """構造化された統合前 → 統合後のプレビューをレンダリングする。
 
-    Multi-axis coloring: each axis dimension gets a distinct color family
-    (green / blue / purple / orange). Within each family, unique axis values
-    each receive a distinct shade. Source table cards show per-axis colored
-    pills; the integrated table colors each axis column's cells by value.
-    First 3 source tables are shown directly; additional tables are in an
-    expander.
+    マルチ軸カラーリング: 各軸ディメンションには異なるカラーファミリー
+    （緑/青/紫/オレンジ）を割り当てる。各ファミリー内では、ユニークな軸値ごとに
+    異なる色を割り当てる。ソーステーブルカードは軸ごとに色付きのピルを表示し、
+    統合テーブルは各軸列のセルを値によって色分けする。
+    最初の3つのソーステーブルは直接表示され、追加テーブルはexpanderに収納する。
 
-    full_df_size: (n_rows, n_cols) of the actual full integrated table;
-                  shown at the bottom-right of the 統合後 preview.
-    source_ids:   list of source table IDs to display after the expander.
+    full_df_size: 実際の統合済みテーブルの (n_rows, n_cols)。
+                  統合後プレビューの右下に表示される。
+    source_ids:   expander の後に表示するソーステーブルIDのリスト。
     """
     col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
     multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
 
-    # Visible-row heights for the inline preview boxes.
-    # Full dataframe is always passed so (a) scroll reveals all rows and
-    # (b) the native Fullscreen button shows every record.
-    _BEFORE_VISIBLE = 3   # 統合前カード: 3 rows visible before scroll
-    _AFTER_VISIBLE  = 5   # 統合後プレビュー: 5 rows visible before scroll
-    _ROW_PX = 35          # approx px per data row in st.dataframe
-    _HDR_PX = 38          # header row height
+    # インラインプレビューボックスの可視行の高さ。
+    # (a) スクロールで全行を表示し、(b) ネイティブのFullscreenボタンで全レコードを
+    # 表示できるよう、常に完全なDataFrameを渡す。
+    _BEFORE_VISIBLE = 3   # 統合前カード: スクロール前に表示する行数
+    _AFTER_VISIBLE  = 5   # 統合後プレビュー: スクロール前に表示する行数
+    _ROW_PX = 35          # st.dataframe の1データ行のおよそのpx高さ
+    _HDR_PX = 38          # ヘッダー行の高さ
 
-    # ── Build per-axis unique-value order ───────────────────────────────────
+    # ── 軸ごとのユニーク値の順序を構築する ──────────────────────────────────
     axis_val_order: list = [[] for _ in col_names]
     for tid in ir.table_ids:
         vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
@@ -2365,13 +2363,13 @@ def _render_integration_before_after(
                     axis_val_order[ai].append(sv)
 
     def _axis_color(ai: int, val: str) -> tuple:
-        """Return (hdr_bg, hdr_fg, cell_bg, cell_fg) for the given axis+value."""
+        """指定された軸+値に対する (hdr_bg, hdr_fg, cell_bg, cell_fg) を返す。"""
         family = _AXIS_FAMILIES[ai % len(_AXIS_FAMILIES)]
         vals_list = axis_val_order[ai] if ai < len(axis_val_order) else []
         vi = vals_list.index(val) if val in vals_list else 0
         return family[vi % len(family)]
 
-    # ── Helper: render one source table card (header + dataframe) ────────────
+    # ── ヘルパー: ソーステーブルカード（ヘッダー + DataFrame）を1つレンダリングする ──
     import html as _html
 
     def _src_card(tid: str) -> None:
@@ -2435,10 +2433,9 @@ def _render_integration_before_after(
             for start in range(0, len(extra_tids), n_ex):
                 _src_card_grid(extra_tids[start:start + n_ex])
 
-    # ── 統合元テーブル一覧 (エクスパンダー下) ──────────────────────────────
-    # Avoid st.columns() inside the expander — nested columns in the same
-    # vertical container can cause unequal width distribution in the source
-    # table grid rendered above.
+    # ── 統合元テーブル一覧 (expander下) ─────────────────────────────────────
+    # expander内のst.columns()は避ける — 同じ縦方向コンテナ内のネストした columns は
+    # 上部でレンダリングされたソーステーブルグリッドの幅が不均等になる可能性がある。
     if source_ids:
         _INLINE_LIMIT = 4
         if len(source_ids) <= _INLINE_LIMIT:
@@ -2450,7 +2447,7 @@ def _render_integration_before_after(
                 for sid in source_ids:
                     st.caption(f"• {sid}")
 
-    # ── 統合処理 separator ───────────────────────────────────────────────────
+    # ── 統合処理セパレーター ─────────────────────────────────────────────────
     st.markdown(
         '<div style="display:flex;align-items:center;gap:0;margin:22px 0 18px;">'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,transparent,rgba(39,174,96,.5));"></div>'
@@ -2498,7 +2495,7 @@ def _render_integration_before_after(
         df_str = combined.astype(str)
         valid_cols = [c for c in col_names if c in df_str.columns]
 
-        # Color each axis cell by its VALUE within that axis's color family
+        # 各軸セルをそのカラーファミリー内の値によって色付けする
         def _color_row(row):
             s = pd.Series("", index=row.index)
             for ai, c in enumerate(valid_cols):
@@ -2509,7 +2506,7 @@ def _render_integration_before_after(
 
         styler = df_str.style.apply(_color_row, axis=1) if valid_cols else df_str.style
 
-        # Axis column headers: use each axis family's base (shade 0) header color
+        # 軸列ヘッダー: 各軸ファミリーのベース（shade 0）ヘッダー色を使用する
         def _hdr_fn(idx):
             out = []
             for c in idx:
@@ -2555,7 +2552,7 @@ def _render_integration_before_after(
             height=min(n_data * _ROW_PX + _HDR_PX,
                        _AFTER_VISIBLE * _ROW_PX + _HDR_PX),
         )
-        # Full integrated table size – shown bottom-right of the preview
+        # 統合済みテーブルのサイズ — プレビューの右下に表示する
         if full_df_size:
             n_rows, n_cols_full = full_df_size
             st.markdown(
@@ -2572,10 +2569,10 @@ def _render_derived_before_after(
     dlt: "DerivedLatentTable",
     tables_dict: dict,
 ) -> None:
-    """Render the before/after view for a derived latent table.
+    """派生潜在テーブルの推定前/推定後ビューをレンダリングする。
 
-    'Before' shows the aggregate parent and each detected component.
-    'After' shows the numerically derived (subtracted) table.
+    「推定前」は集計親テーブルと各検出済み構成要素を表示する。
+    「推定後」は数値的に派生（差し引き）されたテーブルを表示する。
     """
     _ROW_PX = 35
     _HDR_PX = 38
@@ -2617,7 +2614,7 @@ def _render_derived_before_after(
         else:
             st.caption("（データなし）")
 
-    # Parent (aggregate) + children in columns
+    # 親（集計）+ 子をcolumnsに表示する
     all_display = dlt.source_display_order  # [parent_id, child1_id, ...]
     n_disp = min(len(all_display), 4)
     cols = st.columns(n_disp, gap="small")
@@ -2634,7 +2631,7 @@ def _render_derived_before_after(
                 color = "#2a607a" if tid == dlt.parent_table_id else "#4a5a3a"
                 _table_card_mini(tid, role, color)
 
-    # ── 差分計算 separator ────────────────────────────────────────────────────
+    # ── 差分計算セパレーター ─────────────────────────────────────────────────
     st.markdown(
         '<div style="display:flex;align-items:center;gap:0;margin:18px 0 14px;">'
         '<div style="flex:1;height:1px;background:linear-gradient(to right,transparent,rgba(229,168,60,.5));"></div>'
@@ -2718,13 +2715,13 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
         )
 
         if info["is_integrated"] and ir is not None and tables_dict is not None:
-            # Description block ABOVE the before/after preview so users read
-            # what the integration does before seeing the table comparison.
+            # 統合前/統合後プレビューの上に説明ブロックを表示し、
+            # テーブル比較を見る前に統合内容をユーザーが読めるようにする。
             st.markdown(f"_{info['description']}_")
             if info.get("reasoning"):
                 st.caption(f"💡 {info['reasoning']}")
 
-            # Before/after view — source list and size are rendered inside
+            # 統合前/統合後ビュー — ソース一覧とサイズは内部でレンダリングする
             _render_integration_before_after(
                 ir,
                 tables_dict,
@@ -2738,7 +2735,7 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
             with col_btn:
                 _sel_button()
         else:
-            # Standard view for non-integrated tables
+            # 非統合テーブルの標準ビュー
             _splitter_marker(f"s5-{tid}")
             col_prev, col_info = st.columns([1, 1])
             with col_prev:
@@ -2762,8 +2759,8 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
 def step5():
     st.header("📋 ステップ 5 : テーブル選択")
 
-    # Reset splitter positions in localStorage whenever Step 5 loads so that
-    # stale drag positions from a previous visit cannot collapse the right column.
+    # Step 5 が読み込まれるたびに localStorage のsplitter位置をリセットし、
+    # 前回の古いドラッグ位置で右列が折りたたまれないようにする。
     components.html(
         """<script>
         (function(){
@@ -2782,9 +2779,9 @@ def step5():
         st.button("← 戻る", on_click=_go_to, args=(4,))
         return
 
-    # Backfill new_col_names for entries that were loaded from an older .tep file
-    # which was saved before this field was added.  Derive from ai_analysis so
-    # that column highlighting works even after a project restore.
+    # このフィールドが追加される前に保存された古い .tep ファイルから読み込まれたエントリに
+    # new_col_names を補完する。プロジェクト復元後も列ハイライトが機能するよう
+    # ai_analysis から派生させる。
     _analysis = st.session_state.get("ai_analysis")
     if _analysis:
         _ir_map = {
@@ -2798,10 +2795,10 @@ def step5():
                     getattr(ir, "new_column_names", []) or [ir.new_column_name]
                 )
 
-    # Auto-processing terminates at step 5
+    # 自動処理はStep 5で終了する
     if st.session_state.auto_processing:
         if st.session_state.run_mode == "fullauto":
-            # Full-auto: auto-select recommended tables and proceed to export
+            # フルオート: 推奨テーブルを自動選択してエクスポートへ進む
             recommended = {
                 tid for tid, info in final.items() if info.get("recommended", False)
             }
@@ -2812,7 +2809,7 @@ def step5():
             st.session_state.step = 6
             st.rerun()
         else:
-            # Semi-auto: forward pass ends here — user selects tables manually
+            # セミオート: 前進パスはここで終了 — ユーザーが手動でテーブルを選択する
             st.session_state.auto_processing = False
 
     st.info(
@@ -2824,7 +2821,7 @@ def step5():
         f"**選択中: {len(st.session_state.selected_ids)} / {len(final)} テーブル**"
     )
 
-    # Bulk buttons
+    # 一括操作ボタン
     c1, c2, _ = st.columns([1, 1, 5])
     with c1:
         if st.button("✅ 全選択", use_container_width=True):
@@ -2837,7 +2834,7 @@ def step5():
 
     st.divider()
 
-    # Build lookups for the integrated table before/after display
+    # 統合テーブルの前/後表示用のルックアップを構築する
     _s5_analysis = st.session_state.get("ai_analysis")
     _s5_ir_by_rec: dict = {}
     if _s5_analysis:
@@ -2852,7 +2849,7 @@ def step5():
             return _s5_ir_by_rec.get(k[len("integrated_"):])
         return None
 
-    # --- Integrated tables (grouped by column signature) ---
+    # --- 統合テーブル（列シグネチャでグループ化） ---
     integrated = {k: v for k, v in final.items() if v["is_integrated"]}
     if integrated:
         st.markdown("### 🔀 統合テーブル")
@@ -2863,7 +2860,7 @@ def step5():
                 return frozenset(df.columns)
             return frozenset()
 
-        # Group by column signature: representative first, similar ones collapsed
+        # 列シグネチャでグループ化: 代表を先頭に、類似はまとめて折りたたむ
         int_groups: list = []
         sig_to_int_group: dict = {}
         for tid, info in integrated.items():
@@ -2889,7 +2886,7 @@ def step5():
                     for tid, info in similar_int:
                         _table_card(tid, info, ir=_get_ir_for(tid), tables_dict=_s5_tbls)
 
-    # --- Minimum granularity ---
+    # --- 最小粒度テーブル ---
     min_tables = {
         k: v for k, v in final.items() if not v["is_integrated"] and v.get("is_minimum")
     }
@@ -2898,7 +2895,7 @@ def step5():
         for tid, info in min_tables.items():
             _table_card(tid, info)
 
-    # --- Master tables ---
+    # --- マスタテーブル ---
     master_tables = {
         k: v
         for k, v in final.items()
@@ -2909,7 +2906,7 @@ def step5():
         for tid, info in master_tables.items():
             _table_card(tid, info)
 
-    # --- Other recommended ---
+    # --- その他の推奨テーブル ---
     shown = set(integrated) | set(min_tables) | set(master_tables)
     other_rec = {
         k: v
@@ -2921,7 +2918,7 @@ def step5():
         for tid, info in other_rec.items():
             _table_card(tid, info)
 
-    # --- Non-recommended (collapsed) ---
+    # --- 非推奨テーブル（折りたたみ） ---
     shown |= set(other_rec)
     non_rec = {k: v for k, v in final.items() if k not in shown}
     if non_rec:
@@ -2952,7 +2949,7 @@ def step5():
 
 
 # ---------------------------------------------------------------------------
-# Step 6 – Export
+# Step 6 — エクスポート
 # ---------------------------------------------------------------------------
 
 
@@ -2991,7 +2988,7 @@ def step6():
 
     zip_buf.seek(0)
 
-    # Bulk download
+    # 一括ダウンロード
     stem = Path(st.session_state.filename).stem
     st.download_button(
         "📦 全テーブルを ZIP でまとめてダウンロード",
@@ -3049,15 +3046,15 @@ def step6():
 
 
 # ---------------------------------------------------------------------------
-# Main
+# メイン処理
 # ---------------------------------------------------------------------------
 
 
 def main():
     _init()
 
-    # Save callback stores result in session_state so it survives the rerun
-    # and can be shown as a toast from outside the header container.
+    # 保存コールバックの結果をsession_stateに格納し、rerun後も保持して
+    # ヘッダーコンテナ外からtoastとして表示できるようにする。
     if "_save_result" in st.session_state:
         _msg = st.session_state.pop("_save_result")
         st.toast(_msg, icon="💾" if _msg.startswith("✅") else "❌")
@@ -3065,9 +3062,9 @@ def main():
     with st.container():
         _render_header()
 
-    # Fire portal-sync before step functions so the header updates immediately,
-    # even during long operations like the Step 3 AI call (which sends intermediate
-    # state via st.spinner before _inject_splitter_js at the end of main() runs).
+    # stepの関数より前にポータル同期を発火し、Step 3のAI呼び出しのような長時間処理中でも
+    # （main()の末尾の_inject_splitter_js()より前にst.spinnerで中間状態が送られる場合も）
+    # ヘッダーが即座に更新されるようにする。
     _inject_splitter_js()
 
     step = st.session_state.step

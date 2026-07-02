@@ -10,16 +10,16 @@ from .models import DetectedTable
 
 
 # ---------------------------------------------------------------------------
-# Grid building
+# Grid 構築
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Formula evaluation helpers
+# 数式評価ヘルパー
 # ---------------------------------------------------------------------------
 
 
 def _col_to_num(col: str) -> int:
-    """'A'→1, 'Z'→26, 'AA'→27 (case-insensitive)."""
+    """'A'→1, 'Z'→26, 'AA'→27（大文字・小文字を区別しない）。"""
     n = 0
     for ch in col.upper():
         n = n * 26 + (ord(ch) - 64)
@@ -27,7 +27,7 @@ def _col_to_num(col: str) -> int:
 
 
 def _parse_cell_ref(ref: str) -> Tuple[Optional[int], Optional[int]]:
-    """'D5', '$D$5' → (row=5, col=4). Returns (None, None) on failure."""
+    """'D5', '$D$5' → (row=5, col=4)。失敗時は (None, None) を返す。"""
     m = re.match(r"\$?([A-Z]+)\$?(\d+)$", ref.strip().upper())
     if m:
         return int(m.group(2)), _col_to_num(m.group(1))
@@ -36,14 +36,14 @@ def _parse_cell_ref(ref: str) -> Tuple[Optional[int], Optional[int]]:
 
 def _eval_formula(formula: str, grid: List[List[Any]]) -> Optional[float]:
     """
-    Evaluate simple Excel formulas against an already-built value grid.
+    構築済みの値 grid に対してシンプルな Excel 数式を評価する。
 
-    Supported forms:
-      =SUM(A1:B3)              range sum
-      =SUM(A1:B3, C5:D7)      multi-range sum
-      =A1                      single cell reference
-      =A1+B1  / =A1-B1  / =A1*B1   two-cell arithmetic
-    Returns None when the formula is unsupported or required cells are still None.
+    サポートする形式:
+      =SUM(A1:B3)              範囲の合計
+      =SUM(A1:B3, C5:D7)      複数範囲の合計
+      =A1                      単一セル参照
+      =A1+B1  / =A1-B1  / =A1*B1   2セル間の四則演算
+    数式が未サポートの場合、または必要なセルがまだ None の場合は None を返す。
     """
     if not formula or not isinstance(formula, str):
         return None
@@ -71,7 +71,7 @@ def _eval_formula(formula: str, grid: List[List[Any]]) -> Optional[float]:
                     found = True
         return total if found else None
 
-    # SUM(arg, arg, ...) where each arg is a range ref1:ref2 or a single cell ref
+    # SUM(arg, arg, ...) — 各引数は範囲参照 ref1:ref2 または単一セル参照
     m = re.fullmatch(r"SUM\((.+)\)", expr, re.IGNORECASE)
     if m:
         args = [a.strip() for a in m.group(1).split(",")]
@@ -88,12 +88,12 @@ def _eval_formula(formula: str, grid: List[List[Any]]) -> Optional[float]:
                 found = True
         return grand if found else None
 
-    # Single cell reference
+    # 単一セル参照
     if re.fullmatch(r"\$?[A-Z]+\$?\d+", expr, re.IGNORECASE):
         r, c = _parse_cell_ref(expr)
         return _get(r, c) if r else None
 
-    # Two-cell arithmetic
+    # 2セル間の四則演算
     m = re.fullmatch(
         r"(\$?[A-Z]+\$?\d+)\s*([+\-\*])\s*(\$?[A-Z]+\$?\d+)", expr, re.IGNORECASE
     )
@@ -113,12 +113,11 @@ def _fill_formula_cells(
     grid: List[List[Any]], max_row: int, max_col: int, ws_formulas
 ) -> None:
     """
-    Fill None cells in *grid* by evaluating Excel formulas from *ws_formulas*
-    (a worksheet loaded with data_only=False).
+    *ws_formulas*（data_only=False でロードされたワークシート）の Excel 数式を評価し、
+    *grid* 内の None セルを埋める。
 
-    Runs up to 5 passes so that sub-totals that sum other sub-totals are
-    resolved correctly (each pass makes previously-None cells available to
-    formulas in the next pass).
+    小計が他の小計を合計するケースを正しく解決できるよう、最大5パス実行する
+    （各パスで直前まで None だったセルが次のパスの数式で参照可能になる）。
     """
     formula_map: Dict[Tuple[int, int], str] = {}
     for row in ws_formulas.iter_rows(
@@ -138,23 +137,23 @@ def _fill_formula_cells(
                     grid[r][c] = result
                     progress = True
         if not progress:
-            break  # nothing new resolved — stop early
+            break  # 新たに解決されたセルがなければ早期終了
 
 
 # ---------------------------------------------------------------------------
-# Grid building
+# Grid 構築
 # ---------------------------------------------------------------------------
 
 
 def _build_value_grid(ws, ws_formulas=None) -> Tuple[List[List[Any]], int, int]:
     """
-    Build a 1-indexed 2D grid from an openpyxl worksheet.
+    openpyxl のワークシートから 1-indexed の2次元 grid を構築する。
 
-    - Merged cell values are propagated across the entire merged range.
-    - When *ws_formulas* is provided (the same sheet loaded with
-      data_only=False), cells whose cached value is None are re-evaluated
-      from their formula string.  This handles files saved without formula
-      recalculation (e.g. exported from LibreOffice / Google Sheets).
+    - 結合セルの値は結合範囲全体に伝播される。
+    - *ws_formulas*（data_only=False でロードした同じシート）が指定された場合、
+      キャッシュ値が None のセルを数式文字列から再評価する。
+      LibreOffice / Google Sheets からエクスポートされた、数式再計算なしで
+      保存されたファイルに対応するための処理。
     """
     max_row = ws.max_row or 0
     max_col = ws.max_column or 0
@@ -169,14 +168,14 @@ def _build_value_grid(ws, ws_formulas=None) -> Tuple[List[List[Any]], int, int]:
             if cell.value is not None:
                 grid[cell.row][cell.column] = cell.value
 
-    # Propagate merged cell top-left value across the merged range
+    # 結合セルの左上の値を結合範囲全体に伝播する
     for merge_range in ws.merged_cells.ranges:
         top_val = grid[merge_range.min_row][merge_range.min_col]
         for r in range(merge_range.min_row, merge_range.max_row + 1):
             for c in range(merge_range.min_col, merge_range.max_col + 1):
                 grid[r][c] = top_val
 
-    # Evaluate uncached formula cells (e.g. SUM rows where cache is missing)
+    # キャッシュされていない数式セルを評価する（例: キャッシュが欠落している SUM 行）
     if ws_formulas is not None:
         _fill_formula_cells(grid, max_row, max_col, ws_formulas)
 
@@ -184,7 +183,7 @@ def _build_value_grid(ws, ws_formulas=None) -> Tuple[List[List[Any]], int, int]:
 
 
 def _build_grid_from_xlrd(sheet) -> Tuple[List[List[Any]], int, int]:
-    """Build a 1-indexed 2D grid from an xlrd sheet."""
+    """xlrd のシートから 1-indexed の2次元 grid を構築する。"""
     import xlrd
 
     nrows, ncols = sheet.nrows, sheet.ncols
@@ -200,7 +199,7 @@ def _build_grid_from_xlrd(sheet) -> Tuple[List[List[Any]], int, int]:
 
 
 # ---------------------------------------------------------------------------
-# Table boundary detection
+# テーブル境界の検出
 # ---------------------------------------------------------------------------
 
 
@@ -212,16 +211,16 @@ def _is_filled(value: Any) -> bool:
     return True
 
 
-# Characters removed before numeric parsing (Japanese minus signs, thousand separators)
+# 数値パース前に除去する文字（日本語マイナス記号、桁区切り文字など）
 _NUM_STRIP = str.maketrans("", "", ",、△▲")
 
 
 def _cell_is_numeric(v: Any) -> bool:
-    """Return True when the cell value can be interpreted as a number."""
+    """セルの値が数値として解釈できる場合に True を返す。"""
     if isinstance(v, bool):
         return False
     if isinstance(v, (int, float)):
-        return v == v  # exclude float NaN
+        return v == v  # float NaN を除外
     try:
         float(str(v).strip().translate(_NUM_STRIP))
         return True
@@ -229,29 +228,29 @@ def _cell_is_numeric(v: Any) -> bool:
         return False
 
 
-# ── Row-type constants ────────────────────────────────────────────────────────
-_RT_EMPTY   = "empty"    # no filled cells
-_RT_TITLE   = "title"    # 1 short text cell — table/section name candidate
-_RT_COL_HDR = "col_hdr"  # ≥2 text cells, few numbers — column-axis labels
-_RT_DATA    = "data"     # ≥55 % numeric — measurement rows
-_RT_MIXED   = "mixed"    # doesn't fit cleanly (e.g. row-header + numbers)
-_RT_NOTE    = "note"     # annotation / footnote outside the table boundary
+# ── 行タイプ定数 ────────────────────────────────────────────────────────
+_RT_EMPTY   = "empty"    # 入力済みセルなし
+_RT_TITLE   = "title"    # 1つの短いテキストセル — テーブル/セクション名の候補
+_RT_COL_HDR = "col_hdr"  # テキストセル2つ以上、数値少なめ — 列軸ラベル
+_RT_DATA    = "data"     # 55%以上が数値 — 計測値の行
+_RT_MIXED   = "mixed"    # 明確に分類できない行（例: 行ヘッダー＋数値）
+_RT_NOTE    = "note"     # テーブル境界外の注釈 / 脚注
 
-# Prefixes that unambiguously mark a cell as an annotation / footnote
+# セルを注釈 / 脚注として明確にマークするプレフィックス
 _NOTE_PREFIXES: Tuple[str, ...] = (
     "※", "＊", "*", "注）", "注)", "（注", "(注", "注意", "＜注", "<注",
     "note:", "NOTE:", "＊注", "*注",
 )
 
-# Matches aggregation/relationship keywords at the end of enumeration notes
-# e.g. "C-1・C-2・C-3の合計", "A・B・Cの内訳"
+# 列挙注釈末尾の集計・関係キーワードにマッチする
+# 例: "C-1・C-2・C-3の合計", "A・B・Cの内訳"
 _AGG_ENUM_RE = re.compile(
     r"[・、,＋+].+[のをにおける]*(合計|内訳|合算|総計|小計|集計|含む|合わせた|除く|除外)"
 )
 
 
 def _row_content_profile(grid: List[List[Any]], r: int, max_col: int) -> Dict[str, Any]:
-    """Return a content profile dict for a single grid row."""
+    """grid の1行分のコンテンツプロファイル辞書を返す。"""
     numeric = text = 0
     col_min: Optional[int] = None
     col_max: Optional[int] = None
@@ -280,33 +279,33 @@ def _row_content_profile(grid: List[List[Any]], r: int, max_col: int) -> Dict[st
 
 
 def _classify_row(p: Dict[str, Any]) -> str:
-    """Classify a row profile into one of the _RT_* constants."""
+    """行のプロファイルを _RT_* 定数のいずれかに分類する。"""
     filled = p["filled"]
     if filled == 0:
         return _RT_EMPTY
 
     n_ratio = p["numeric"] / filled
 
-    # Mostly numeric → data row
+    # 大半が数値 → データ行
     if n_ratio >= 0.55:
         return _RT_DATA
 
-    # Single text cell — distinguish title, annotation/footnote, and column header
+    # テキストセルが1つ — タイトル・注釈/脚注・列ヘッダーを区別する
     if filled == 1 and p["text"] == 1:
         txt = p["texts"][0] if p["texts"] else ""
-        # Annotation markers or very long sentence → footnote/note outside the table
+        # 注釈マーカーまたは非常に長い文 → テーブル外の脚注/注記
         if txt.startswith(_NOTE_PREFIXES) or len(txt) > 60:
             return _RT_NOTE
-        # Enumeration + aggregation keyword without a standard note prefix
-        # e.g. "C-1・C-2・C-3の合計", "A区・B区の内訳"
+        # 標準の注記プレフィックスなしの列挙＋集計キーワード
+        # 例: "C-1・C-2・C-3の合計", "A区・B区の内訳"
         if _AGG_ENUM_RE.search(txt):
             return _RT_NOTE
         return _RT_TITLE
 
-    # All filled cells share one unique text → merged cell spanning the row.
-    # In Excel, merged cells propagate the master cell value to all columns in
-    # the range.  If the text looks like an annotation (note prefix OR > 60 chars),
-    # classify as _RT_NOTE so the state machine excludes it from any table region.
+    # 入力済みセルがすべて同一テキスト → 行をまたぐ結合セル。
+    # Excel では結合セルがマスターセルの値を範囲内のすべての列に伝播する。
+    # テキストが注釈に見える場合（注記プレフィックス OR 60文字超）は
+    # _RT_NOTE に分類し、ステートマシンがテーブル領域から除外できるようにする。
     if p["numeric"] == 0 and p["text"] >= 2:
         unique = set(p["texts"])
         if len(unique) == 1:
@@ -317,13 +316,13 @@ def _classify_row(p: Dict[str, Any]) -> str:
                 return _RT_NOTE
             return _RT_TITLE if len(txt) <= 40 else _RT_COL_HDR
 
-    # Row that contains a very long text cell alongside low numeric content →
-    # annotation/note.  Catches notes in merged cells that are adjacent to a
-    # small value in another column (so the "unique text" path above fails).
+    # 非常に長いテキストセルと少数の数値を含む行 →
+    # 注釈/注記。別の列の小さな値に隣接した結合セル内の注記を捕捉する
+    # （「ユニークテキスト」の処理パスが機能しない場合）。
     if p["texts"] and max(len(t) for t in p["texts"]) > 80 and n_ratio <= 0.30:
         return _RT_NOTE
 
-    # Multiple text cells, very few numbers → column-header row
+    # 複数のテキストセル、数値が非常に少ない → 列ヘッダー行
     if p["text"] >= 2 and n_ratio <= 0.30:
         return _RT_COL_HDR
 
@@ -337,9 +336,9 @@ def _find_column_groups(
     max_col: int,
     gap_threshold: int = 2,
 ) -> List[Tuple[int, int]]:
-    """Return (start_col, end_col) pairs within a row span, splitting on column gaps.
+    """行スパン内で列の空白を境に (start_col, end_col) のペアを返す。
 
-    Used to separate side-by-side tables that share the same row range.
+    同じ行範囲を共有する横並びのテーブルを分離するために使用する。
     """
     col_has_content = [False] * (max_col + 1)
     for r in range(start_row, end_row + 1):
@@ -377,40 +376,39 @@ def _find_column_groups(
 def _detect_table_regions(
     grid: List[List[Any]], max_row: int, max_col: int
 ) -> List[Dict[str, Any]]:
-    """Detect candidate table regions using structural row-by-row analysis.
+    """構造的な行ごとの分析を使用してテーブル候補領域を検出する。
 
-    Algorithm
+    アルゴリズム
     ---------
-    1. Classify every row as empty / title / col_hdr / data / mixed.
-    2. Run a state machine that accumulates rows into regions.  Key transition
-       rules that go beyond simple "empty row = table boundary":
+    1. すべての行を empty / title / col_hdr / data / mixed に分類する。
+    2. 行を領域に蓄積するステートマシンを実行する。
+       単純な「空行 = テーブル境界」を超えた主要な遷移ルール:
 
-       • A col_hdr row appearing *after data rows* without an empty separator
-         signals a structural discontinuity (new table header) → flush the
-         current region and start a new one.
+       • データ行の後に空の区切りなしで col_hdr 行が現れた場合、
+         構造的な不連続性（新しいテーブルヘッダー）を示す
+         → 現在の領域をフラッシュして新しい領域を開始する。
 
-       • A title row appearing after data rows also signals a new table.
+       • データ行の後にタイトル行が現れた場合も新しいテーブルを示す。
 
-       • Up to 4 consecutive empty rows are tolerated between a title and the
-         header/data of its table.  More than 4 clears the pending title.
+       • タイトルとそのテーブルのヘッダー/データの間の連続した空行は
+         最大4行まで許容する。4行を超えると保留中のタイトルをクリアする。
 
-    3. Within each region the actual column span is tracked from every
-       contributing row so that row-header columns to the left of the value
-       area are always included.
+    3. 各領域内では、値エリア左側の行ヘッダー列が常に含まれるよう、
+       すべての構成行から実際の列スパンを追跡する。
 
-    Returns a list of region dicts, each with:
-        band_start  – first row index of the region
-        band_end    – last row index
-        col_start   – leftmost non-empty column across all region rows
-        col_end     – rightmost non-empty column
-        title_rows  – [(row_idx, text)] for title rows in/above the region
-        header_rows – [row_idx] for col_hdr rows
-        data_rows   – [row_idx] for data/mixed rows
+    返り値は領域辞書のリスト。各辞書のキー:
+        band_start  – 領域の最初の行インデックス
+        band_end    – 最後の行インデックス
+        col_start   – 全領域行中の最も左の非空列
+        col_end     – 最も右の非空列
+        title_rows  – [(row_idx, text)] 領域内またはその上のタイトル行
+        header_rows – [row_idx] col_hdr 行
+        data_rows   – [row_idx] data/mixed 行
     """
     if max_row == 0 or max_col == 0:
         return []
 
-    # ── Phase 1: classify all rows ──
+    # ── フェーズ1: すべての行を分類 ──
     profiles: Dict[int, Dict] = {}
     row_types: Dict[int, str] = {}
     for r in range(1, max_row + 1):
@@ -418,17 +416,17 @@ def _detect_table_regions(
         profiles[r] = p
         row_types[r] = _classify_row(p)
 
-    # ── Phase 2: state machine ──
+    # ── フェーズ2: ステートマシン ──
     def _mk() -> Dict:
         return {
             "band_start": None,
             "band_end": None,
             "col_start": max_col + 1,
             "col_end": 0,
-            "title_rows": [],      # [(row_idx, text)]
-            "header_rows": [],     # [row_idx]
-            "data_rows": [],       # [row_idx]
-            "trailing_notes": [],  # note texts that trail this table
+            "title_rows": [],      # [(row_idx, text)]（タイトル行）
+            "header_rows": [],     # [row_idx]（ヘッダー行）
+            "data_rows": [],       # [row_idx]（データ行）
+            "trailing_notes": [],  # このテーブルに後続する注記テキスト
         }
 
     def _upd_cols(reg: Dict, r: int) -> None:
@@ -448,28 +446,27 @@ def _detect_table_regions(
 
     regions: List[Dict] = []
     cur = _mk()
-    pending_titles: List[Tuple[int, str]] = []  # title rows not yet attached
+    pending_titles: List[Tuple[int, str]] = []  # まだ領域に紐付けられていないタイトル行
     consec_empty = 0
     last_filled = 0
 
     for r in range(1, max_row + 1):
         rt = row_types[r]
 
-        # ── empty row ──────────────────────────────────────────────────────
+        # ── 空行 ──────────────────────────────────────────────────────
         if rt == _RT_EMPTY:
             consec_empty += 1
             if cur["data_rows"] and consec_empty >= 2:
-                # Two consecutive empty rows after data → definite table boundary.
-                # A single empty row is tolerated: complex tables often have
-                # blank sub-rows (e.g. sparse 住宅用 / 学校向け rows) that would
-                # incorrectly split the table with a threshold of 1.
-                # Note: a single empty row followed by a new title/wide-header
-                # still closes the table via the _RT_TITLE / _RT_COL_HDR handlers.
+                # データ後に連続した空行が2行 → 明確なテーブル境界。
+                # 空行1行は許容する: 複雑なテーブルでは空のサブ行（例: 住宅用 / 学校向け行）
+                # を持つことがあり、閾値を1にすると誤ってテーブルを分割してしまう。
+                # 注: 空行1行の後に新しいタイトル/幅広ヘッダーが続く場合は、
+                # _RT_TITLE / _RT_COL_HDR のハンドラーでテーブルを閉じる。
                 _flush(cur, last_filled, regions)
                 cur = _mk()
                 pending_titles = []
             elif consec_empty > 4:
-                # Long blank stretch → abandon pending titles
+                # 長い空白区間 → 保留中のタイトルを破棄
                 pending_titles = []
             continue
 
@@ -477,18 +474,18 @@ def _detect_table_regions(
         last_filled = r
         p = profiles[r]
 
-        # ── title row ──────────────────────────────────────────────────────
+        # ── タイトル行 ──────────────────────────────────────────────────────
         if rt == _RT_TITLE:
             if cur["data_rows"]:
-                # Title appearing after data rows → end current table
+                # データ行の後にタイトルが現れた → 現在のテーブルを終了
                 _flush(cur, r - 1, regions)
                 cur = _mk()
                 pending_titles = []
             elif len(cur["header_rows"]) >= 2:
-                # 2+ COL_HDR rows before any data, then a TITLE → the preceding
-                # rows form an independent block (e.g. a navigation / index
-                # section above the real table).  Flush it so that quality
-                # filtering can discard it (Signal 3: short + all-text + wide).
+                # データなしで COL_HDR 行が2行以上あった後にタイトルが来た →
+                # 直前の行が独立したブロックを形成している（例: 実テーブル上の
+                # ナビゲーション/インデックスセクション）。
+                # 品質フィルタリングで破棄できるようフラッシュする（シグナル3: 短い＋全テキスト＋幅広）。
                 _flush(cur, r - 1, regions)
                 cur = _mk()
                 pending_titles = []
@@ -496,17 +493,15 @@ def _detect_table_regions(
             pending_titles.append((r, text))
             continue
 
-        # ── column-header row ──────────────────────────────────────────────
+        # ── 列ヘッダー行 ──────────────────────────────────────────────
         if rt == _RT_COL_HDR:
             if cur["data_rows"]:
-                # Before flushing, check if this is a subtotal/summary row
-                # that only appears to be a column header.
-                # Two keep-in-table signals:
-                # (a) Span < 50 % of the table width (narrow subtotal label).
-                # (b) Very sparse fill within the table's column bounds — a data
-                #     row whose label columns are at the left and a single value
-                #     is far to the right can look "wide" by span but is actually
-                #     a sparse data row (e.g. "住宅用 | … | 1 | … | blank").
+                # フラッシュ前に、列ヘッダーに見えるだけの小計/集計行でないか確認する。
+                # テーブルに留める2つのシグナル:
+                # (a) スパンがテーブル幅の50%未満（狭い小計ラベル）。
+                # (b) テーブルの列範囲内の充填率が非常に低い — ラベル列が左にあり
+                #     単一の値が右に離れたデータ行は、スパン的には「幅広」に見えるが
+                #     実際はスパースなデータ行（例: "住宅用 | … | 1 | … | blank"）。
                 tbl_width = cur["col_end"] - cur["col_start"] + 1
                 row_width = (
                     p["col_max"] - p["col_min"] + 1
@@ -530,11 +525,11 @@ def _detect_table_regions(
                     _upd_cols(cur, r)
                     continue
 
-                # Header appearing after data without a blank row
-                # → structural discontinuity: close current, start fresh
+                # データの後に空行なしでヘッダーが現れた
+                # → 構造的な不連続: 現在を閉じ、新しく開始する
                 _flush(cur, r - 1, regions)
                 cur = _mk()
-                # pending_titles may belong to this new table — keep them
+                # pending_titles はこの新しいテーブルに属する可能性があるため保持する
 
             if cur["band_start"] is None:
                 # Attach pending titles and open the region
@@ -548,28 +543,28 @@ def _detect_table_regions(
             _upd_cols(cur, r)
             continue
 
-        # ── annotation / footnote row ─────────────────────────────────────
+        # ── 注釈 / 脚注行 ─────────────────────────────────────
         if rt == _RT_NOTE:
-            # Deduplicate: merged cells propagate the same text to every column
+            # 重複除去: 結合セルは同じテキストをすべての列に伝播する
             unique_note_texts = list(dict.fromkeys(profiles[r]["texts"]))
             note_text = unique_note_texts[0] if unique_note_texts else ""
             if note_text:
                 if cur["data_rows"]:
-                    # Note trails the current table → flush the table first,
-                    # then attach note so the region boundary ends BEFORE the note.
+                    # 注記が現在のテーブルに後続する → まずテーブルをフラッシュし、
+                    # 領域境界が注記の前に終わるよう注記を付加する。
                     _flush(cur, r - 1, regions)
                     if regions:
                         regions[-1]["trailing_notes"].append(note_text)
                     cur = _mk()
                     pending_titles = []
                 elif cur["band_start"] is None and regions:
-                    # No new table started yet — consecutive note rows trailing
-                    # the previously flushed table.
+                    # 新しいテーブルはまだ開始していない — 直前にフラッシュされた
+                    # テーブルに後続する連続した注記行。
                     regions[-1]["trailing_notes"].append(note_text)
-                # else: note before any table (no prior region) — skip
+                # else: テーブルの前の注記（前の領域なし）— スキップ
             continue
 
-        # ── data / mixed row ───────────────────────────────────────────────
+        # ── データ / mixed 行 ───────────────────────────────────────────────
         if cur["band_start"] is None:
             for tr, tt in pending_titles:
                 cur["title_rows"].append((tr, tt))
@@ -580,7 +575,7 @@ def _detect_table_regions(
         cur["data_rows"].append(r)
         _upd_cols(cur, r)
 
-    # Final flush
+    # 最終フラッシュ
     if cur["band_start"] is not None:
         _flush(cur, last_filled, regions)
 
@@ -595,24 +590,24 @@ def _classify_table_quality(
     col_start: int,
     col_end: int,
 ) -> str:
-    """Classify a detected rectangular region into one of three quality tiers.
+    """検出された矩形領域を3つの品質ティアのいずれかに分類する。
 
     Returns
     -------
-    "ok"       — suitable for analysis
-    "metadata" — structured but not analytical (menus, index/TOC tables)
-    "discard"  — not a table (free-text paragraphs, notes, empty fragments)
+    "ok"       — 分析に適している
+    "metadata" — 構造化されているが分析的でない（メニュー、インデックス/目次テーブル）
+    "discard"  — テーブルではない（フリーテキスト段落、注記、空のフラグメント）
 
-    Signal mapping
+    シグナルマッピング
     --------------
-    1. Fill rate < 20 %                       → discard
-    2. Fewer than 2 dense data rows           → discard
-    3. Wide + short + all-text (≤5 rows, ≥5 cols, 0 numeric) → discard
-    4. Long text (col header or cell > 80 ch, OR > 25 % of text cells > 40 ch)
-       • + zero numeric cells                 → discard (free-text block)
-       • + some numeric cells                 → discard (index/TOC table)
+    1. 充填率 < 20%                            → discard
+    2. 密度の高いデータ行が2行未満             → discard
+    3. 幅広＋短い＋全テキスト（≤5行, ≥5列, 数値0） → discard
+    4. 長いテキスト（列ヘッダーまたはセルが80文字超、または25%超のテキストセルが40文字超）
+       • ＋数値セルがゼロ                      → discard（フリーテキストブロック）
+       • ＋数値セルあり                        → discard（インデックス/目次テーブル）
     """
-    # Signal 1: raw fill rate
+    # シグナル1: 生の充填率
     raw_total = (band_end - band_start + 1) * (col_end - col_start + 1)
     if raw_total == 0:
         return "discard"
@@ -625,7 +620,7 @@ def _classify_table_quality(
     if raw_filled / raw_total < 0.20:
         return "discard"
 
-    # Signal 2: dense rows (≥25 % of columns filled)
+    # シグナル2: 密度の高い行（列の25%以上が充填済み）
     if df.empty:
         return "discard"
     n_cols = max(len(df.columns), 1)
@@ -637,7 +632,7 @@ def _classify_table_quality(
     if dense_rows < 2:
         return "discard"
 
-    # Signal 3: wide + short + all-text → selection menus / form grids
+    # シグナル3: 幅広＋短い＋全テキスト → 選択メニュー / フォームグリッド
     if df.shape[0] <= 5 and df.shape[1] >= 5:
         num_ct = sum(
             int(pd.to_numeric(df[c], errors="coerce").notna().sum()) for c in df.columns
@@ -645,7 +640,7 @@ def _classify_table_quality(
         if num_ct == 0:
             return "discard"
 
-    # Signal 4: long-text content (check column headers AND cell values)
+    # シグナル4: 長いテキストコンテンツ（列ヘッダーとセル値の両方をチェック）
     txt_ct = lng_ct = 0
     max_len = 0
 
@@ -674,11 +669,11 @@ def _classify_table_quality(
                 _tally(str(v))
 
     if max_len > 80 or (txt_ct >= 3 and lng_ct / txt_ct > 0.25):
-        # Guard: a data-rich table must not be discarded just because a stray
-        # annotation row was carried into the region boundary.  Keep the table
-        # when EITHER the absolute numeric count is large enough OR the numeric
-        # density (fraction of region cells that are numeric) is meaningful —
-        # the density check rescues small tables where absolute count < 10.
+        # ガード: 迷い込んだ注釈行が領域境界に入り込んだだけで
+        # データの豊富なテーブルを破棄してはならない。
+        # 絶対的な数値カウントが十分に大きい場合、または数値密度
+        # （数値セルの割合）が有意な場合にテーブルを保持する —
+        # 密度チェックは絶対カウント < 10 の小さなテーブルを救済する。
         total_numeric = sum(
             int(pd.to_numeric(df[c], errors="coerce").notna().sum())
             for c in df.columns
@@ -691,18 +686,18 @@ def _classify_table_quality(
 
 
 # ---------------------------------------------------------------------------
-# DataFrame extraction from grid region
+# grid 領域からの DataFrame 抽出
 # ---------------------------------------------------------------------------
 
 
 def _detect_header_rows(rows: List[List[Any]]) -> Tuple[int, int]:
     """
-    Detect leading title rows and column header rows.
+    先頭のタイトル行と列ヘッダー行を検出する。
 
     Returns (n_title, n_header):
-      n_title  — rows at the top that are section titles (single-cell string,
-                 followed by a wider row). These are skipped before building the df.
-      n_header — rows that form the column header (1 or 2 levels).
+      n_title  — 先頭にあるセクションタイトルの行数（単一セルの文字列で、
+                 より幅広の行が後続する）。DataFrame 構築前にスキップされる。
+      n_header — 列ヘッダーを形成する行数（1段または2段）。
     """
     if not rows:
         return 0, 0
@@ -718,17 +713,17 @@ def _detect_header_rows(rows: List[List[Any]]) -> Tuple[int, int]:
             1 for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)
         )
 
-    # --- Step 1: skip leading title rows (and blank spacer rows between them) ---
-    # A title row has exactly 1 non-empty cell (a string).
-    # All-empty rows that appear before the first wide row are treated as
-    # spacers within the title block and are also skipped, so that a column
-    # header row separated from its title by one or more blank rows is still
-    # recognised correctly (e.g. title in row 2, blank in row 3, headers in row 4).
+    # --- ステップ1: 先頭のタイトル行（およびその間の空白スペーサー行）をスキップ ---
+    # タイトル行は正確に1つの非空セル（文字列）を持つ。
+    # 最初の幅広行の前に現れる全空行はタイトルブロック内のスペーサーとして扱い
+    # やはりスキップする。これにより、タイトルと列ヘッダー行の間に1行以上の
+    # 空行がある場合でも正しく認識される
+    # （例: 行2にタイトル、行3が空白、行4にヘッダー）。
     n_title = 0
     while n_title < len(rows) - 1:
         nn_curr = _nn(rows[n_title])
 
-        # All-empty row — skip as a spacer if a wider row still exists below
+        # 全空行 — より幅広の行が下にあればスペーサーとしてスキップ
         if not nn_curr:
             has_wider_below = any(
                 len(_nn(rows[j])) >= 2 for j in range(n_title + 1, len(rows))
@@ -741,7 +736,7 @@ def _detect_header_rows(rows: List[List[Any]]) -> Tuple[int, int]:
 
         if not (len(nn_curr) == 1 and isinstance(nn_curr[0], str)):
             break
-        # Accept this row as a title only if a wider row exists further down
+        # 下により幅広の行が存在する場合のみこの行をタイトルとして受け入れる
         has_wider_below = any(
             len(_nn(rows[j])) >= 2 for j in range(n_title + 1, len(rows))
         )
@@ -754,22 +749,22 @@ def _detect_header_rows(rows: List[List[Any]]) -> Tuple[int, int]:
     if not remaining:
         return n_title, 0
 
-    # --- Step 2: detect 1- or 2-level column headers in remaining rows ---
+    # --- ステップ2: 残りの行から1段または2段の列ヘッダーを検出 ---
     nn_first = _nn(remaining[0])
     if not nn_first:
         return n_title, 0
 
-    # First row is a header if ≥50 % of non-empty cells are strings
+    # 非空セルの50%以上が文字列ならば最初の行はヘッダー
     if _str_count(nn_first) / len(nn_first) < 0.5:
         return n_title, 0
 
-    # Second row is ALSO a header only when ALL of these hold:
-    #   1. No numeric values in the second row
-    #   2. High string ratio in the second row
-    #   3. The first row contains DUPLICATE values — the hallmark of merged-cell
-    #      spanning headers (e.g. "東京支社|東京支社|大阪支社|大阪支社").
-    #      If all first-row values are unique, row 1 is almost certainly a
-    #      normal single-level header and row 2 is data (even when all-string).
+    # 2行目もヘッダーになるのは以下の条件をすべて満たす場合のみ:
+    #   1. 2行目に数値がない
+    #   2. 2行目の文字列比率が高い
+    #   3. 1行目に重複値がある — 結合セルのスパニングヘッダーの特徴
+    #      （例: "東京支社|東京支社|大阪支社|大阪支社"）。
+    #      1行目の値がすべてユニークなら、1行目はほぼ確実に
+    #      通常の1段ヘッダーで2行目はデータ（全文字列であっても）。
     if len(remaining) > 1:
         nn_second = _nn(remaining[1])
         first_strs = [str(v) for v in nn_first]
@@ -807,10 +802,10 @@ def _extract_dataframe(
     end_col: int,
 ) -> Tuple[pd.DataFrame, Optional[str]]:
     """
-    Extract a rectangular region as a DataFrame.
+    矩形領域を DataFrame として抽出する。
 
-    Returns (df, title) where title is the section heading text detected
-    immediately above the table data.
+    (df, title) を返す。title はテーブルデータの直上で検出された
+    セクション見出しのテキスト。
     """
     if start_row > end_row or start_col > end_col:
         return pd.DataFrame(), None
@@ -826,7 +821,7 @@ def _extract_dataframe(
     n_title, n_header = _detect_header_rows(rows)
     num_cols = end_col - start_col + 1
 
-    # Collect title text from skipped title rows
+    # スキップされたタイトル行からタイトルテキストを収集する
     title: Optional[str] = None
     if n_title > 0:
         title_parts = []
@@ -836,7 +831,7 @@ def _extract_dataframe(
                 title_parts.append(str(vals[0]).strip())
         title = " / ".join(title_parts) if title_parts else None
 
-    # Rows available for header + data
+    # ヘッダー＋データに使用できる行
     remaining = rows[n_title:]
 
     if n_header == 0:
@@ -863,7 +858,7 @@ def _extract_dataframe(
 
 
 # ---------------------------------------------------------------------------
-# Per-worksheet detection
+# ワークシートごとの検出
 # ---------------------------------------------------------------------------
 
 
@@ -874,7 +869,7 @@ def _detect_tables_in_grid(
     sheet_name: str,
     table_counter: Dict[str, int],
 ) -> List[DetectedTable]:
-    """Detect tables using structural row classification and state machine."""
+    """構造的な行分類とステートマシンを使用してテーブルを検出する。"""
     if max_row == 0 or max_col == 0:
         return []
 
@@ -931,14 +926,14 @@ def _detect_tables_in_grid(
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# 公開 API
 # ---------------------------------------------------------------------------
 
 
 def parse_excel(
     file_content: bytes, filename: str
 ) -> Tuple[List[DetectedTable], List[str]]:
-    """Parse .xlsx/.xlsm file and detect all table regions."""
+    """.xlsx/.xlsm ファイルを解析し、すべてのテーブル領域を検出する。"""
     ext = Path(filename).suffix.lower()
     all_tables: List[DetectedTable] = []
     table_counter: Dict[str, int] = {}
@@ -981,7 +976,7 @@ def parse_excel(
 def parse_csv(
     file_content: bytes, filename: str
 ) -> Tuple[List[DetectedTable], List[str]]:
-    """Parse a CSV file as a single table."""
+    """CSV ファイルを単一のテーブルとして解析する。"""
     for enc in ("utf-8-sig", "cp932", "shift_jis", "utf-8"):
         try:
             df = pd.read_csv(io.BytesIO(file_content), encoding=enc)
