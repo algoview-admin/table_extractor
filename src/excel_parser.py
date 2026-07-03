@@ -214,15 +214,24 @@ def _is_filled(value: Any) -> bool:
 # 数値パース前に除去する文字（日本語マイナス記号、桁区切り文字など）
 _NUM_STRIP = str.maketrans("", "", ",、△▲")
 
+# 日本の統計資料で使われる秘匿・欠損値マーカー。
+# 行分類では数値扱いする（テキストとして計上しない）ことで、
+# これらが多い行が誤って _RT_COL_HDR に分類されるのを防ぐ。
+_STAT_PLACEHOLDERS: frozenset = frozenset({"***", "X", "x", "ｘ", "Ｘ", "－", "…"})
+
 
 def _cell_is_numeric(v: Any) -> bool:
-    """セルの値が数値として解釈できる場合に True を返す。"""
+    """セルの値が数値として解釈できる場合に True を返す。
+    統計秘匿マーカー（***、X 等）も数値扱いとする。"""
     if isinstance(v, bool):
         return False
     if isinstance(v, (int, float)):
         return v == v  # float NaN を除外
+    s = str(v).strip()
+    if s in _STAT_PLACEHOLDERS:
+        return True
     try:
-        float(str(v).strip().translate(_NUM_STRIP))
+        float(s.translate(_NUM_STRIP))
         return True
     except (ValueError, TypeError):
         return False
@@ -314,6 +323,10 @@ def _classify_row(p: Dict[str, Any]) -> str:
                 return _RT_NOTE
             if _AGG_ENUM_RE.search(txt):
                 return _RT_NOTE
+            # 4セル以上が同一の短いテキスト → 結合セルによる単位ラベル行
+            # （例: '百万円'×19, 'mil. yen'×19）。タイトルではなく列ヘッダーとして扱う。
+            if p["text"] >= 4:
+                return _RT_COL_HDR
             return _RT_TITLE if len(txt) <= 40 else _RT_COL_HDR
 
     # 非常に長いテキストセルと少数の数値を含む行 →
@@ -884,18 +897,23 @@ def _detect_tables_in_grid(
             grid, band_start, band_end, max_col, gap_threshold=2
         )
 
+        # タイトル行をスキップし、最初の列ヘッダー行をテーブル開始行とする。
+        # これにより start_row がシート内の実データヘッダー位置（例: 行8や行10）に
+        # 一致し、タイトル行（行1〜7等）は title フィールドへ格納される。
+        first_header_row = min(reg["header_rows"]) if reg["header_rows"] else band_start
+
         for col_start, col_end in col_groups:
-            if (band_end - band_start + 1) < 2:
+            if (band_end - first_header_row + 1) < 2:
                 continue
 
             df, inner_title = _extract_dataframe(
-                grid, band_start, band_end, col_start, col_end
+                grid, first_header_row, band_end, col_start, col_end
             )
             if df.empty or len(df) == 0:
                 continue
 
             quality = _classify_table_quality(
-                df, grid, band_start, band_end, col_start, col_end
+                df, grid, first_header_row, band_end, col_start, col_end
             )
             if quality != "ok":
                 continue
@@ -912,7 +930,7 @@ def _detect_tables_in_grid(
                 DetectedTable(
                     table_id=table_id,
                     sheet_name=sheet_name,
-                    start_row=band_start,
+                    start_row=first_header_row,
                     end_row=band_end,
                     start_col=col_start,
                     end_col=col_end,
