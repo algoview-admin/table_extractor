@@ -67,20 +67,28 @@ st.markdown(
     }
 
     /* ── Hide Streamlit default header / footer (keep #MainMenu for theme toggle) ── */
-    /* overflow:hidden clips stHeader content (Deploy button etc.).
-       #MainMenu is position:fixed so it escapes the clip and stays visible. */
     header[data-testid="stHeader"] {
         height: 0 !important;
         overflow: hidden !important;
         background: transparent !important;
     }
-    /* Deploy button — target explicitly for cross-platform reliability */
+    /* Deploy button — exhaustive cross-platform selectors */
     [data-testid="stDeployButton"],
     [data-testid="stToolbar"] [data-testid="stDeployButton"],
+    [data-testid="stToolbar"] > button,
     button[kind="deployButton"],
+    button[title*="Deploy"],
+    button[aria-label*="Deploy"],
     .stDeployButton,
     [data-testid="stStatusWidget"],
-    [data-testid="stDecoration"] { display: none !important; }
+    [data-testid="stDecoration"] {
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+        width: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+    }
     #MainMenu {
         visibility: visible !important;
         position: fixed !important;
@@ -259,6 +267,35 @@ st.markdown(
     }
 
 </style>
+<script>
+(function () {
+    var DEPLOY_SELECTORS = [
+        '[data-testid="stDeployButton"]',
+        'button[kind="deployButton"]',
+        'button[title*="Deploy"]',
+        'button[aria-label*="Deploy"]',
+    ];
+    function hideDeployBtn() {
+        DEPLOY_SELECTORS.forEach(function (sel) {
+            document.querySelectorAll(sel).forEach(function (el) {
+                el.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;overflow:hidden!important;';
+            });
+        });
+        // Also hide toolbar buttons that are not inside #MainMenu
+        var toolbar = document.querySelector('[data-testid="stToolbar"]');
+        if (toolbar) {
+            toolbar.querySelectorAll('button').forEach(function (btn) {
+                if (!btn.closest('#MainMenu')) {
+                    btn.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;overflow:hidden!important;';
+                }
+            });
+        }
+    }
+    hideDeployBtn();
+    var obs = new MutationObserver(hideDeployBtn);
+    obs.observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
 """,
     unsafe_allow_html=True,
 )
@@ -2336,6 +2373,86 @@ def _ir_column_signature(ir, tables_dict) -> frozenset:
     return frozenset(col_names)
 
 
+def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: dict) -> set:
+    """統合で追加する新カラムのうち、既存データから導出可能な冗長な軸を検出する。
+
+    新カラム値に含まれる4桁年（YYYY）が、各テーブルの既存カラムのいずれかに
+    すでに含まれている場合、そのカラムは冗長と判定する。
+
+    Returns: 冗長と判定した col_names のインデックス集合
+    """
+    import re as _r
+    redundant: set = set()
+    for ci, col_name in enumerate(col_names):
+        # 全テーブルについて「新カラム値の年が既存カラムに存在するか」を確認
+        all_found = True
+        any_table = False
+        for tid in ir.table_ids:
+            t = tables_dict.get(tid)
+            if t is None or t.effective_df is None:
+                all_found = False
+                break
+            val = (multi_vals.get(tid) or [])[ci] if ci < len(multi_vals.get(tid) or []) else ir.new_column_values.get(tid, "")
+            year_m = _r.search(r"(19|20)\d{2}", str(val))
+            if not year_m:
+                all_found = False
+                break
+            year = year_m.group(0)
+            df = t.effective_df
+            found_in_col = False
+            for ec in df.columns:
+                # 新カラム名と同一のカラムは除外（自己参照防止）
+                if str(ec) == str(col_name):
+                    continue
+                non_null = [str(v) for v in df[ec].dropna() if str(v).lower() not in ("nan", "none", "")]
+                if not non_null:
+                    continue
+                match_ratio = sum(1 for v in non_null if year in v) / len(non_null)
+                if match_ratio >= 0.5:
+                    found_in_col = True
+                    break
+            if not found_in_col:
+                all_found = False
+                break
+            any_table = True
+        if all_found and any_table and len(ir.table_ids) >= 2:
+            # 統合後も各テーブルの行が既存カラムで自然に区別できるか確認する
+            # → 各テーブルで検出された「年を含むカラム」の値が互いに重複しない場合のみ冗長とみなす
+            year_val_sets: list = []
+            distinguishable = True
+            for tid in ir.table_ids:
+                t = tables_dict.get(tid)
+                val = (multi_vals.get(tid) or [])[ci] if ci < len(multi_vals.get(tid) or []) else ir.new_column_values.get(tid, "")
+                year_m = _r.search(r"(19|20)\d{2}", str(val))
+                if not year_m:
+                    distinguishable = False
+                    break
+                year = year_m.group(0)
+                df = t.effective_df
+                vals_with_year: set = set()
+                for ec in df.columns:
+                    if str(ec) == str(col_name):
+                        continue
+                    non_null = [str(v) for v in df[ec].dropna() if str(v).lower() not in ("nan", "none", "")]
+                    if not non_null:
+                        continue
+                    if sum(1 for v in non_null if year in v) / len(non_null) >= 0.5:
+                        vals_with_year.update(non_null)
+                year_val_sets.append(vals_with_year)
+            # 各テーブルの値集合が互いに重複しなければ自然に区別可能
+            if distinguishable and len(year_val_sets) >= 2:
+                for i in range(len(year_val_sets)):
+                    for j in range(i + 1, len(year_val_sets)):
+                        if year_val_sets[i] & year_val_sets[j]:
+                            distinguishable = False
+                            break
+                    if not distinguishable:
+                        break
+            if distinguishable:
+                redundant.add(ci)
+    return redundant
+
+
 def _group_irs_by_similarity(irs, tables_dict):
     """リストのリストを返す: 各内部リストは類似IRのグループ。
 
@@ -3411,6 +3528,10 @@ def _build_final_tables():
 
             _col_names_bft = _auto_ir.new_column_names or [_auto_ir.new_column_name]
             _multi_vals_bft = _auto_ir.new_column_multi_values or {}
+            _redundant_bft = _detect_redundant_axes(
+                _col_names_bft, _multi_vals_bft, _auto_ir,
+                {t.table_id: t for t in st.session_state.get("detected_tables", [])}
+            )
 
             _frames_bft = []
             for _tid in _auto_ir.table_ids:
@@ -3421,6 +3542,8 @@ def _build_final_tables():
                         _auto_ir.new_column_values.get(_tid, "")
                     ]
                     for _ci in range(len(_col_names_bft) - 1, -1, -1):
+                        if _ci in _redundant_bft:
+                            continue
                         _val = _vals[_ci] if _ci < len(_vals) else ""
                         _df_copy.insert(0, _col_names_bft[_ci], _val)
                     _frames_bft.append(_df_copy)
@@ -3506,6 +3629,7 @@ def _build_final_tables():
 
         col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
         multi_vals = getattr(ir, "new_column_multi_values", {}) or {}
+        redundant_axes = _detect_redundant_axes(col_names, multi_vals, ir, tables_dict)
 
         frames = []
         for tid in ir.table_ids:
@@ -3514,6 +3638,8 @@ def _build_final_tables():
                 df_copy = t.effective_df.copy()
                 vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
                 for i in range(len(col_names) - 1, -1, -1):
+                    if i in redundant_axes:
+                        continue
                     val = vals[i] if i < len(vals) else ""
                     df_copy.insert(0, col_names[i], val)
                 frames.append(df_copy)
@@ -3541,7 +3667,7 @@ def _build_final_tables():
             "granularity": src_ta.granularity_level if src_ta else "detail",
             "is_minimum": src_ta.is_minimum_granularity_candidate if src_ta else False,
             "is_master": src_ta.is_master_table if src_ta else False,
-            "new_col_names": col_names,
+            "new_col_names": [c for i, c in enumerate(col_names) if i not in redundant_axes],
         }
 
         # 親を持つ全軸に対してディメンションマスタを自動生成する。
@@ -3776,7 +3902,7 @@ def _render_integration_before_after(
     # (a) スクロールで全行を表示し、(b) ネイティブのFullscreenボタンで全レコードを
     # 表示できるよう、常に完全なDataFrameを渡す。
     _BEFORE_VISIBLE = 3  # 統合前カード: スクロール前に表示する行数
-    _AFTER_VISIBLE = 5  # 統合後プレビュー: スクロール前に表示する行数
+    _AFTER_VISIBLE = 10  # 統合後プレビュー: スクロール前に表示する行数
     _ROW_PX = 35  # st.dataframe の1データ行のおよそのpx高さ
     _HDR_PX = 38  # ヘッダー行の高さ
 
@@ -4181,11 +4307,12 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
             col_prev, col_info = st.columns([1, 1])
             with col_prev:
                 _new_cols = info.get("new_col_names") or []
+                _row_px, _hdr_px, _max_visible = 35, 38, 10
                 st.dataframe(
                     _styled_df(df, _new_cols) if _new_cols else df.astype(str),
                     use_container_width=True,
                     hide_index=True,
-                    height=220,
+                    height=min(len(df) * _row_px + _hdr_px, _max_visible * _row_px + _hdr_px),
                 )
             with col_info:
                 st.markdown(f"_{info['description']}_")

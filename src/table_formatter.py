@@ -281,10 +281,21 @@ AGG_KEYWORDS: frozenset = frozenset({
     "total", "subtotal", "grand total", "sum", "cumulative",
 })
 
+# 全角スペース・ゼロ幅文字など ASCII strip で取れない空白類の正規化
+_WS_RE = _re.compile(r'[\s　\xa0​‌‍﻿]+')
+
+
+def _normalize_label(s: str) -> str:
+    """ラベル比較用に Unicode 空白類・制御文字を除去して正規化する。"""
+    return _WS_RE.sub('', s).strip()
+
 
 def _is_agg_label(s: str) -> bool:
-    """値が集計ラベルか判定する。完全一致 or キーワードで終わる場合に True。"""
-    s = s.strip()
+    """値が集計ラベルか判定する。完全一致 or キーワードで終わる場合に True。
+
+    全角スペース・ゼロ幅スペース等の不可視文字を除去してから比較する。
+    """
+    s = _normalize_label(str(s))
     if not s:
         return False
     sl = s.lower()
@@ -378,11 +389,20 @@ def _is_redundant_agg_row(
             mask &= df[cc] == cv
     mask.at[idx] = False  # 自行を除外
 
-    # 対象列に非集計値を持つ行が存在するか
+    # コンテキスト一致行に非集計値を持つ行が存在するか
     matching_vals = df.loc[mask, col]
+    if not matching_vals.empty:
+        return any(
+            not _is_agg_label(str(v))
+            for v in matching_vals
+            if v is not None and not (isinstance(v, float) and pd.isna(v))
+        )
+
+    # コンテキスト一致行が見つからない場合: 列全体に非集計値があれば冗長と判定する。
+    # fill_grouping_cols の閾値でコンテキスト列が補完されていない場合に発生しうる。
     return any(
         not _is_agg_label(str(v))
-        for v in matching_vals
+        for v in df[col].dropna()
         if v is not None and not (isinstance(v, float) and pd.isna(v))
     )
 
@@ -449,6 +469,15 @@ def remove_aggregates(
     removed_row_indices: List[int] = []
     removed_rows_info: List[Dict[str, Any]] = []
 
+    # 各ラベル列について「列全体に非集計値が存在するか」をキャッシュしておく
+    col_has_nonag: Dict[str, bool] = {}
+    for _lc in label_cols:
+        col_has_nonag[_lc] = any(
+            not _is_agg_label(str(v))
+            for v in df[_lc]
+            if v is not None and not (isinstance(v, float) and pd.isna(v))
+        )
+
     for idx in df.index:
         for col in label_cols:
             val = df.at[idx, col]
@@ -458,7 +487,11 @@ def remove_aggregates(
                 continue
             if not _is_agg_label(str(val)):
                 continue
-            # 集計ラベルを持つ列を発見。同じ文脈に個別データが存在する場合のみ除去。
+            # 集計ラベルを持つ列を発見。
+            # その列に非集計値が全く存在しない場合は全行が集計のみ → 除去しない。
+            if not col_has_nonag.get(col, False):
+                break
+            # 同じ文脈に個別データが存在する場合のみ除去（ctx_cols 外は無条件除去）。
             if col not in ctx_cols or _is_redundant_agg_row(df, idx, col, ctx_cols, covar):
                 removed_row_indices.append(idx)
                 row_info: Dict[str, Any] = {"__trigger_col__": col}
