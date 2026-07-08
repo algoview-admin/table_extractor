@@ -1403,7 +1403,9 @@ def _df_to_html(
 def _render_merge_detail_body(t: "DetectedTable") -> None:
     """列名対応表 + before/after プレビュー（expander なし）。"""
     raw = t.raw_df
-    fmt = t.df
+    # 集計行除去の前段階（ヘッダー統合直後）と比較することで、
+    # 集計行を「残留ヘッダー除去対象」として誤表示しないようにする
+    fmt = t.pre_agg_df if t.pre_agg_df is not None else t.df
     n_residue = len(raw) - len(fmt)
     st.caption(
         f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました"
@@ -1476,7 +1478,8 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
 def _merge_detail_body_html(t: "DetectedTable") -> str:
     """列名対応表 + before/after プレビューをHTML文字列で返す（ネスト details 用）。"""
     raw = t.raw_df
-    fmt = t.df
+    # 集計行除去の前段階と比較し、集計行を残留ヘッダー除去対象として誤表示しない
+    fmt = t.pre_agg_df if t.pre_agg_df is not None else t.df
     n_residue = len(raw) - len(fmt)
 
     before_cols = list(raw.columns)
