@@ -278,11 +278,18 @@ def merge_header_rows(
 # 集計を示すキーワード（小文字で比較）
 AGG_KEYWORDS: frozenset = frozenset({
     "計", "合計", "小計", "集計", "累計", "総計", "総合計", "合計額",
-    "total", "subtotal", "grand total", "sum", "cumulative",
+    "total", "subtotal", "grand total", "sum", "cumulative", "aggregate",
+    "year-to-date", "ytd",
 })
 
 # 全角スペース・ゼロ幅文字など ASCII strip で取れない空白類の正規化
 _WS_RE = _re.compile(r'[\s　\xa0​‌‍﻿]+')
+
+# 末尾の括弧注記パターン: 「（参考）」「[除く海外]」「(注1)」など
+# 1つ以上の括弧グループ（各種括弧の対）が末尾に続く場合にマッチ
+_TRAILING_BRACKET_RE = _re.compile(
+    r'[\s　]*(?:[（(【〔「\[]\s*[^)）】〕」\]]*\s*[)）】〕」\]])+\s*$'
+)
 
 
 def _normalize_label(s: str) -> str:
@@ -294,6 +301,9 @@ def _is_agg_label(s: str) -> bool:
     """値が集計ラベルか判定する。完全一致 or キーワードで終わる場合に True。
 
     全角スペース・ゼロ幅スペース等の不可視文字を除去してから比較する。
+    末尾に括弧注記（「（参考）」「[除く○○]」等）がある場合はそれを除いて再判定する。
+    例: "合計（参考）" → "合計" として判定 → True
+        "計画（2023年度）" → "計画" → マッチしない → False
     """
     s = _normalize_label(str(s))
     if not s:
@@ -303,6 +313,14 @@ def _is_agg_label(s: str) -> bool:
         kw_l = kw.lower()
         if sl == kw_l or sl.endswith(kw_l):
             return True
+    # 末尾の括弧注記を除いて再判定
+    stripped = _TRAILING_BRACKET_RE.sub('', s).strip()
+    if stripped and stripped != s:
+        sl2 = _normalize_label(stripped).lower()
+        for kw in AGG_KEYWORDS:
+            kw_l = kw.lower()
+            if sl2 == kw_l or sl2.endswith(kw_l):
+                return True
     return False
 
 

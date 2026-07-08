@@ -957,13 +957,22 @@ def _propagate_sheet_title(detected: List[DetectedTable]) -> None:
 
 def _apply_cross_table_detection(tables: List[DetectedTable], filename: str) -> None:
     """テーブルリスト全体にクロス集計検出と縦持ち変換を適用する。"""
+    from .table_formatter import _is_agg_label
     for t in tables:
         if t.df is None or t.df.empty:
             continue
         info = detect_cross_table(t.df, title=t.title, filename=filename)
         if info:
             t.stack_info = info
-            t.stacked_df = stack_cross_table(t.df, info)
+            stacked = stack_cross_table(t.df, info)
+            # 縦持ち変換後の時系列列に残存する集計ラベルを除去する安全策
+            # (例: "年間累計" が前段の agg_col 除去をすり抜けた場合のフォールバック)
+            var_name = info.get("var_name", "")
+            if var_name and var_name in stacked.columns:
+                agg_mask = stacked[var_name].astype(str).apply(_is_agg_label)
+                if agg_mask.any():
+                    stacked = stacked[~agg_mask].reset_index(drop=True)
+            t.stacked_df = stacked
 
 
 # ---------------------------------------------------------------------------
