@@ -74,6 +74,13 @@ st.markdown(
         overflow: hidden !important;
         background: transparent !important;
     }
+    /* Deploy button — target explicitly for cross-platform reliability */
+    [data-testid="stDeployButton"],
+    [data-testid="stToolbar"] [data-testid="stDeployButton"],
+    button[kind="deployButton"],
+    .stDeployButton,
+    [data-testid="stStatusWidget"],
+    [data-testid="stDecoration"] { display: none !important; }
     #MainMenu {
         visibility: visible !important;
         position: fixed !important;
@@ -1144,6 +1151,22 @@ def step1():
 # ---------------------------------------------------------------------------
 
 
+def _get_original_df(t: "DetectedTable") -> "Optional[pd.DataFrame]":
+    """ステップ2表示用: 整形処理適用前の生 DataFrame を返す。
+
+    優先順位: 多段ヘッダー統合前 → ffill 前 → 集計除去前 → 最終 df
+    """
+    for candidate in [
+        t.raw_df,
+        getattr(t, "pre_fill_df", None),
+        t.pre_agg_df,
+        t.df,
+    ]:
+        if candidate is not None and not candidate.empty:
+            return candidate
+    return None
+
+
 def step2():
     st.header("🔍 ステップ 2 : テーブル検出")
 
@@ -1215,9 +1238,10 @@ def step2():
                     f"**`{t.table_id}`**{title_str}  —  {t.row_count} 行 × {t.col_count} 列"
                     f"  （行 {t.start_row}〜{t.end_row}, 列 {t.start_col}〜{t.end_col}）"
                 )
-                if t.df is not None and not t.df.empty:
+                orig = _get_original_df(t)
+                if orig is not None:
                     st.dataframe(
-                        t.df.astype(str),
+                        orig.astype(str),
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -1277,13 +1301,15 @@ def _df_to_html(
     highlight_row_indices: Optional[set] = None,
     highlight_col_names: Optional[set] = None,
     unit_col_names: Optional[set] = None,
+    green_col_names: Optional[set] = None,
 ) -> str:
     """DataFrameをモダンなスタイルのHTMLテーブルに変換する。
     max_height を指定すると縦スクロール可能なコンテナで包む。
     highlight_row_count > 0 の場合、先頭 N 行を赤色強調表示する。
     highlight_row_indices: 赤色強調する行の位置インデックス集合。
     highlight_col_names: オレンジ色ヘッダーで示す除去列名集合。
-    unit_col_names: 紫色ヘッダーで示す単位付加列名集合。"""
+    unit_col_names: 紫色ヘッダーで示す単位付加列名集合。
+    green_col_names: 緑色ヘッダーで示す前方補完列名集合。"""
     col_names = list(df.columns)
     orange_pos: set = {
         j for j, c in enumerate(col_names)
@@ -1292,6 +1318,10 @@ def _df_to_html(
     purple_pos: set = {
         j for j, c in enumerate(col_names)
         if unit_col_names and str(c) in unit_col_names
+    }
+    green_pos: set = {
+        j for j, c in enumerate(col_names)
+        if green_col_names and str(c) in green_col_names
     }
 
     def _th(j: int, c: str) -> str:
@@ -1308,6 +1338,13 @@ def _df_to_html(
                 f"<th style='{_TH_STYLE}"
                 f"background-image:linear-gradient(rgba(124,58,237,0.35),rgba(124,58,237,0.35));"
                 f"color:rgba(221,214,254,1.0);border-bottom:2px solid rgba(167,139,250,0.7)'>"
+                f"{label}</th>"
+            )
+        if j in green_pos:
+            return (
+                f"<th style='{_TH_STYLE}"
+                f"background-image:linear-gradient(rgba(16,185,129,0.25),rgba(16,185,129,0.25));"
+                f"color:rgba(16,185,129,1.0);border-bottom:2px solid rgba(16,185,129,0.5)'>"
                 f"{label}</th>"
             )
         return f"<th style='{_TH_STYLE}'>{label}</th>"
@@ -1593,6 +1630,181 @@ def _render_header_merge_detail(
             st.markdown(outer_html, unsafe_allow_html=True)
 
 
+def _render_fill_cols_body(t: "DetectedTable") -> None:
+    """グルーピング列 ffill の詳細（Streamlit ウィジェット版）。"""
+    pre = t.pre_fill_df
+    post = t.df
+    cols = getattr(t, "filled_cols", [])
+
+    badges = " ".join(
+        f"<span style='background:rgba(16,185,129,0.2);color:rgba(16,185,129,1);border:1px solid rgba(16,185,129,0.4);"
+        f"border-radius:4px;padding:2px 8px;font-size:12px;font-weight:600'>{_html.escape(c)}</span>"
+        for c in cols
+    )
+    st.markdown(
+        f"<p style='margin:4px 0 10px'>空白補完した列: {badges}</p>",
+        unsafe_allow_html=True,
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**補完前**（オレンジ列 = 空白補完の対象）")
+        if pre is not None:
+            st.markdown(
+                _df_to_html(pre, max_height=340, highlight_col_names=set(cols)),
+                unsafe_allow_html=True,
+            )
+    with col_b:
+        st.markdown("**補完後**（緑列 = 補完済み）")
+        if post is not None:
+            st.markdown(
+                _df_to_html(post, max_height=340, green_col_names=set(cols)),
+                unsafe_allow_html=True,
+            )
+
+
+def _render_fill_cols_body_html(t: "DetectedTable") -> str:
+    """グルーピング列 ffill の詳細（HTML 文字列版）。"""
+    pre = t.pre_fill_df
+    post = t.df
+    cols = getattr(t, "filled_cols", [])
+
+    badges = " ".join(
+        f"<span style='background:rgba(16,185,129,0.2);color:rgba(16,185,129,1);border:1px solid rgba(16,185,129,0.4);"
+        f"border-radius:4px;padding:2px 8px;font-size:12px;font-weight:600'>{_html.escape(c)}</span>"
+        for c in cols
+    )
+    badge_html = f"<p style='margin:4px 0 10px'>空白補完した列: {badges}</p>"
+
+    pre_html = _df_to_html(pre, max_height=340, highlight_col_names=set(cols)) if pre is not None else ""
+    post_html = _df_to_html(post, max_height=340, green_col_names=set(cols)) if post is not None else ""
+
+    return (
+        badge_html
+        + "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        + f"<div><p style='margin:0 0 6px;font-weight:600'>補完前（オレンジ列 = 空白補完の対象）</p>{pre_html}</div>"
+        + f"<div><p style='margin:0 0 6px;font-weight:600'>補完後（緑列 = 補完済み）</p>{post_html}</div>"
+        + "</div>"
+    )
+
+
+def _render_stack_body(t: "DetectedTable") -> None:
+    """クロス集計→縦持ち変換の詳細（Streamlit ウィジェット版）。"""
+    info = t.stack_info
+    wide = t.df
+    long_df = t.stacked_df
+    if not info or wide is None or long_df is None:
+        return
+
+    label_cols = info.get("label_cols", [])
+    time_cols  = info.get("time_cols", [])
+    var_name   = info.get("var_name", "期間")
+    value_name = info.get("value_name", "値")
+    year_ctx   = info.get("year_context")
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    label_html = " ".join(_badge(c, "156,163,175") for c in label_cols) or "（なし）"
+    shown_time = time_cols[:6]
+    rest_count = len(time_cols) - len(shown_time)
+    time_html  = " ".join(_badge(c, "56,189,248") for c in shown_time)
+    if rest_count > 0:
+        time_html += f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 列</span>"
+
+    meta_lines = [
+        f"ラベル列: {label_html}",
+        f"時系列列: {time_html}（計 {len(time_cols)} 列）",
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(var_name)}</b> → <b>{_html.escape(value_name)}</b>",
+    ]
+    if year_ctx:
+        meta_lines.append(f"年コンテキスト（タイトル/ファイル名から補完）: <b>{year_ctx}年</b>")
+
+    st.markdown(
+        "<div style='margin:4px 0 12px;line-height:2'>" +
+        "<br>".join(meta_lines) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    time_col_set  = set(time_cols)
+    new_col_set   = {var_name, value_name}
+    if year_ctx and info.get("time_kind") == "month":
+        new_col_set.add("年")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(f"**変換前**（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列列）")
+        st.markdown(
+            _df_to_html(wide, max_height=340, highlight_col_names=time_col_set),
+            unsafe_allow_html=True,
+        )
+    with col_b:
+        st.markdown(f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）")
+        st.markdown(
+            _df_to_html(long_df, max_height=340, green_col_names=new_col_set),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_stack_body_html(t: "DetectedTable") -> str:
+    """クロス集計→縦持ち変換の詳細（HTML 文字列版）。"""
+    info = t.stack_info
+    wide = t.df
+    long_df = t.stacked_df
+    if not info or wide is None or long_df is None:
+        return ""
+
+    label_cols = info.get("label_cols", [])
+    time_cols  = info.get("time_cols", [])
+    var_name   = info.get("var_name", "期間")
+    value_name = info.get("value_name", "値")
+    year_ctx   = info.get("year_context")
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    label_html = " ".join(_badge(c, "156,163,175") for c in label_cols) or "（なし）"
+    shown_time = time_cols[:6]
+    rest_count = len(time_cols) - len(shown_time)
+    time_html  = " ".join(_badge(c, "56,189,248") for c in shown_time)
+    if rest_count > 0:
+        time_html += f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 列</span>"
+
+    year_line = f"<br>年コンテキスト: <b>{year_ctx}年</b>" if year_ctx else ""
+    meta_html = (
+        f"<div style='margin:4px 0 12px;line-height:2'>"
+        f"ラベル列: {label_html}<br>"
+        f"時系列列: {time_html}（計 {len(time_cols)} 列）<br>"
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(var_name)}</b> → <b>{_html.escape(value_name)}</b>"
+        f"{year_line}</div>"
+    )
+
+    time_col_set = set(time_cols)
+    new_col_set  = {var_name, value_name}
+    if year_ctx and info.get("time_kind") == "month":
+        new_col_set.add("年")
+
+    pre_html  = _df_to_html(wide, max_height=340, highlight_col_names=time_col_set)
+    post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列列）</p>{pre_html}</div>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
+        "</div>"
+    )
+    return meta_html + grid_html
+
+
 def _render_agg_removal_body(t: "DetectedTable") -> None:
     """集計除去の詳細（Streamlit ウィジェット版、expander なし）。"""
     pre = t.pre_agg_df
@@ -1800,27 +2012,71 @@ def step_format():
     formatted = [t for t in tables if t.raw_df is not None]
     unformatted = [t for t in tables if t.raw_df is None]
     agg_removed = [t for t in tables if t.pre_agg_df is not None]
+    fill_applied = [t for t in tables if getattr(t, "filled_cols", [])]
 
-    nothing_done = not formatted and not agg_removed
+    stacked_all = [t for t in tables if getattr(t, "stacked_df", None) is not None]
+    nothing_done = not formatted and not agg_removed and not fill_applied and not stacked_all
     if nothing_done:
         st.info("全テーブルに対して整形処理はありませんでした。")
     else:
+        first_section = True
+
         # ── ① 多段ヘッダーの検出と解決機能 ──────────────────────────────
-        st.subheader(f"🔗 多段ヘッダーの検出と解決機能（対象：{len(formatted)}テーブル）")
         if formatted:
+            if not first_section:
+                st.divider()
+            first_section = False
+            st.subheader(f"🔗 多段ヘッダーの検出と解決機能（対象：{len(formatted)}テーブル）")
             st.success(
                 f"**{len(formatted)}** テーブルで多段ヘッダーを統合しました"
                 f"（整形なし: {len(unformatted)} テーブル）"
             )
             rest = formatted[1:] if len(formatted) > 1 else None
             _render_header_merge_detail(formatted[0], rest=rest)
-        else:
-            st.info("多段ヘッダーを含むテーブルはありませんでした。")
 
-        st.divider()
+        # ── ② グルーピング列の前方補完（視覚結合セル対応） ─────────────────
+        if fill_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            total_filled = sum(len(getattr(t, "filled_cols", [])) for t in fill_applied)
+            st.subheader(f"↕️ グルーピング列の空白補完機能（対象：{len(fill_applied)}テーブル）")
+            st.success(
+                f"**{len(fill_applied)}** テーブルのグルーピング列の空白を上の値で埋めました  "
+                f"（列: {total_filled} 件）"
+            )
+            rep_f = fill_applied[0]
+            rep_f_title = f"  🏷️ `{rep_f.title}`" if rep_f.title else ""
+            with st.expander(
+                f"**`{rep_f.table_id}`**{rep_f_title}  —  シート: {rep_f.sheet_name}",
+                expanded=True,
+            ):
+                _render_fill_cols_body(rep_f)
 
-        # ── ② 集計行の検出・削除・メタデータ保存機能 ──────────────────────
+                rest_fill = fill_applied[1:]
+                if rest_fill:
+                    inner_html = ""
+                    for r in rest_fill:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_fill_cols_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_fill)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
+
+        # ── ③ 集計行の検出・削除・メタデータ保存機能 ──────────────────────
         if agg_removed:
+            if not first_section:
+                st.divider()
             total_rows = sum(len(t.agg_rows_removed) for t in agg_removed)
             total_cols = sum(len(t.agg_cols_removed) for t in agg_removed)
             st.subheader(f"🗑️ 集計行の検出・削除・メタデータ保存機能（対象：{len(agg_removed)}テーブル）")
@@ -1858,8 +2114,45 @@ def step_format():
                         level=2,
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
-        else:
-            st.info("集計行・集計列を含むテーブルはありませんでした。")
+
+        # ── ④ クロス集計形式の検出と縦持ち変換機能 ──────────────────────────
+        stacked = [t for t in tables if getattr(t, "stacked_df", None) is not None]
+        if stacked:
+            if not first_section:
+                st.divider()
+            st.subheader(f"📐 クロス集計形式の検出と縦持ち変換機能（対象：{len(stacked)}テーブル）")
+            total_time_cols = sum(len(getattr(t, "stack_info", {}).get("time_cols", [])) for t in stacked)
+            st.success(
+                f"**{len(stacked)}** テーブルで横持ち時系列列を検出し、縦持ちに変換しました  "
+                f"（時系列列: 計 {total_time_cols} 列）"
+            )
+            rep_s = stacked[0]
+            rep_s_title = f"  🏷️ `{rep_s.title}`" if rep_s.title else ""
+            with st.expander(
+                f"**`{rep_s.table_id}`**{rep_s_title}  —  シート: {rep_s.sheet_name}",
+                expanded=True,
+            ):
+                _render_stack_body(rep_s)
+
+                rest_stack = stacked[1:]
+                if rest_stack:
+                    inner_html = ""
+                    for r in rest_stack:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_stack_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_stack)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
 
     c1, c2 = st.columns([1, 4])
     with c1:
@@ -2038,8 +2331,8 @@ def _ir_column_signature(ir, tables_dict) -> frozenset:
     col_names = getattr(ir, "new_column_names", []) or [ir.new_column_name]
     for tid in ir.table_ids:
         t = tables_dict.get(tid)
-        if t is not None and t.df is not None:
-            return frozenset(col_names + list(t.df.columns))
+        if t is not None and t.effective_df is not None:
+            return frozenset(col_names + list(t.effective_df.columns))
     return frozenset(col_names)
 
 
@@ -2355,11 +2648,11 @@ def _build_auto_irs_from_latent(
 
             def _num_total(tid: str) -> float:
                 t = tables_dict.get(tid)
-                if t is None or t.df is None or t.df.empty:
+                if t is None or t.effective_df is None or t.effective_df.empty:
                     return 0.0
                 try:
                     return float(
-                        t.df.select_dtypes(include="number").abs().values.sum()
+                        t.effective_df.select_dtypes(include="number").abs().values.sum()
                     )
                 except Exception:
                     return 0.0
@@ -3122,8 +3415,8 @@ def _build_final_tables():
             _frames_bft = []
             for _tid in _auto_ir.table_ids:
                 _t = _bft_ext.get(_tid)
-                if _t and _t.df is not None and not _t.df.empty:
-                    _df_copy = _t.df.copy()
+                if _t and _t.effective_df is not None and not _t.effective_df.empty:
+                    _df_copy = _t.effective_df.copy()
                     _vals = _multi_vals_bft.get(_tid) or [
                         _auto_ir.new_column_values.get(_tid, "")
                     ]
@@ -3217,8 +3510,8 @@ def _build_final_tables():
         frames = []
         for tid in ir.table_ids:
             t = tables_dict.get(tid)
-            if t and t.df is not None and not t.df.empty:
-                df_copy = t.df.copy()
+            if t and t.effective_df is not None and not t.effective_df.empty:
+                df_copy = t.effective_df.copy()
                 vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
                 for i in range(len(col_names) - 1, -1, -1):
                     val = vals[i] if i < len(vals) else ""
@@ -3293,10 +3586,10 @@ def _build_final_tables():
         if ta.table_id in integrated_ids:
             continue
         t = tables_dict.get(ta.table_id)
-        if not t or t.df is None or t.df.empty:
+        if not t or t.effective_df is None or t.effective_df.empty:
             continue
         final[ta.table_id] = {
-            "df": t.df,
+            "df": t.effective_df,
             "display_name": ta.display_name,
             "description": ta.description,
             "reasoning": ta.reasoning,
@@ -3313,10 +3606,10 @@ def _build_final_tables():
     for t in st.session_state.detected_tables:
         if t.table_id in analyzed_ids or t.table_id in integrated_ids:
             continue
-        if t.df is None or t.df.empty:
+        if t.effective_df is None or t.effective_df.empty:
             continue
         final[t.table_id] = {
-            "df": t.df,
+            "df": t.effective_df,
             "display_name": t.table_id,
             "description": "テーブル関係分析対象外のテーブル",
             "reasoning": "自動検出されましたが テーブル関係分析から除外されました",
@@ -3525,10 +3818,10 @@ def _render_integration_before_after(
             f"📋&nbsp;{_html.escape(tid)}</div>{pills}</div>",
             unsafe_allow_html=True,
         )
-        if t is not None and t.df is not None and not t.df.empty:
-            n_rows = len(t.df)
+        if t is not None and t.effective_df is not None and not t.effective_df.empty:
+            n_rows = len(t.effective_df)
             st.dataframe(
-                t.df.astype(str),
+                t.effective_df.astype(str),
                 use_container_width=True,
                 hide_index=True,
                 height=min(
@@ -3614,8 +3907,8 @@ def _render_integration_before_after(
     frames = []
     for tid in ir.table_ids:
         t = tables_dict.get(tid)
-        if t is not None and t.df is not None and not t.df.empty:
-            row = t.df.copy()  # full data — scroll + Fullscreen reveal all rows
+        if t is not None and t.effective_df is not None and not t.effective_df.empty:
+            row = t.effective_df.copy()  # full data — scroll + Fullscreen reveal all rows
             vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
             for ci in range(len(col_names) - 1, -1, -1):
                 val = vals[ci] if ci < len(vals) else ""
@@ -3740,10 +4033,10 @@ def _render_derived_before_after(
             f"</div>",
             unsafe_allow_html=True,
         )
-        if t is not None and t.df is not None and not t.df.empty:
-            n = len(t.df)
+        if t is not None and t.effective_df is not None and not t.effective_df.empty:
+            n = len(t.effective_df)
             st.dataframe(
-                t.df.astype(str),
+                t.effective_df.astype(str),
                 use_container_width=True,
                 hide_index=True,
                 height=min(n * _ROW_PX + _HDR_PX, _BEFORE_VISIBLE * _ROW_PX + _HDR_PX),

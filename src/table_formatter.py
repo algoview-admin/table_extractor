@@ -12,6 +12,7 @@
   - 行ヘッダー列の正規化
 """
 
+import re as _re
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -476,3 +477,206 @@ def remove_aggregates(
     cleaned = cleaned.reset_index(drop=True)
 
     return cleaned, removed_rows_info, removed_cols, removed_row_indices
+
+
+# ---------------------------------------------------------------------------
+# グルーピング列の前方補完（視覚結合セル対応）
+# ---------------------------------------------------------------------------
+
+
+def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:
+    """
+    視覚的セル結合（XML 上は未マージ）によるグルーピング列の None を前方補完する。
+
+    Excel では「セルを結合」表示していても実際には先頭セルにのみ値があり、
+    後続セルが空のケースがある。この関数はそのようなグルーピング列を検出し
+    ffill（前方補完）を適用する。
+
+    対象列の条件（両方を満たす場合のみ適用）:
+      1. object 型かつ、最初の非 None 値の後ろに None が存在する（内部 None）
+      2. ffill 後のユニーク値比率 < 50%（カテゴリ列であることを確認）
+
+    Returns:
+      (filled_df, filled_col_names)
+    """
+    if df is None or df.empty:
+        return df, []
+
+    df = df.copy()
+    filled_cols: List[str] = []
+
+    for col in df.columns:
+        series = df[col]
+
+        if series.dtype != object:
+            continue
+
+        # None/NaN を持たない列はスキップ
+        null_mask = series.isna()
+        if not null_mask.any():
+            continue
+
+        # 最初の非 None 値の位置を取得
+        first_valid_idx = series.first_valid_index()
+        if first_valid_idx is None:
+            continue  # 列全体が None → スキップ
+
+        # 最初の非 None 値より後ろに None があるか（内部 None の検出）
+        pos = df.index.get_loc(first_valid_idx)
+        if isinstance(pos, (slice, type(None))):
+            pos = 0  # 重複インデックス対策（通常は発生しない）
+        if not null_mask.iloc[pos + 1:].any():
+            continue  # 末尾以降の None のみ → スキップ
+
+        # ffill 後のユニーク比率チェック
+        filled = series.ffill()
+        n_unique = filled.nunique(dropna=True)
+        if n_unique / max(1, len(df)) >= 0.5:
+            continue  # ffill 後もユニーク率が高い → カテゴリ列でない
+
+        df[col] = filled
+        filled_cols.append(str(col))
+
+    return df, filled_cols
+
+
+# ---------------------------------------------------------------------------
+# クロス集計形式（横持ち時系列）の検出と縦持ち変換
+# ---------------------------------------------------------------------------
+
+# 列名が時系列を表すパターンとその種別
+_TIME_PATTERNS: List[Tuple[Any, str]] = [
+    (_re.compile(r'^\d{4}年\d{1,2}月$'), 'year_month'),   # 2011年1月
+    (_re.compile(r'^\d{1,2}月$'), 'month'),                 # 1月, 12月
+    (_re.compile(r'^Q[1-4]$', _re.I), 'quarter'),           # Q1, Q2, Q3, Q4
+    (_re.compile(r'^第[1-4一二三四]四半期$'), 'quarter_ja'), # 第1四半期
+    (_re.compile(r'^\d{4}年度$'), 'fiscal_year'),            # 2020年度
+    (_re.compile(r'^\d{4}年$'), 'year'),                    # 2020年
+    (_re.compile(r'^(19|20)\d{2}$'), 'year_num'),           # 2020（4桁年数字）
+]
+
+# タイトル・ファイル名から年を抽出する正規表現
+_YEAR_CTX_RE = _re.compile(r'(19|20)\d{2}')
+
+# 値列名の推定キーワード
+_VALUE_KEYWORDS: Dict[str, str] = {
+    "売上": "売上", "予算": "予算", "実績": "実績",
+    "件数": "件数", "人数": "人数", "金額": "金額",
+    "数量": "数量", "利益": "利益", "費用": "費用",
+    "コスト": "コスト",
+}
+
+# 種別→縦持ち後の時系列列名
+_VAR_NAME_MAP: Dict[str, str] = {
+    'year_month': '年月', 'month': '月', 'quarter': '四半期',
+    'quarter_ja': '四半期', 'fiscal_year': '年度',
+    'year': '年', 'year_num': '年',
+}
+
+
+def _classify_col_time(col_name: str) -> Optional[str]:
+    """列名が時系列パターンにマッチするか判定し、種別文字列を返す。"""
+    s = str(col_name).strip()
+    for pattern, kind in _TIME_PATTERNS:
+        if pattern.match(s):
+            return kind
+    return None
+
+
+def _extract_year_context(title: Optional[str], filename: Optional[str]) -> Optional[int]:
+    """タイトルまたはファイル名から西暦年（1900〜2099）を抽出する。"""
+    for source in [title, filename]:
+        if source:
+            m = _YEAR_CTX_RE.search(str(source))
+            if m:
+                return int(m.group())
+    return None
+
+
+def detect_cross_table(
+    df: Any,
+    title: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    DataFrame がクロス集計形式（月・四半期・年度等を列に持つ横持ち）かを検出する。
+
+    判定条件（両方必須）:
+      - 列名の 80% 以上が時系列パターン（月・四半期・年度等）にマッチする
+      - 時系列列が 2 列以上ある
+
+    月のみ列（1月〜12月）の場合は title / filename から年を補完する。
+
+    Returns:
+      検出された場合は変換情報 dict、検出されなかった場合は None
+    """
+    if df is None or df.empty or len(df.columns) < 3:
+        return None
+
+    col_names = [str(c) for c in df.columns]
+    time_types = [_classify_col_time(c) for c in col_names]
+
+    # 最初の時系列列が現れる位置を特定
+    first_time_idx = next((i for i, t in enumerate(time_types) if t is not None), None)
+    if first_time_idx is None:
+        return None
+
+    # 先頭ラベル列を除いた範囲で時系列列の割合を判定（80% 以上）
+    candidate_types = time_types[first_time_idx:]
+    n_time = sum(1 for t in candidate_types if t is not None)
+    if n_time < 2 or n_time / max(1, len(candidate_types)) < 0.8:
+        return None
+
+    label_cols = [col_names[i] for i, t in enumerate(time_types) if t is None]
+    time_cols  = [col_names[i] for i, t in enumerate(time_types) if t is not None]
+    time_kind  = next(t for t in time_types if t is not None)
+
+    # 月のみ列の場合、title/filename から年を補完
+    year_context: Optional[int] = None
+    if time_kind == 'month':
+        year_context = _extract_year_context(title, filename)
+
+    var_name = _VAR_NAME_MAP.get(time_kind, '期間')
+
+    # 値列名の推定（タイトルキーワード優先、なければ "値"）
+    value_name = "値"
+    if title:
+        for kw, name in _VALUE_KEYWORDS.items():
+            if kw in title:
+                value_name = name
+                break
+
+    return {
+        'label_cols': label_cols,
+        'time_cols': time_cols,
+        'time_kind': time_kind,
+        'var_name': var_name,
+        'value_name': value_name,
+        'year_context': year_context,
+    }
+
+
+def stack_cross_table(df: Any, stack_info: Dict[str, Any]) -> Any:
+    """クロス集計形式（横持ち）を縦持ち（long format）に変換する。
+
+    月のみ列で year_context が設定されている場合、年列を先頭ラベルの直後に挿入する。
+    """
+    label_cols   = stack_info['label_cols']
+    time_cols    = stack_info['time_cols']
+    var_name     = stack_info['var_name']
+    value_name   = stack_info['value_name']
+    year_context = stack_info.get('year_context')
+    time_kind    = stack_info['time_kind']
+
+    melted = df.melt(
+        id_vars=label_cols,
+        value_vars=time_cols,
+        var_name=var_name,
+        value_name=value_name,
+    )
+
+    # 月のみの場合、年列をラベル列の直後に挿入
+    if year_context is not None and time_kind == 'month':
+        melted.insert(len(label_cols), '年', year_context)
+
+    return melted.reset_index(drop=True)

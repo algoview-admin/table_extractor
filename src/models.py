@@ -19,17 +19,31 @@ class DetectedTable:
     agg_rows_removed: List[dict] = field(default_factory=list)          # 除去した行のラベル値 [{col: val, ...}, ...]
     agg_cols_removed: List[str] = field(default_factory=list)           # 除去した列名
     agg_rows_removed_positions: List[int] = field(default_factory=list) # 除去した行の元 DataFrame 上の整数インデックス
+    filled_cols: List[str] = field(default_factory=list)                # ffill を適用したグルーピング列名
+    pre_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 前 DataFrame（ffill 適用時のみ）
+    stack_info: Optional[Dict[str, Any]] = field(default=None)          # クロス集計検出情報
+    stacked_df: Optional[pd.DataFrame] = field(default=None, repr=False)   # 縦持ち変換後 DataFrame
+
+    @property
+    def effective_df(self) -> Optional[pd.DataFrame]:
+        """分析・表示に使用する最終 DataFrame。縦持ち変換済みの場合はそちらを優先する。"""
+        if self.stacked_df is not None:
+            return self.stacked_df
+        return self.df
 
     @property
     def row_count(self) -> int:
-        return len(self.df) if self.df is not None else 0
+        df = self.effective_df
+        return len(df) if df is not None else 0
 
     @property
     def col_count(self) -> int:
-        return len(self.df.columns) if self.df is not None else 0
+        df = self.effective_df
+        return len(df.columns) if df is not None else 0
 
     def to_summary_dict(self, max_sample_rows: int = 3) -> Dict[str, Any]:
-        if self.df is None or self.df.empty:
+        df = self.effective_df
+        if df is None or df.empty:
             return {
                 "table_id": self.table_id,
                 "sheet_name": self.sheet_name,
@@ -40,11 +54,11 @@ class DetectedTable:
                 "sample_data": [],
             }
 
-        sample = self.df.head(max_sample_rows).copy()
+        sample = df.head(max_sample_rows).copy()
         for col in sample.columns:
             sample[col] = sample[col].astype(str)
 
-        columns = [str(c) for c in self.df.columns]
+        columns = [str(c) for c in df.columns]
 
         return {
             "table_id": self.table_id,
@@ -54,7 +68,7 @@ class DetectedTable:
             "row_count": self.row_count,
             "col_count": self.col_count,
             "columns": columns[:20],
-            "columns_truncated": len(self.df.columns) > 20,
+            "columns_truncated": len(df.columns) > 20,
             "sample_data": sample.to_dict(orient="records"),
             "notes": self.notes,
         }

@@ -7,7 +7,10 @@ import openpyxl
 import pandas as pd
 
 from .models import DetectedTable
-from .table_formatter import detect_header_roles, merge_header_rows, remove_aggregates
+from .table_formatter import (
+    detect_cross_table, detect_header_roles, fill_grouping_cols,
+    merge_header_rows, remove_aggregates, stack_cross_table,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -858,7 +861,12 @@ def _detect_tables_in_grid(
             table_counter[safe] = table_counter.get(safe, 0) + 1
             table_id = f"{safe}_T{table_counter[safe]}"
 
-            # 多段ヘッダー整形後に集計行・列を除去
+            # グルーピング列の前方補完（視覚結合セル対応）
+            pre_fill_df_candidate = df
+            df, filled_cols = fill_grouping_cols(df)
+            pre_fill_df = pre_fill_df_candidate if filled_cols else None
+
+            # 集計行・列を除去
             cleaned_df, agg_rows, agg_cols, agg_row_positions = remove_aggregates(df)
             pre_agg_df = df if (agg_rows or agg_cols) else None
 
@@ -878,10 +886,84 @@ def _detect_tables_in_grid(
                     agg_rows_removed=agg_rows,
                     agg_cols_removed=agg_cols,
                     agg_rows_removed_positions=agg_row_positions,
+                    filled_cols=filled_cols,
+                    pre_fill_df=pre_fill_df,
                 )
             )
 
+    _propagate_sheet_title(detected)
     return detected
+
+
+_YEAR_RE = re.compile(r"\d{4}")
+# タイトルが年次のみ（例: "2012年", "2012年度", "2012"）かを判定する正規表現
+_SECTION_ONLY_RE = re.compile(r"^\s*\d{4}[年度]?\s*$")
+
+
+def _propagate_sheet_title(detected: List[DetectedTable]) -> None:
+    """
+    同一シート内で複数テーブルを検出した際、先頭テーブルタイトルの
+    シート共通部分（年次パターンを含まない要素）を後続テーブルに引き継ぐ。
+
+    安全条件（両方を満たす場合のみ動作）:
+      1. 先頭テーブルのタイトルに " / " が含まれる
+         → 階層構造（シート共通タイトル / セクション）が確認できる場合のみ
+      2. 後続テーブルのタイトルが年次のみ（\d{4}年? 形式）
+         → 独自のサブタイトルを持つテーブルは除外
+
+    例:
+      T1: "シート共通タイトル / 2011年" → sheet_title = "シート共通タイトル"
+      T2: "2012年" → "シート共通タイトル_2012年"  ← 引き継ぎ対象
+      T2: "サブタイトル / 2012年" → そのまま      ← 引き継ぎ対象外
+    """
+    if not detected:
+        return
+
+    from itertools import groupby
+    for _sheet, group_iter in groupby(detected, key=lambda t: t.sheet_name):
+        tables = list(group_iter)
+        if len(tables) < 2:
+            continue
+
+        first_title = tables[0].title or ""
+
+        # 条件1: 先頭タイトルに " / " が含まれる（階層構造が確認できる）
+        if " / " not in first_title:
+            continue
+
+        parts = [p.strip() for p in first_title.split("/")]
+        sheet_parts = [p for p in parts if not _YEAR_RE.search(p) and p]
+        section_parts = [p for p in parts if _YEAR_RE.search(p) and p]
+
+        if not sheet_parts:
+            continue
+
+        sheet_title = " ".join(sheet_parts)
+
+        # 後続テーブルを先に確認し、引き継ぎが発生するかを判定
+        propagated = False
+        for t in tables[1:]:
+            raw = t.title or ""
+            # 条件2: タイトルが年次だけ（4桁数字 + オプションで年/度）
+            if not _SECTION_ONLY_RE.match(raw):
+                continue  # 独立したタイトルを持つ → 引き継ぎしない
+            t.title = f"{sheet_title}_{raw.strip()}"
+            propagated = True
+
+        # 先頭テーブルも "_" 区切りに整形（引き継ぎが実際に発生した場合のみ）
+        if propagated and section_parts:
+            tables[0].title = f"{sheet_title}_{section_parts[0]}"
+
+
+def _apply_cross_table_detection(tables: List[DetectedTable], filename: str) -> None:
+    """テーブルリスト全体にクロス集計検出と縦持ち変換を適用する。"""
+    for t in tables:
+        if t.df is None or t.df.empty:
+            continue
+        info = detect_cross_table(t.df, title=t.title, filename=filename)
+        if info:
+            t.stack_info = info
+            t.stacked_df = stack_cross_table(t.df, info)
 
 
 # ---------------------------------------------------------------------------
@@ -929,6 +1011,7 @@ def parse_excel(
     else:
         raise ValueError(f"Unsupported Excel format: {ext}")
 
+    _apply_cross_table_detection(all_tables, filename)
     return all_tables, sheet_names
 
 
@@ -955,4 +1038,5 @@ def parse_csv(
         end_col=len(df.columns),
         df=df,
     )
+    _apply_cross_table_detection([table], filename)
     return [table], ["CSV"]
