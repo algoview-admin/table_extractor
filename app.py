@@ -307,7 +307,7 @@ def _init():
         "step": 1,
         "run_mode": "manual",  # "manual" | "semiauto" | "fullauto"
         "auto_processing": False,  # True only during the forward auto-run pass
-        "auto_completed": False,   # True when auto-run naturally reached its stop point
+        "auto_completed": False,  # True when auto-run naturally reached its stop point
         "source_mode": None,  # "new_file" | "project" — how data was loaded
         "file_content": None,
         "filename": None,
@@ -797,7 +797,9 @@ def _save_dialog():
         placeholder="ファイル名を入力",
         help=".tep 拡張子は自動で付加されます",
     )
-    st.caption("保存された `.tep` ファイルは Step 1「プロジェクト読込」で再開できます。")
+    st.caption(
+        "保存された `.tep` ファイルは Step 1「プロジェクト読込」で再開できます。"
+    )
     file_name = f"{save_name.strip() or default_name}.tep"
     st.download_button(
         f"⬇️ {file_name} としてダウンロード",
@@ -821,7 +823,9 @@ def _render_header():
         )
         st.title("📊 Table Extractor (開発中)")
         st.caption("Excel / CSV ファイルから分析対象とするテーブルを抽出します。")
-        if st.session_state.get("filename") and bool(st.session_state.get("detected_tables")):
+        if st.session_state.get("filename") and bool(
+            st.session_state.get("detected_tables")
+        ):
             if st.button(
                 "💾 Save",
                 key="hdr_save_btn",
@@ -886,9 +890,9 @@ def _render_header():
                     )
 
         n_steps = len(STEP_LABELS)
-        slot_half = 100.0 / (2 * n_steps)          # half a slot width in %
-        fill_w = 2 * (current - 1) * slot_half      # fill ends at current dot center
-        bg_style   = f"left:{slot_half:.3f}%;right:{slot_half:.3f}%"
+        slot_half = 100.0 / (2 * n_steps)  # half a slot width in %
+        fill_w = 2 * (current - 1) * slot_half  # fill ends at current dot center
+        bg_style = f"left:{slot_half:.3f}%;right:{slot_half:.3f}%"
         fill_style = f"left:{slot_half:.3f}%;width:{fill_w:.3f}%"
         dots_html = "".join(
             f'<div class="app-pd-slot"><div class="app-pd-dot '
@@ -901,7 +905,7 @@ def _render_header():
             f'<div class="app-progress-bg-line" style="{bg_style}"></div>'
             f'<div class="app-progress-fill-line" style="{fill_style}"></div>'
             f'<div class="app-progress-dots">{dots_html}</div>'
-            f'</div>',
+            f"</div>",
             unsafe_allow_html=True,
         )
 
@@ -1319,15 +1323,18 @@ def _df_to_html(
     green_col_names: 緑色ヘッダーで示す前方補完列名集合。"""
     col_names = list(df.columns)
     orange_pos: set = {
-        j for j, c in enumerate(col_names)
+        j
+        for j, c in enumerate(col_names)
         if highlight_col_names and str(c) in highlight_col_names
     }
     purple_pos: set = {
-        j for j, c in enumerate(col_names)
+        j
+        for j, c in enumerate(col_names)
         if unit_col_names and str(c) in unit_col_names
     }
     green_pos: set = {
-        j for j, c in enumerate(col_names)
+        j
+        for j, c in enumerate(col_names)
         if green_col_names and str(c) in green_col_names
     }
 
@@ -1375,14 +1382,14 @@ def _df_to_html(
             )
         else:
             cells = "".join(
-                f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>"
-                for v in row
+                f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>" for v in row
             )
             rows_parts.append(f"<tr>{cells}</tr>")
     rows = "".join(rows_parts)
     scroll_style = (
         f"overflow-x:auto;overflow-y:auto;max-height:{max_height}px"
-        if max_height else "overflow-x:auto"
+        if max_height
+        else "overflow-x:auto"
     )
     return (
         f"<div style='{scroll_style}'>"
@@ -1398,7 +1405,9 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
     raw = t.raw_df
     fmt = t.df
     n_residue = len(raw) - len(fmt)
-    st.caption(f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました")
+    st.caption(
+        f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました"
+    )
 
     before_cols = list(raw.columns)
     after_cols = list(fmt.columns)
@@ -1410,10 +1419,14 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
         }
     ).assign(
         変化=lambda df: df.apply(
-            lambda r: "→" if r["整形前（第1行のみ）"] != r["整形後（多段マージ）"] else "=",
+            lambda r: (
+                "→" if r["整形前（第1行のみ）"] != r["整形後（多段マージ）"] else "="
+            ),
             axis=1,
         )
-    )[["整形前（第1行のみ）", "変化", "整形後（多段マージ）"]]
+    )[
+        ["整形前（第1行のみ）", "変化", "整形後（多段マージ）"]
+    ]
 
     st.markdown("**列名の変化**")
     rows_html = "".join(
@@ -1439,7 +1452,9 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
     )
 
     raw_col_set = {str(c) for c in raw.columns}
-    unit_cols = {str(c) for c in fmt.columns if "[" in str(c) and str(c) not in raw_col_set}
+    unit_cols = {
+        str(c) for c in fmt.columns if "[" in str(c) and str(c) not in raw_col_set
+    }
     col_b, col_a = st.columns(2)
     with col_b:
         st.markdown(f"**整形前**（全件 / 赤色 {n_residue} 行が除去対象）")
@@ -1451,7 +1466,9 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
         _after_hint = "紫列 = 単位付加" if unit_cols else ""
         st.markdown(f"**整形後**（全件{' / ' + _after_hint if _after_hint else ''}）")
         st.markdown(
-            _df_to_html(fmt.astype(str), max_height=340, unit_col_names=unit_cols or None),
+            _df_to_html(
+                fmt.astype(str), max_height=340, unit_col_names=unit_cols or None
+            ),
             unsafe_allow_html=True,
         )
 
@@ -1487,9 +1504,11 @@ def _merge_detail_body_html(t: "DetectedTable") -> str:
     PREVIEW_ROWS = 10
     hl = min(n_residue, PREVIEW_ROWS)
     raw_col_set = {str(c) for c in raw.columns}
-    unit_cols = {str(c) for c in fmt.columns if "[" in str(c) and str(c) not in raw_col_set}
+    unit_cols = {
+        str(c) for c in fmt.columns if "[" in str(c) and str(c) not in raw_col_set
+    }
     before_tbl = _df_to_html(raw.head(PREVIEW_ROWS).astype(str), highlight_row_count=hl)
-    after_tbl  = _df_to_html(
+    after_tbl = _df_to_html(
         fmt.head(PREVIEW_ROWS).astype(str), unit_col_names=unit_cols or None
     )
     _after_hint = " / 紫列 = 単位付加" if unit_cols else ""
@@ -1591,7 +1610,9 @@ details.mhd-l3 > .mhd-body {
 """
 
 
-def _make_details_html(label: str, body_html: str, open: bool = False, level: int = 2) -> str:
+def _make_details_html(
+    label: str, body_html: str, open: bool = False, level: int = 2
+) -> str:
     cls = f"mhd-l{level}"
     open_attr = " open" if open else ""
     return (
@@ -1683,8 +1704,16 @@ def _render_fill_cols_body_html(t: "DetectedTable") -> str:
     )
     badge_html = f"<p style='margin:4px 0 10px'>空白補完した列: {badges}</p>"
 
-    pre_html = _df_to_html(pre, max_height=340, highlight_col_names=set(cols)) if pre is not None else ""
-    post_html = _df_to_html(post, max_height=340, green_col_names=set(cols)) if post is not None else ""
+    pre_html = (
+        _df_to_html(pre, max_height=340, highlight_col_names=set(cols))
+        if pre is not None
+        else ""
+    )
+    post_html = (
+        _df_to_html(post, max_height=340, green_col_names=set(cols))
+        if post is not None
+        else ""
+    )
 
     return (
         badge_html
@@ -1704,10 +1733,10 @@ def _render_stack_body(t: "DetectedTable") -> None:
         return
 
     label_cols = info.get("label_cols", [])
-    time_cols  = info.get("time_cols", [])
-    var_name   = info.get("var_name", "期間")
+    time_cols = info.get("time_cols", [])
+    var_name = info.get("var_name", "期間")
     value_name = info.get("value_name", "値")
-    year_ctx   = info.get("year_context")
+    year_ctx = info.get("year_context")
 
     def _badge(text: str, color: str) -> str:
         return (
@@ -1720,38 +1749,47 @@ def _render_stack_body(t: "DetectedTable") -> None:
     label_html = " ".join(_badge(c, "156,163,175") for c in label_cols) or "（なし）"
     shown_time = time_cols[:6]
     rest_count = len(time_cols) - len(shown_time)
-    time_html  = " ".join(_badge(c, "56,189,248") for c in shown_time)
+    time_html = " ".join(_badge(c, "56,189,248") for c in shown_time)
     if rest_count > 0:
-        time_html += f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 列</span>"
+        time_html += (
+            f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 列</span>"
+        )
 
     meta_lines = [
         f"ラベル列: {label_html}",
-        f"時系列列: {time_html}（計 {len(time_cols)} 列）",
+        f"時系列カラム: {time_html}（計 {len(time_cols)} 列）",
         f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(var_name)}</b> → <b>{_html.escape(value_name)}</b>",
     ]
     if year_ctx:
-        meta_lines.append(f"年コンテキスト（タイトル/ファイル名から補完）: <b>{year_ctx}年</b>")
+        meta_lines.append(
+            f"年コンテキスト（タイトル/ファイル名から補完）: <b>{year_ctx}年</b>"
+        )
 
     st.markdown(
-        "<div style='margin:4px 0 12px;line-height:2'>" +
-        "<br>".join(meta_lines) + "</div>",
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        + "<br>".join(meta_lines)
+        + "</div>",
         unsafe_allow_html=True,
     )
 
-    time_col_set  = set(time_cols)
-    new_col_set   = {var_name, value_name}
+    time_col_set = set(time_cols)
+    new_col_set = {var_name, value_name}
     if year_ctx and info.get("time_kind") == "month":
         new_col_set.add("年")
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.markdown(f"**変換前**（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列列）")
+        st.markdown(
+            f"**変換前**（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列カラム）"
+        )
         st.markdown(
             _df_to_html(wide, max_height=340, highlight_col_names=time_col_set),
             unsafe_allow_html=True,
         )
     with col_b:
-        st.markdown(f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）")
+        st.markdown(
+            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）"
+        )
         st.markdown(
             _df_to_html(long_df, max_height=340, green_col_names=new_col_set),
             unsafe_allow_html=True,
@@ -1767,10 +1805,10 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
         return ""
 
     label_cols = info.get("label_cols", [])
-    time_cols  = info.get("time_cols", [])
-    var_name   = info.get("var_name", "期間")
+    time_cols = info.get("time_cols", [])
+    var_name = info.get("var_name", "期間")
     value_name = info.get("value_name", "値")
-    year_ctx   = info.get("year_context")
+    year_ctx = info.get("year_context")
 
     def _badge(text: str, color: str) -> str:
         return (
@@ -1783,29 +1821,31 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     label_html = " ".join(_badge(c, "156,163,175") for c in label_cols) or "（なし）"
     shown_time = time_cols[:6]
     rest_count = len(time_cols) - len(shown_time)
-    time_html  = " ".join(_badge(c, "56,189,248") for c in shown_time)
+    time_html = " ".join(_badge(c, "56,189,248") for c in shown_time)
     if rest_count > 0:
-        time_html += f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 列</span>"
+        time_html += (
+            f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 列</span>"
+        )
 
     year_line = f"<br>年コンテキスト: <b>{year_ctx}年</b>" if year_ctx else ""
     meta_html = (
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"ラベル列: {label_html}<br>"
-        f"時系列列: {time_html}（計 {len(time_cols)} 列）<br>"
+        f"時系列カラム: {time_html}（計 {len(time_cols)} 列）<br>"
         f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(var_name)}</b> → <b>{_html.escape(value_name)}</b>"
         f"{year_line}</div>"
     )
 
     time_col_set = set(time_cols)
-    new_col_set  = {var_name, value_name}
+    new_col_set = {var_name, value_name}
     if year_ctx and info.get("time_kind") == "month":
         new_col_set.add("年")
 
-    pre_html  = _df_to_html(wide, max_height=340, highlight_col_names=time_col_set)
+    pre_html = _df_to_html(wide, max_height=340, highlight_col_names=time_col_set)
     post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列列）</p>{pre_html}</div>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列カラム）</p>{pre_html}</div>"
         f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
         "</div>"
     )
@@ -1847,32 +1887,35 @@ def _render_agg_removal_body(t: "DetectedTable") -> None:
             "<tr>"
             + "".join(
                 (
-                    f"<td style='{_TD_STYLE}'>"
-                    f"<span style='background:rgba(255,140,0,0.22);border:1px solid rgba(255,140,0,0.45);"
-                    f"border-radius:3px;padding:1px 5px;font-weight:600'>"
-                    f"{_html.escape(str(v))}</span></td>"
-                ) if (
-                    "__trigger_col__" in row_info
-                    and k == row_info["__trigger_col__"]
-                ) or (
-                    "__trigger_col__" not in row_info
-                    and _is_agg_label(str(v))
-                ) else (
-                    f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>"
+                    (
+                        f"<td style='{_TD_STYLE}'>"
+                        f"<span style='background:rgba(255,140,0,0.22);border:1px solid rgba(255,140,0,0.45);"
+                        f"border-radius:3px;padding:1px 5px;font-weight:600'>"
+                        f"{_html.escape(str(v))}</span></td>"
+                    )
+                    if (
+                        "__trigger_col__" in row_info
+                        and k == row_info["__trigger_col__"]
+                    )
+                    or ("__trigger_col__" not in row_info and _is_agg_label(str(v)))
+                    else (f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>")
                 )
-                for k, v in row_info.items() if k != "__trigger_col__"
+                for k, v in row_info.items()
+                if k != "__trigger_col__"
             )
             + "</tr>"
             for row_info in removed_rows
         )
         headers_html = "".join(
             f"<th style='{_TH_STYLE}'>{_html.escape(c)}</th>"
-            for c in removed_rows[0].keys() if c != "__trigger_col__"
+            for c in removed_rows[0].keys()
+            if c != "__trigger_col__"
         )
         row_max_h = 300 if n_removed > 10 else None
         scroll_style = (
             f"overflow-x:auto;overflow-y:auto;max-height:{row_max_h}px"
-            if row_max_h else "overflow-x:auto"
+            if row_max_h
+            else "overflow-x:auto"
         )
         st.markdown(
             f"<div style='{scroll_style}'>"
@@ -1907,7 +1950,9 @@ def _render_agg_removal_body(t: "DetectedTable") -> None:
         )
     with col_a:
         st.markdown("**除去後**（全件）")
-        st.markdown(_df_to_html(post.astype(str), max_height=340), unsafe_allow_html=True)
+        st.markdown(
+            _df_to_html(post.astype(str), max_height=340), unsafe_allow_html=True
+        )
 
 
 def _render_agg_removal_body_html(t: "DetectedTable") -> str:
@@ -1932,7 +1977,9 @@ def _render_agg_removal_body_html(t: "DetectedTable") -> str:
             f"padding:1px 5px;font-size:0.82em'>{_html.escape(c)}</code>"
             for c in removed_cols
         )
-        cols_html = f"<p style='margin:0.4em 0 0.2em'><b>除去した集計列:</b> {badges}</p>"
+        cols_html = (
+            f"<p style='margin:0.4em 0 0.2em'><b>除去した集計列:</b> {badges}</p>"
+        )
 
     rows_html_block = ""
     if removed_rows:
@@ -1941,31 +1988,34 @@ def _render_agg_removal_body_html(t: "DetectedTable") -> str:
             "<tr>"
             + "".join(
                 (
-                    f"<td style='{_TD_STYLE}'>"
-                    f"<span style='background:rgba(255,140,0,0.22);border:1px solid rgba(255,140,0,0.45);"
-                    f"border-radius:3px;padding:1px 5px;font-weight:600'>"
-                    f"{_html.escape(str(v))}</span></td>"
-                ) if (
-                    "__trigger_col__" in row_info
-                    and k == row_info["__trigger_col__"]
-                ) or (
-                    "__trigger_col__" not in row_info
-                    and _is_agg_label(str(v))
-                ) else (
-                    f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>"
+                    (
+                        f"<td style='{_TD_STYLE}'>"
+                        f"<span style='background:rgba(255,140,0,0.22);border:1px solid rgba(255,140,0,0.45);"
+                        f"border-radius:3px;padding:1px 5px;font-weight:600'>"
+                        f"{_html.escape(str(v))}</span></td>"
+                    )
+                    if (
+                        "__trigger_col__" in row_info
+                        and k == row_info["__trigger_col__"]
+                    )
+                    or ("__trigger_col__" not in row_info and _is_agg_label(str(v)))
+                    else (f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>")
                 )
-                for k, v in row_info.items() if k != "__trigger_col__"
+                for k, v in row_info.items()
+                if k != "__trigger_col__"
             )
             + "</tr>"
             for row_info in removed_rows
         )
         headers_html = "".join(
             f"<th style='{_TH_STYLE}'>{_html.escape(c)}</th>"
-            for c in removed_rows[0].keys() if c != "__trigger_col__"
+            for c in removed_rows[0].keys()
+            if c != "__trigger_col__"
         )
         row_scroll = (
             f"overflow-x:auto;overflow-y:auto;max-height:340px"
-            if n_removed > 10 else "overflow-x:auto"
+            if n_removed > 10
+            else "overflow-x:auto"
         )
         rows_html_block = (
             f"<p style='margin:0.6em 0 0.2em'><b>除去した集計行（{n_removed} 件）:</b></p>"
@@ -2022,7 +2072,9 @@ def step_format():
     fill_applied = [t for t in tables if getattr(t, "filled_cols", [])]
 
     stacked_all = [t for t in tables if getattr(t, "stacked_df", None) is not None]
-    nothing_done = not formatted and not agg_removed and not fill_applied and not stacked_all
+    nothing_done = (
+        not formatted and not agg_removed and not fill_applied and not stacked_all
+    )
     if nothing_done:
         st.info("全テーブルに対して整形処理はありませんでした。")
     else:
@@ -2033,7 +2085,9 @@ def step_format():
             if not first_section:
                 st.divider()
             first_section = False
-            st.subheader(f"🔗 多段ヘッダーの検出と解決機能（対象：{len(formatted)}テーブル）")
+            st.subheader(
+                f"🔗 多段ヘッダーの検出と解決機能（対象：{len(formatted)}テーブル）"
+            )
             st.success(
                 f"**{len(formatted)}** テーブルで多段ヘッダーを統合しました"
                 f"（整形なし: {len(unformatted)} テーブル）"
@@ -2047,7 +2101,9 @@ def step_format():
                 st.divider()
             first_section = False
             total_filled = sum(len(getattr(t, "filled_cols", [])) for t in fill_applied)
-            st.subheader(f"↕️ グルーピング列の空白補完機能（対象：{len(fill_applied)}テーブル）")
+            st.subheader(
+                f"↕️ グルーピング列の空白補完機能（対象：{len(fill_applied)}テーブル）"
+            )
             st.success(
                 f"**{len(fill_applied)}** テーブルのグルーピング列の空白を上の値で埋めました  "
                 f"（列: {total_filled} 件）"
@@ -2086,7 +2142,9 @@ def step_format():
                 st.divider()
             total_rows = sum(len(t.agg_rows_removed) for t in agg_removed)
             total_cols = sum(len(t.agg_cols_removed) for t in agg_removed)
-            st.subheader(f"🗑️ 集計行の検出・削除・メタデータ保存機能（対象：{len(agg_removed)}テーブル）")
+            st.subheader(
+                f"🗑️ 集計行の検出・削除・メタデータ保存機能（対象：{len(agg_removed)}テーブル）"
+            )
             st.success(
                 f"**{len(agg_removed)}** テーブルで集計行・集計列を除去しました  "
                 f"（行: {total_rows} 件、列: {total_cols} 件）"
@@ -2127,11 +2185,15 @@ def step_format():
         if stacked:
             if not first_section:
                 st.divider()
-            st.subheader(f"📐 クロス集計形式の検出と縦持ち変換機能（対象：{len(stacked)}テーブル）")
-            total_time_cols = sum(len(getattr(t, "stack_info", {}).get("time_cols", [])) for t in stacked)
+            st.subheader(
+                f"📐 クロス集計形式の検出と縦持ち変換機能（対象：{len(stacked)}テーブル）"
+            )
+            total_time_cols = sum(
+                len(getattr(t, "stack_info", {}).get("time_cols", [])) for t in stacked
+            )
             st.success(
-                f"**{len(stacked)}** テーブルで横持ち時系列列を検出し、縦持ちに変換しました  "
-                f"（時系列列: 計 {total_time_cols} 列）"
+                f"**{len(stacked)}** テーブルで横持ち時系列カラムを検出し、縦持ちに変換しました  "
+                f"（時系列カラム: 計 {total_time_cols} 列）"
             )
             rep_s = stacked[0]
             rep_s_title = f"  🏷️ `{rep_s.title}`" if rep_s.title else ""
@@ -2343,7 +2405,9 @@ def _ir_column_signature(ir, tables_dict) -> frozenset:
     return frozenset(col_names)
 
 
-def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: dict) -> dict:
+def _detect_redundant_axes(
+    col_names: list, multi_vals: dict, ir, tables_dict: dict
+) -> dict:
     """統合で追加する新カラムのうち、既存データから導出可能な冗長な軸を検出する。
 
     新カラム値に含まれる4桁年（YYYY）が、各テーブルの既存カラムのいずれかに
@@ -2353,6 +2417,7 @@ def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: d
              その判断理由となった既存カラム名のセット。in 演算子でインデックス確認可能。
     """
     import re as _r
+
     redundant: dict = {}
     for ci, col_name in enumerate(col_names):
         # 全テーブルについて「新カラム値の年が既存カラムに存在するか」を確認
@@ -2364,7 +2429,11 @@ def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: d
             if t is None or t.effective_df is None:
                 all_found = False
                 break
-            val = (multi_vals.get(tid) or [])[ci] if ci < len(multi_vals.get(tid) or []) else ir.new_column_values.get(tid, "")
+            val = (
+                (multi_vals.get(tid) or [])[ci]
+                if ci < len(multi_vals.get(tid) or [])
+                else ir.new_column_values.get(tid, "")
+            )
             year_m = _r.search(r"(19|20)\d{2}", str(val))
             if not year_m:
                 all_found = False
@@ -2376,7 +2445,11 @@ def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: d
                 # 新カラム名と同一のカラムは除外（自己参照防止）
                 if str(ec) == str(col_name):
                     continue
-                non_null = [str(v) for v in df[ec].dropna() if str(v).lower() not in ("nan", "none", "")]
+                non_null = [
+                    str(v)
+                    for v in df[ec].dropna()
+                    if str(v).lower() not in ("nan", "none", "")
+                ]
                 if not non_null:
                     continue
                 match_ratio = sum(1 for v in non_null if year in v) / len(non_null)
@@ -2395,7 +2468,11 @@ def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: d
             distinguishable = True
             for tid in ir.table_ids:
                 t = tables_dict.get(tid)
-                val = (multi_vals.get(tid) or [])[ci] if ci < len(multi_vals.get(tid) or []) else ir.new_column_values.get(tid, "")
+                val = (
+                    (multi_vals.get(tid) or [])[ci]
+                    if ci < len(multi_vals.get(tid) or [])
+                    else ir.new_column_values.get(tid, "")
+                )
                 year_m = _r.search(r"(19|20)\d{2}", str(val))
                 if not year_m:
                     distinguishable = False
@@ -2406,7 +2483,11 @@ def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: d
                 for ec in df.columns:
                     if str(ec) == str(col_name):
                         continue
-                    non_null = [str(v) for v in df[ec].dropna() if str(v).lower() not in ("nan", "none", "")]
+                    non_null = [
+                        str(v)
+                        for v in df[ec].dropna()
+                        if str(v).lower() not in ("nan", "none", "")
+                    ]
                     if not non_null:
                         continue
                     if sum(1 for v in non_null if year in v) / len(non_null) >= 0.5:
@@ -2742,7 +2823,9 @@ def _build_auto_irs_from_latent(
                     return 0.0
                 try:
                     return float(
-                        t.effective_df.select_dtypes(include="number").abs().values.sum()
+                        t.effective_df.select_dtypes(include="number")
+                        .abs()
+                        .values.sum()
                     )
                 except Exception:
                     return 0.0
@@ -2898,7 +2981,9 @@ def _build_auto_irs_from_latent(
         if cross_ir is not None:
             result.append((cross_ir, gk))  # 常に2軸カードを表示
             if _for_build or not auto_int_dec.get(cross_rec_id, True):
-                result.extend(per_sheet_irs)  # ビルド時は常に追加、表示時は2軸「統合しない」の場合のみ
+                result.extend(
+                    per_sheet_irs
+                )  # ビルド時は常に追加、表示時は2軸「統合しない」の場合のみ
         else:
             result.extend(per_sheet_irs)  # 2軸なし → 常に1軸
 
@@ -3293,10 +3378,12 @@ def step4():
         if has_latent:
             st.divider()
         st.subheader("🔀 統合テーブル")
-        st.caption(
-            "各統合について実施するかどうかをお選びください。"
-            "潜在テーブルを「追加する」にすると、関連する統合提案が自動で追加されます。"
-        )
+        _int_caption = "各統合について実施するかどうかをお選びください。"
+        if has_latent:
+            _int_caption += (
+                "潜在テーブルを「追加する」にすると、関連する統合提案が自動で追加されます。"
+            )
+        st.caption(_int_caption)
 
         # 結合リスト全体で列シグネチャによりグループ化する
         _ir_groups = _group_irs_by_similarity(_all_irs, _ext_tables)
@@ -3423,7 +3510,9 @@ def _build_final_tables():
 
     final: Dict[str, dict] = {}
     integrated_ids: Set[str] = set()
-    seen_master_sigs: Set = set()  # 同一の child→parent ラベルマップを持つマスタを重複排除する
+    seen_master_sigs: Set = (
+        set()
+    )  # 同一の child→parent ラベルマップを持つマスタを重複排除する
 
     # ── 潜在グループの検出（1回のみ）────────────────────────────────────────
     _bft_proposals = find_latent_tables(st.session_state.detected_tables)
@@ -3502,8 +3591,10 @@ def _build_final_tables():
             _col_names_bft = _auto_ir.new_column_names or [_auto_ir.new_column_name]
             _multi_vals_bft = _auto_ir.new_column_multi_values or {}
             _redundant_bft = _detect_redundant_axes(
-                _col_names_bft, _multi_vals_bft, _auto_ir,
-                {t.table_id: t for t in st.session_state.get("detected_tables", [])}
+                _col_names_bft,
+                _multi_vals_bft,
+                _auto_ir,
+                {t.table_id: t for t in st.session_state.get("detected_tables", [])},
             )
 
             _frames_bft = []
@@ -3543,16 +3634,27 @@ def _build_final_tables():
             _int_key = f"latent_auto_int_{_rec_id}"
             _bft_reasoning = _auto_ir.reasoning
             if _redundant_bft:
+                # 軸を追加しなかった場合は推奨理由の文言を動的に変換する
+                for _bci in _redundant_bft:
+                    if _bci < len(_col_names_bft):
+                        _anm = _col_names_bft[_bci]
+                        _bft_reasoning = _bft_reasoning.replace(
+                            f"{_anm}軸を追加することで", f"{_anm}軸で統合することで"
+                        ).replace(
+                            f"{_anm}を追加することで", f"{_anm}で統合することで"
+                        )
                 _bft_supp = []
                 for _bci, _btc in sorted(_redundant_bft.items()):
                     if _bci < len(_col_names_bft):
                         _btrig = "・".join(sorted(_btc)) if _btc else "既存列"
-                        _bft_supp.append(f"「{_col_names_bft[_bci]}」軸は既存の「{_btrig}」列から導出可能なため追加を省略しました")
+                        _bft_supp.append(
+                            f"「{_col_names_bft[_bci]}」軸は既存の「{_btrig}」列から導出可能なため追加を省略しました"
+                        )
                 if _bft_supp:
                     _bft_reasoning = _bft_reasoning + "。" + "。".join(_bft_supp) + "。"
-            _bft_trigger_cols: list = sorted(set(
-                c for tc in _redundant_bft.values() for c in tc
-            ))
+            _bft_trigger_cols: list = sorted(
+                set(c for tc in _redundant_bft.values() for c in tc)
+            )
             final[_int_key] = {
                 "df": _merged_bft,
                 "display_name": _auto_ir.group_name,
@@ -3564,7 +3666,9 @@ def _build_final_tables():
                 "granularity": "detail",
                 "is_minimum": True,
                 "is_master": False,
-                "new_col_names": [c for i, c in enumerate(_col_names_bft) if i not in _redundant_bft],
+                "new_col_names": [
+                    c for i, c in enumerate(_col_names_bft) if i not in _redundant_bft
+                ],
                 "trigger_col_names": _bft_trigger_cols,
             }
 
@@ -3644,16 +3748,27 @@ def _build_final_tables():
         key = f"integrated_{ir.recommendation_id}"
         _ir_reasoning = ir.reasoning
         if redundant_axes:
+            # 軸を追加しなかった場合は推奨理由の文言を動的に変換する
+            for _rci in redundant_axes:
+                if _rci < len(col_names):
+                    _anm = col_names[_rci]
+                    _ir_reasoning = _ir_reasoning.replace(
+                        f"{_anm}軸を追加することで", f"{_anm}軸で統合することで"
+                    ).replace(
+                        f"{_anm}を追加することで", f"{_anm}で統合することで"
+                    )
             _ir_supp = []
             for _ici, _itc in sorted(redundant_axes.items()):
                 if _ici < len(col_names):
                     _itrig = "・".join(sorted(_itc)) if _itc else "既存列"
-                    _ir_supp.append(f"「{col_names[_ici]}」軸は既存の「{_itrig}」列から導出可能なため追加を省略しました")
+                    _ir_supp.append(
+                        f"「{col_names[_ici]}」軸は既存の「{_itrig}」列から導出可能なため追加を省略しました"
+                    )
             if _ir_supp:
                 _ir_reasoning = _ir_reasoning + "。" + "。".join(_ir_supp) + "。"
-        _ir_trigger_cols: list = sorted(set(
-            c for tc in redundant_axes.values() for c in tc
-        ))
+        _ir_trigger_cols: list = sorted(
+            set(c for tc in redundant_axes.values() for c in tc)
+        )
         final[key] = {
             "df": merged_df,
             "display_name": ir.group_name,
@@ -3665,7 +3780,9 @@ def _build_final_tables():
             "granularity": src_ta.granularity_level if src_ta else "detail",
             "is_minimum": src_ta.is_minimum_granularity_candidate if src_ta else False,
             "is_master": src_ta.is_master_table if src_ta else False,
-            "new_col_names": [c for i, c in enumerate(col_names) if i not in redundant_axes],
+            "new_col_names": [
+                c for i, c in enumerate(col_names) if i not in redundant_axes
+            ],
             "trigger_col_names": _ir_trigger_cols,
         }
 
@@ -3953,14 +4070,27 @@ def _render_integration_before_after(
         if t is not None and t.effective_df is not None and not t.effective_df.empty:
             n_rows = len(t.effective_df)
             df_disp = t.effective_df.astype(str)
-            # 冗長軸の判断理由となった既存カラムを琥珀色でハイライト
-            valid_trig = [c for c in _all_trigger_cols if c in df_disp.columns]
-            if valid_trig:
-                def _hl_trig(row, _vtc=valid_trig):
+            # 冗長軸の判断理由となった既存カラムをそのテーブルの軸色でハイライト
+            _trig_col_styles: dict = {}
+            for _ci, _trig_set in redundant_axes_info.items():
+                _t_vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
+                _aval = str(_t_vals[_ci] if _ci < len(_t_vals) else "")
+                _, _, _cbg, _cfg = _axis_color(_ci, _aval)
+                for _tc in _trig_set:
+                    _trig_col_styles[_tc] = (
+                        f"background-color:{_cbg};color:{_cfg};font-weight:600;"
+                    )
+            _valid_trig_map = {
+                c: sty for c, sty in _trig_col_styles.items() if c in df_disp.columns
+            }
+            if _valid_trig_map:
+
+                def _hl_trig(row, _vtc=_valid_trig_map):
                     s = pd.Series("", index=row.index)
-                    for _c in _vtc:
-                        s[_c] = "background-color:#3d2e00;color:#ffd369;font-weight:600;"
+                    for _c, _sty in _vtc.items():
+                        s[_c] = _sty
                     return s
+
                 df_disp = df_disp.style.apply(_hl_trig, axis=1)
             st.dataframe(
                 df_disp,
@@ -4061,9 +4191,11 @@ def _render_integration_before_after(
         if _suppressed_notes:
             st.markdown(
                 '<div style="background:rgba(255,180,0,0.1);border-left:3px solid #ffd369;'
-                'border-radius:0 4px 4px 0;padding:7px 12px;margin:0 0 12px;'
+                "border-radius:0 4px 4px 0;padding:7px 12px;margin:0 0 12px;"
                 'font-size:0.81rem;color:#ffd369;">'
-                + "ℹ️ " + "。".join(_suppressed_notes) + "。</div>",
+                + "ℹ️ "
+                + "。".join(_suppressed_notes)
+                + "。</div>",
                 unsafe_allow_html=True,
             )
 
@@ -4071,7 +4203,9 @@ def _render_integration_before_after(
     for tid in ir.table_ids:
         t = tables_dict.get(tid)
         if t is not None and t.effective_df is not None and not t.effective_df.empty:
-            row = t.effective_df.copy()  # full data — scroll + Fullscreen reveal all rows
+            row = (
+                t.effective_df.copy()
+            )  # full data — scroll + Fullscreen reveal all rows
             vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
             for ci in range(len(col_names) - 1, -1, -1):
                 if ci in redundant_preview:
@@ -4140,30 +4274,68 @@ def _render_integration_before_after(
             except Exception:
                 pass
 
-        # 軸が省略された場合、判断理由となった既存列（trigger_cols）を琥珀色でハイライト
+        # 軸が省略された場合、判断理由となった既存列（trigger_cols）を各テーブルの軸色でハイライト
         if _all_trigger_cols:
             _after_trig = [c for c in _all_trigger_cols if c in df_str.columns]
             if _after_trig:
-                def _hl_after_trig(row, _vtc=_after_trig):
+                # ソーステーブルの軸値ごとに trigger 列の値→軸色マッピングを構築する
+                _trig_val_color: dict = {}  # (col_name, cell_value) → CSS style string
+                for _ci, _trig_set in redundant_axes_info.items():
+                    for _tid in ir.table_ids:
+                        _t = tables_dict.get(_tid)
+                        if _t is None or _t.effective_df is None:
+                            continue
+                        _t_vals = multi_vals.get(_tid) or [
+                            ir.new_column_values.get(_tid, "")
+                        ]
+                        _aval = str(_t_vals[_ci] if _ci < len(_t_vals) else "")
+                        _, _, _cbg, _cfg = _axis_color(_ci, _aval)
+                        _sty = f"background-color:{_cbg};color:{_cfg};font-weight:600;"
+                        for _tc in _trig_set:
+                            if _tc in _t.effective_df.columns:
+                                for _v in _t.effective_df[_tc].astype(str).unique():
+                                    _trig_val_color[(_tc, _v)] = _sty
+
+                _fallback_sty = "background-color:#3d2e00;color:#ffd369;font-weight:600;"
+
+                def _hl_after_trig(
+                    row, _vtc=_after_trig, _vmap=_trig_val_color, _fb=_fallback_sty
+                ):
                     s = pd.Series("", index=row.index)
                     for _c in _vtc:
-                        s[_c] = "background-color:#3d2e00;color:#ffd369;font-weight:600;"
+                        if _c not in row.index:
+                            continue
+                        _val = str(row[_c])
+                        s[_c] = _vmap.get((_c, _val), _fb)
                     return s
+
                 try:
                     styler = styler.apply(_hl_after_trig, axis=1)
                 except Exception:
                     pass
-                # ヘッダーも琥珀色
+                # ヘッダー — 最初の suppressed 軸の先頭色 (shade 0) を使用
                 try:
-                    _atrig_set = set(_after_trig)
                     _prev_tbl_styles = tbl_styles[:]
+                    _first_ci = next(iter(sorted(redundant_axes_info.keys())), None)
+                    if _first_ci is not None:
+                        _hdr_bg, _hdr_fg = _AXIS_FAMILIES[
+                            _first_ci % len(_AXIS_FAMILIES)
+                        ][0][:2]
+                    else:
+                        _hdr_bg, _hdr_fg = "#7d5a00", "#ffd369"
                     for _ac in _after_trig:
                         try:
                             _aci = list(df_str.columns).index(_ac)
-                            _prev_tbl_styles.append({
-                                "selector": f"th.col_heading.col{_aci}",
-                                "props": "background-color:#7d5a00 !important;color:#ffd369 !important;font-weight:bold !important;",
-                            })
+                            _prev_tbl_styles.append(
+                                {
+                                    "selector": f"th.col_heading.col{_aci}",
+                                    "props": (
+                                        f"background-color:{_hdr_bg} !important;"
+                                        f"color:{_hdr_fg} !important;"
+                                        "font-weight:bold !important;"
+                                    ),
+                                }
+                            )
                         except ValueError:
                             pass
                     styler = styler.set_table_styles(_prev_tbl_styles, overwrite=True)
@@ -4384,11 +4556,15 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
                     _df_str = df.astype(str)
                     _valid_trig = [c for c in _trig_cols if c in _df_str.columns]
                     if _valid_trig:
+
                         def _hl_trig_s5(row, _vtc=_valid_trig):
                             s = pd.Series("", index=row.index)
                             for _c in _vtc:
-                                s[_c] = "background-color:#3d2e00;color:#ffd369;font-weight:600;"
+                                s[_c] = (
+                                    "background-color:#3d2e00;color:#ffd369;font-weight:600;"
+                                )
                             return s
+
                         if isinstance(_df_disp, pd.DataFrame):
                             _df_disp = _df_disp.style.apply(_hl_trig_s5, axis=1)
                         else:
@@ -4397,7 +4573,9 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
                     _df_disp,
                     use_container_width=True,
                     hide_index=True,
-                    height=min(len(df) * _row_px + _hdr_px, _max_visible * _row_px + _hdr_px),
+                    height=min(
+                        len(df) * _row_px + _hdr_px, _max_visible * _row_px + _hdr_px
+                    ),
                 )
             with col_info:
                 st.markdown(f"_{info['description']}_")
