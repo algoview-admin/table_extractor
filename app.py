@@ -4030,6 +4030,8 @@ def _render_integration_before_after(
         unsafe_allow_html=True,
     )
 
+    redundant_preview = _detect_redundant_axes(col_names, multi_vals, ir, tables_dict)
+
     frames = []
     for tid in ir.table_ids:
         t = tables_dict.get(tid)
@@ -4037,6 +4039,8 @@ def _render_integration_before_after(
             row = t.effective_df.copy()  # full data — scroll + Fullscreen reveal all rows
             vals = multi_vals.get(tid) or [ir.new_column_values.get(tid, "")]
             for ci in range(len(col_names) - 1, -1, -1):
+                if ci in redundant_preview:
+                    continue
                 val = vals[ci] if ci < len(vals) else ""
                 row.insert(0, col_names[ci], val)
             frames.append(row)

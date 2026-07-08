@@ -478,6 +478,9 @@ def remove_aggregates(
             if v is not None and not (isinstance(v, float) and pd.isna(v))
         )
 
+    # 完全一致する集計キーワードのセット（正規化・小文字）
+    _exact_agg_set: frozenset = frozenset(kw.lower() for kw in AGG_KEYWORDS)
+
     for idx in df.index:
         for col in label_cols:
             val = df.at[idx, col]
@@ -485,14 +488,28 @@ def remove_aggregates(
                 continue
             if isinstance(val, float) and pd.isna(val):
                 continue
-            if not _is_agg_label(str(val)):
+            val_norm = _normalize_label(str(val))
+            if not val_norm:
+                continue
+            if not _is_agg_label(val_norm):
                 continue
             # 集計ラベルを持つ列を発見。
             # その列に非集計値が全く存在しない場合は全行が集計のみ → 除去しない。
+            # ただし continue で次の列を確認する（break では後続列の集計値を見逃す）。
             if not col_has_nonag.get(col, False):
-                break
-            # 同じ文脈に個別データが存在する場合のみ除去（ctx_cols 外は無条件除去）。
-            if col not in ctx_cols or _is_redundant_agg_row(df, idx, col, ctx_cols, covar):
+                continue
+            # 完全一致キーワード（「計」「合計」等の単独語）はコンテキストチェック不要で除去。
+            # 部分一致（「一般計」「前年累計」等）は冗長性チェックを行う。
+            val_lower = val_norm.lower()
+            is_exact = val_lower in _exact_agg_set
+            should_remove = False
+            if is_exact:
+                should_remove = True
+            elif col not in ctx_cols:
+                should_remove = True
+            else:
+                should_remove = _is_redundant_agg_row(df, idx, col, ctx_cols, covar)
+            if should_remove:
                 removed_row_indices.append(idx)
                 row_info: Dict[str, Any] = {"__trigger_col__": col}
                 for lc in label_cols:
