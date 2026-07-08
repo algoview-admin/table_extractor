@@ -72,16 +72,18 @@ st.markdown(
         overflow: hidden !important;
         background: transparent !important;
     }
-    /* Deploy button — exhaustive cross-platform selectors */
+    /* ツールバー・Deploy ボタン・3点メニューを完全非表示 */
+    [data-testid="stToolbar"],
+    [data-testid="stToolbarActions"],
+    [data-testid="stToolbarAction"],
     [data-testid="stDeployButton"],
-    [data-testid="stToolbar"] [data-testid="stDeployButton"],
-    [data-testid="stToolbar"] > button,
+    [data-testid="stStatusWidget"],
+    [data-testid="stDecoration"],
     button[kind="deployButton"],
     button[title*="Deploy"],
     button[aria-label*="Deploy"],
     .stDeployButton,
-    [data-testid="stStatusWidget"],
-    [data-testid="stDecoration"] {
+    #MainMenu {
         display: none !important;
         visibility: hidden !important;
         pointer-events: none !important;
@@ -89,7 +91,6 @@ st.markdown(
         height: 0 !important;
         overflow: hidden !important;
     }
-    #MainMenu { display: none !important; visibility: hidden !important; }
     footer { visibility: hidden !important; }
 
     /* ── Remove default top padding (both old and new Streamlit selectors) ── */
@@ -258,28 +259,27 @@ st.markdown(
 </style>
 <script>
 (function () {
-    var DEPLOY_SELECTORS = [
+    var HIDE_SELECTORS = [
+        '[data-testid="stToolbar"]',
+        '[data-testid="stToolbarActions"]',
+        '[data-testid="stToolbarAction"]',
         '[data-testid="stDeployButton"]',
+        '[data-testid="stStatusWidget"]',
+        '#MainMenu',
         'button[kind="deployButton"]',
         'button[title*="Deploy"]',
         'button[aria-label*="Deploy"]',
     ];
-    function hideDeployBtn() {
-        DEPLOY_SELECTORS.forEach(function (sel) {
+    var _HIDE_CSS = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;overflow:hidden!important;pointer-events:none!important;';
+    function hideToolbar() {
+        HIDE_SELECTORS.forEach(function (sel) {
             document.querySelectorAll(sel).forEach(function (el) {
-                el.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;overflow:hidden!important;';
+                el.style.cssText = _HIDE_CSS;
             });
         });
-        // Hide all toolbar buttons
-        var toolbar = document.querySelector('[data-testid="stToolbar"]');
-        if (toolbar) {
-            toolbar.querySelectorAll('button').forEach(function (btn) {
-                btn.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;overflow:hidden!important;';
-            });
-        }
     }
-    hideDeployBtn();
-    var obs = new MutationObserver(hideDeployBtn);
+    hideToolbar();
+    var obs = new MutationObserver(hideToolbar);
     obs.observe(document.documentElement, { childList: true, subtree: true });
 })();
 </script>
@@ -909,24 +909,7 @@ def _render_header():
     # プログレスバーとの重なりを防ぐ。
     # run_mode で表示有無を判定することで、タブ移動後も消えないようにする。
     _mode = st.session_state.get("run_mode", "manual")
-    _auto = st.session_state.get("auto_processing", False)
-    _completed = st.session_state.get("auto_completed", False)
-    if _mode in ("semiauto", "fullauto") and (_auto or _completed):
-        _mode_label = "セミオート" if _mode == "semiauto" else "フルオート"
-        if _auto:
-            _step_label = (
-                STEP_LABELS[current - 1] if 1 <= current <= len(STEP_LABELS) else ""
-            )
-            st.info(
-                f"⚙️ **{_mode_label} 実行中** — "
-                f"ステップ {current} / {len(STEP_LABELS)}「{_step_label}」を処理中...",
-                icon=None,
-            )
-        else:
-            st.success(
-                f"✅ **{_mode_label} 完了** — 確認・選択後、手動で続けてください",
-                icon=None,
-            )
+    pass  # 処理中表示は進捗バーで代替するため削除
 
 
 # ---------------------------------------------------------------------------
@@ -3567,6 +3550,9 @@ def _build_final_tables():
                         _bft_supp.append(f"「{_col_names_bft[_bci]}」軸は既存の「{_btrig}」列から導出可能なため追加を省略しました")
                 if _bft_supp:
                     _bft_reasoning = _bft_reasoning + "。" + "。".join(_bft_supp) + "。"
+            _bft_trigger_cols: list = sorted(set(
+                c for tc in _redundant_bft.values() for c in tc
+            ))
             final[_int_key] = {
                 "df": _merged_bft,
                 "display_name": _auto_ir.group_name,
@@ -3579,6 +3565,7 @@ def _build_final_tables():
                 "is_minimum": True,
                 "is_master": False,
                 "new_col_names": [c for i, c in enumerate(_col_names_bft) if i not in _redundant_bft],
+                "trigger_col_names": _bft_trigger_cols,
             }
 
             # auto-IRに対してもマスタを生成する（AI IRと同じロジック）
@@ -3664,6 +3651,9 @@ def _build_final_tables():
                     _ir_supp.append(f"「{col_names[_ici]}」軸は既存の「{_itrig}」列から導出可能なため追加を省略しました")
             if _ir_supp:
                 _ir_reasoning = _ir_reasoning + "。" + "。".join(_ir_supp) + "。"
+        _ir_trigger_cols: list = sorted(set(
+            c for tc in redundant_axes.values() for c in tc
+        ))
         final[key] = {
             "df": merged_df,
             "display_name": ir.group_name,
@@ -3676,6 +3666,7 @@ def _build_final_tables():
             "is_minimum": src_ta.is_minimum_granularity_candidate if src_ta else False,
             "is_master": src_ta.is_master_table if src_ta else False,
             "new_col_names": [c for i, c in enumerate(col_names) if i not in redundant_axes],
+            "trigger_col_names": _ir_trigger_cols,
         }
 
         # 親を持つ全軸に対してディメンションマスタを自動生成する。
@@ -4149,6 +4140,36 @@ def _render_integration_before_after(
             except Exception:
                 pass
 
+        # 軸が省略された場合、判断理由となった既存列（trigger_cols）を琥珀色でハイライト
+        if _all_trigger_cols:
+            _after_trig = [c for c in _all_trigger_cols if c in df_str.columns]
+            if _after_trig:
+                def _hl_after_trig(row, _vtc=_after_trig):
+                    s = pd.Series("", index=row.index)
+                    for _c in _vtc:
+                        s[_c] = "background-color:#3d2e00;color:#ffd369;font-weight:600;"
+                    return s
+                try:
+                    styler = styler.apply(_hl_after_trig, axis=1)
+                except Exception:
+                    pass
+                # ヘッダーも琥珀色
+                try:
+                    _atrig_set = set(_after_trig)
+                    _prev_tbl_styles = tbl_styles[:]
+                    for _ac in _after_trig:
+                        try:
+                            _aci = list(df_str.columns).index(_ac)
+                            _prev_tbl_styles.append({
+                                "selector": f"th.col_heading.col{_aci}",
+                                "props": "background-color:#7d5a00 !important;color:#ffd369 !important;font-weight:bold !important;",
+                            })
+                        except ValueError:
+                            pass
+                    styler = styler.set_table_styles(_prev_tbl_styles, overwrite=True)
+                except Exception:
+                    pass
+
         n_data = len(df_str)
         st.dataframe(
             styler,
@@ -4355,9 +4376,25 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
             col_prev, col_info = st.columns([1, 1])
             with col_prev:
                 _new_cols = info.get("new_col_names") or []
+                _trig_cols = info.get("trigger_col_names") or []
                 _row_px, _hdr_px, _max_visible = 35, 38, 10
+                # 軸列 → 軸カラー、trigger列（年軸省略理由）→ 琥珀色
+                _df_disp = _styled_df(df, _new_cols) if _new_cols else df.astype(str)
+                if _trig_cols:
+                    _df_str = df.astype(str)
+                    _valid_trig = [c for c in _trig_cols if c in _df_str.columns]
+                    if _valid_trig:
+                        def _hl_trig_s5(row, _vtc=_valid_trig):
+                            s = pd.Series("", index=row.index)
+                            for _c in _vtc:
+                                s[_c] = "background-color:#3d2e00;color:#ffd369;font-weight:600;"
+                            return s
+                        if isinstance(_df_disp, pd.DataFrame):
+                            _df_disp = _df_disp.style.apply(_hl_trig_s5, axis=1)
+                        else:
+                            _df_disp = _df_disp.apply(_hl_trig_s5, axis=1)
                 st.dataframe(
-                    _styled_df(df, _new_cols) if _new_cols else df.astype(str),
+                    _df_disp,
                     use_container_width=True,
                     hide_index=True,
                     height=min(len(df) * _row_px + _hdr_px, _max_visible * _row_px + _hdr_px),

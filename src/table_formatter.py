@@ -534,7 +534,7 @@ def remove_aggregates(
 # ---------------------------------------------------------------------------
 
 
-def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:
+def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
     """
     視覚的セル結合（XML 上は未マージ）によるグルーピング列の None を前方補完する。
 
@@ -549,6 +549,8 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:
     Returns:
       (filled_df, filled_col_names)
     """
+    import pandas as pd
+
     if df is None or df.empty:
         return df, []
 
@@ -578,8 +580,19 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:
         if not null_mask.iloc[pos + 1:].any():
             continue  # 末尾以降の None のみ → スキップ
 
-        # ffill 後のユニーク比率チェック
+        # ffill を適用し、集計ラベルの過伝播を防ぐ。
+        # 例: 列_2 で「計」→ None → None と並ぶ場合、ffill で後続 None が「計」に
+        # なるが、これらの None は「サブ分類なし」を意味するので戻す。
         filled = series.ffill()
+        original_null = series.isna()
+        if original_null.any():
+            for _null_idx in df.index[original_null]:
+                _fv = filled.at[_null_idx]
+                if _fv is not None and not (isinstance(_fv, float) and pd.isna(_fv)):
+                    if _is_agg_label(str(_fv)):
+                        filled.at[_null_idx] = None
+
+        # ffill 後のユニーク比率チェック
         n_unique = filled.nunique(dropna=True)
         if n_unique / max(1, len(df)) >= 0.5:
             continue  # ffill 後もユニーク率が高い → カテゴリ列でない
