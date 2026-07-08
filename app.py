@@ -1,3 +1,4 @@
+import html as _html
 import io
 import os
 import pickle
@@ -15,6 +16,7 @@ from dotenv import load_dotenv
 from src.relation_analyzer import analyze_tables
 from src.excel_parser import parse_csv, parse_excel
 from src.models import AIAnalysisResult, DetectedTable
+from src.table_formatter import UNIT_VOCAB, _is_agg_label
 from src.latent_table_detector import (
     find_latent_tables,
     derive_latent_tables,
@@ -64,14 +66,38 @@ st.markdown(
         max-height: none !important;
     }
 
-    /* ── Hide Streamlit default header / menu / footer ── */
-    header[data-testid="stHeader"] { display: none !important; }
-    #MainMenu { visibility: hidden !important; }
-    footer    { visibility: hidden !important; }
+    /* ── Hide Streamlit default header / footer (keep #MainMenu for theme toggle) ── */
+    /* overflow:hidden clips stHeader content (Deploy button etc.).
+       #MainMenu is position:fixed so it escapes the clip and stays visible. */
+    header[data-testid="stHeader"] {
+        height: 0 !important;
+        overflow: hidden !important;
+        background: transparent !important;
+    }
+    #MainMenu {
+        visibility: visible !important;
+        position: fixed !important;
+        top: 22px !important;
+        right: 10px !important;
+        z-index: 10001 !important;
+    }
+    /* ダークヘッダー上では常に白アイコン */
+    #MainMenu button { color: rgba(255,255,255,0.75) !important; }
+    #MainMenu button:hover { color: #ffffff !important; }
+    #MainMenu button svg { fill: rgba(255,255,255,0.75) !important; }
+    #MainMenu button:hover svg { fill: #ffffff !important; }
+    footer { visibility: hidden !important; }
 
     /* ── Remove default top padding (both old and new Streamlit selectors) ── */
     .block-container,
     [data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
+
+    /* ── Disable scroll anchoring so buildFixedHeader's padding-top doesn't
+       cause the browser to auto-scroll back when adding header space ── */
+    html, body,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"],
+    .main { overflow-anchor: none !important; }
 
     /* Hidden splitter iframes: keep JS alive but remove from flex layout so
        they do not contribute gap spacing below the fixed header.
@@ -87,20 +113,29 @@ st.markdown(
         margin: 0 !important;
     }
 
-    /* ── Custom progress bar ── */
-    .app-progress-wrap  { margin-top: 1rem; }
-    .app-progress-track {
-        background: rgba(127, 255, 212, 0.15);
-        border-radius: 999px;
-        height: 5px;
-        overflow: hidden;
+    /* ── Progress dots ── */
+    .app-progress-wrap { position:relative; margin-top:0.4rem; padding:4px 0; }
+    .app-progress-bg-line, .app-progress-fill-line {
+        position:absolute; top:50%; height:2px;
+        border-radius:999px; transform:translateY(-50%); pointer-events:none;
     }
-    .app-progress-fill {
-        height: 100%;
-        background: #7FFFD4;
-        border-radius: 999px;
-        width: 0%;
-        transition: width 1.0s cubic-bezier(0.4, 0, 0.2, 1);
+    .app-progress-bg-line  { background:rgba(127,255,212,0.14); }
+    .app-progress-fill-line { background:rgba(127,255,212,0.55); }
+    .app-progress-dots {
+        position:relative; display:flex; height:18px; align-items:center; z-index:1;
+    }
+    .app-pd-slot { flex:1; display:flex; justify-content:center; align-items:center; }
+    .app-pd-dot  { border-radius:50%; flex-shrink:0; }
+    .app-pd-dot.pd-done   { width:8px; height:8px; background:rgba(127,255,212,0.65); }
+    .app-pd-dot.pd-curr   { width:12px; height:12px;
+                             background:#7FFFD4;
+                             animation:dot-glow 2.8s ease-in-out infinite; }
+    .app-pd-dot.pd-future { width:8px; height:8px;
+                             background:rgba(127,255,212,0.13);
+                             border:1.5px solid rgba(127,255,212,0.28); }
+    @keyframes dot-glow {
+        0%,100% { background:rgba(127,255,212,0.55); box-shadow:0 0 3px 1px rgba(127,255,212,0.15); }
+        50%      { background:rgba(127,255,212,1.0);  box-shadow:0 0 7px 2px rgba(127,255,212,0.45); }
     }
 
     /* ── Styles for the JS-injected fixed header (id=_appFixedHdr) ── */
@@ -115,49 +150,95 @@ st.markdown(
         border-bottom: 1px solid #2d333b !important;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
         box-sizing: border-box !important;
+        color: #fafafa !important;
     }
-    /* Button styles also apply inside the portal clone */
+    #_appFixedHdr p, #_appFixedHdr span, #_appFixedHdr label,
+    #_appFixedHdr h1, #_appFixedHdr h2, #_appFixedHdr h3 {
+        color: #fafafa !important;
+    }
+    /* Save ボタンスタイル（JS で portal に直接 position:absolute で配置される） */
+    #_appFixedHdr [data-testid="stDownloadButton"] button,
+    #_appFixedHdr .hdr-save-wrap button {
+        padding: 3px 12px !important;
+        min-height: 1.9rem !important;
+        white-space: nowrap !important;
+    }
+    /* ── ヘッダー内ステップタブ: ピル型・半透明モダンデザイン ── */
     #_appFixedHdr div[data-testid="stHorizontalBlock"] button {
-        padding: 4px 6px !important;
-        border-radius: 6px !important;
-        min-height: 2rem !important;
+        padding: 3px 12px !important;
+        border-radius: 999px !important;
+        min-height: 1.9rem !important;
+        letter-spacing: 0.01em !important;
+        transition: background 0.15s, border-color 0.15s, color 0.15s !important;
     }
+    /* 現在のステップ（primary）: 半透明グラス風 */
     #_appFixedHdr button[data-testid="stBaseButton-primary"] {
-        background-color: #7FFFD4 !important;
-        color: #0e1117 !important;
-        border-color: #7FFFD4 !important;
+        background: rgba(127,255,212,0.18) !important;
+        border: 1.5px solid rgba(127,255,212,0.75) !important;
+        color: #7FFFD4 !important;
+        font-weight: 700 !important;
     }
+    /* 完了 / アクセス可能ステップ（secondary）*/
     #_appFixedHdr button[data-testid="stBaseButton-secondary"] {
-        border-color: #7FFFD4 !important;
+        background: rgba(127,255,212,0.1) !important;
+        border-color: rgba(127,255,212,0.45) !important;
+        color: rgba(127,255,212,0.85) !important;
+    }
+    #_appFixedHdr button[data-testid="stBaseButton-secondary"]:hover {
+        background: rgba(127,255,212,0.2) !important;
+        border-color: rgba(127,255,212,0.75) !important;
         color: #7FFFD4 !important;
     }
-
-    /* ── Step nav buttons: compact tab-style ── */
-    div[data-testid="stHorizontalBlock"] button {
-        padding: 4px 6px !important;
-        border-radius: 6px !important;
-        min-height: 2rem !important;
+    /* 未解放ステップ（disabled）: 背景は同じ半透明、文字色だけ暗くして区別 */
+    /* button[disabled] だけでなく内部の span/p にも直接適用（#_appFixedHdr span の白が勝つため）*/
+    #_appFixedHdr button[disabled],
+    #_appFixedHdr button:disabled {
+        background: rgba(127,255,212,0.07) !important;
+        border-color: rgba(127,255,212,0.25) !important;
+        color: rgba(170,170,170,0.8) !important;
+        cursor: default !important;
+        opacity: 1 !important;
+    }
+    #_appFixedHdr button[disabled] *,
+    #_appFixedHdr button:disabled * {
+        color: rgba(170,170,170,0.8) !important;
     }
 
-    /* ── Primary buttons (次へ系): aquamarine fill ── */
+    /* ── コンテンツエリアのボタン ──
+       テキスト色は var(--text-color) でダーク/ライト自動対応。
+       ダーク: 白文字 × アクアマリンボーダー、ライト: 黒文字 × アクアマリンボーダー。 */
     button[data-testid="stBaseButton-primary"] {
-        background-color: #7FFFD4 !important;
-        color: #0e1117 !important;
-        border-color: #7FFFD4 !important;
+        background: rgba(127,255,212,0.18) !important;
+        color: var(--text-color) !important;
+        border: 1.5px solid rgba(127,255,212,0.6) !important;
+        border-radius: 999px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.02em !important;
+        backdrop-filter: blur(6px) !important;
+        transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease !important;
+        padding: 0.45rem 1.5rem !important;
     }
     button[data-testid="stBaseButton-primary"]:hover {
-        background-color: #5ee8be !important;
-        border-color: #5ee8be !important;
+        background: rgba(127,255,212,0.32) !important;
+        border-color: rgba(127,255,212,0.9) !important;
+        transform: translateY(-1px) !important;
     }
-
-    /* ── Secondary buttons (戻る系): aquamarine outline ── */
     button[data-testid="stBaseButton-secondary"] {
-        border-color: #7FFFD4 !important;
-        color: #7FFFD4 !important;
+        background: rgba(127,255,212,0.07) !important;
+        border: 1.5px solid rgba(127,255,212,0.4) !important;
+        color: var(--text-color) !important;
+        border-radius: 999px !important;
+        font-weight: 500 !important;
+        backdrop-filter: blur(6px) !important;
+        transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease !important;
+        padding: 0.45rem 1.2rem !important;
+        opacity: 0.8 !important;
     }
     button[data-testid="stBaseButton-secondary"]:hover {
-        background-color: rgba(127, 255, 212, 0.1) !important;
-        border-color: #7FFFD4 !important;
+        background: rgba(127,255,212,0.16) !important;
+        border-color: rgba(127,255,212,0.7) !important;
+        opacity: 1 !important;
+        transform: translateY(-1px) !important;
     }
 
     /* ── Hide the splitter JS iframe (height=42 is our unique marker) ── */
@@ -169,6 +250,7 @@ st.markdown(
         padding: 0 !important;
         margin: 0 !important;
     }
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -181,6 +263,7 @@ st.markdown(
 STEP_LABELS = [
     "ファイル選択",
     "テーブル検出",
+    "テーブル整形",
     "テーブル関係分析",
     "新規テーブル案生成",
     "テーブル選択",
@@ -193,6 +276,7 @@ def _init():
         "step": 1,
         "run_mode": "manual",  # "manual" | "semiauto" | "fullauto"
         "auto_processing": False,  # True only during the forward auto-run pass
+        "auto_completed": False,   # True when auto-run naturally reached its stop point
         "source_mode": None,  # "new_file" | "project" — how data was loaded
         "file_content": None,
         "filename": None,
@@ -228,9 +312,9 @@ def _go_to(step: int, stop_auto: bool = True) -> None:
     st.session_state._scroll_to_top = True
 
 
-def _build_and_go_step5() -> None:
+def _build_and_go_step6() -> None:
     _build_final_tables()
-    st.session_state.step = 5
+    st.session_state.step = 6
     st.session_state._scroll_to_top = True
 
 
@@ -471,6 +555,33 @@ def _inject_splitter_js() -> None:
                     el.removeAttribute('id');
                 });
 
+                /* ── 2b. Move Save button to position:absolute at top-right ──
+                   Search every <button> in the portal for the Save button by text,
+                   then move its outermost Streamlit wrapper to an absolutely-positioned
+                   child div so it renders next to the ⋮ menu. ── */
+                (function() {
+                    var allBtns = portal.querySelectorAll('button');
+                    var saveBtn = null;
+                    for (var i = 0; i < allBtns.length; i++) {
+                        var t = allBtns[i].textContent;
+                        if (t.indexOf('Save') !== -1) { saveBtn = allBtns[i]; break; }
+                    }
+                    if (!saveBtn) return;
+                    /* Walk up to the first div with data-testid (the Streamlit wrapper) */
+                    var saveEl = saveBtn.parentElement;
+                    while (saveEl && saveEl !== portal) {
+                        if (saveEl.hasAttribute('data-testid')) break;
+                        saveEl = saveEl.parentElement;
+                    }
+                    if (!saveEl || saveEl === portal) saveEl = saveBtn.parentElement;
+                    var saveWrap = pdoc.createElement('div');
+                    saveWrap.className = 'hdr-save-wrap';
+                    saveWrap.style.cssText =
+                        'position:absolute;top:14px;right:52px;z-index:2;';
+                    portal.appendChild(saveWrap);
+                    saveWrap.appendChild(saveEl);
+                })();
+
                 /* ── 3. Forward clicks to real Streamlit buttons in srcHdr ── */
                 portal.onclick = function (e) {
                     var btn = e.target && e.target.closest('button');
@@ -524,31 +635,45 @@ def _inject_splitter_js() -> None:
                 if (ph > 0) rootBlock.style.setProperty('padding-top', ph + 'px', 'important');
             }
 
-            /* ── Animate custom progress bars to their data-pct target ──
-               init() fires 5 times (0/80/250/600/1400 ms), so we guard with
-               win._progressAnimPct: only animate when the pct value changes. */
-            function animateProgress() {
-                var wrap = pdoc.querySelector('.app-progress-wrap');
-                if (!wrap) return;
-                var pct = parseFloat(wrap.getAttribute('data-pct')) || 0;
-                if (win._progressAnimPct === pct) return; /* already done this step */
-                win._progressAnimPct = pct;
+            /* ── Progress dots: width is set via inline style from Python; no JS needed ── */
+            function animateProgress() { /* no-op: replaced by CSS dot animation */ }
 
-                pdoc.querySelectorAll('.app-progress-wrap').forEach(function (w) {
-                    var fill = w.querySelector('.app-progress-fill');
-                    if (!fill) return;
-                    fill.style.transition = 'none';
-                    fill.style.width = '0%';
-                    void fill.offsetWidth;   /* force reflow so transition fires */
-                    fill.style.transition = '';
-                    fill.style.width = pct + '%';
-                });
+            /* ── Light mode: 背景を薄グレーに ──
+               インラインスタイルではなく <style> タグを head に注入する。
+               Streamlit が rerun で inline style を書き戻しても、
+               head の <style> はカスケードで上位に残り続ける。 */
+            function applyGreyBg() {
+                var grey   = '#f0f2f5';
+                var sid    = '_appGreyBgStyle';
+                var bg     = getComputedStyle(pdoc.documentElement)
+                                 .getPropertyValue('--background-color')
+                                 .trim().replace(/\s+/g, '');
+                var isLight = bg === '#ffffff' || bg === '#fff' ||
+                              bg === 'rgb(255,255,255)';
+
+                if (isLight) {
+                    pdoc.body.classList.add('app-light-mode');
+                    if (!pdoc.getElementById(sid)) {
+                        var s = pdoc.createElement('style');
+                        s.id  = sid;
+                        s.textContent =
+                            '.stApp,[data-testid="stAppViewContainer"],' +
+                            '[data-testid="stMainBlockContainer"]{' +
+                            'background-color:' + grey + '!important;}';
+                        pdoc.head.appendChild(s);
+                    }
+                } else {
+                    pdoc.body.classList.remove('app-light-mode');
+                    var old = pdoc.getElementById(sid);
+                    if (old) old.remove();
+                }
             }
 
             /* ── Find markers and wire up ── */
             function init() {
                 buildFixedHeader();
                 animateProgress();
+                applyGreyBg();
                 var markers = pdoc.querySelectorAll(
                     '.split-init-marker:not([data-split-done])');
                 markers.forEach(function (marker) {
@@ -622,116 +747,155 @@ def _can_navigate_to(target: int) -> bool:
     if target == 3:
         return bool(s.get("detected_tables"))
     if target == 4:
-        return s.get("ai_analysis") is not None
+        return bool(s.get("detected_tables"))
     if target == 5:
-        return bool(s.get("final_tables"))
+        return s.get("ai_analysis") is not None
     if target == 6:
+        return bool(s.get("final_tables"))
+    if target == 7:
         return bool(s.get("selected_ids"))
     return False
 
 
-def _render_header():
-    # センチネル: JSがヘッダーのstVerticalBlockを確実に特定するために使用
-    st.markdown(
-        '<span class="app-hdr-sentinel" style="display:none"></span>',
-        unsafe_allow_html=True,
+@st.dialog("💾 プロジェクトを保存")
+def _save_dialog():
+    default_name = Path(st.session_state.get("filename", "project")).stem
+    save_name = st.text_input(
+        "ファイル名",
+        value=default_name,
+        placeholder="ファイル名を入力",
+        help=".tep 拡張子は自動で付加されます",
     )
-    title_col, save_col = st.columns([6, 1])
-    with title_col:
+    st.caption("保存された `.tep` ファイルは Step 1「プロジェクト読込」で再開できます。")
+    file_name = f"{save_name.strip() or default_name}.tep"
+    st.download_button(
+        f"⬇️ {file_name} としてダウンロード",
+        data=_serialize_project(),
+        file_name=file_name,
+        mime="application/octet-stream",
+        use_container_width=True,
+        type="primary",
+    )
+
+
+def _render_header():
+    # st.container() で専用 stVerticalBlock を作成し、JS の sentinel.closest() が
+    # ヘッダー専用ブロックを確実に特定できるようにする（ページ全体の外側ブロックを
+    # 誤ってキャプチャしてコンテンツが被るのを防ぐ）。
+    with st.container():
+        # センチネル: JSがヘッダーのstVerticalBlockを確実に特定するために使用
+        st.markdown(
+            '<span class="app-hdr-sentinel" style="display:none"></span>',
+            unsafe_allow_html=True,
+        )
         st.title("📊 Table Extractor (開発中)")
         st.caption("Excel / CSV ファイルから分析対象とするテーブルを抽出します。")
-    with save_col:
         if st.session_state.get("filename") and bool(st.session_state.get("detected_tables")):
-            fname = Path(st.session_state.get("filename", "project")).stem
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.download_button(
+            if st.button(
                 "💾 Save",
-                data=_serialize_project(),
-                file_name=f"{fname}.tep",
-                mime="application/octet-stream",
-                use_container_width=True,
                 key="hdr_save_btn",
                 help="現在の解析状態を .tep ファイルとしてダウンロードします。再開時はStep 1でアップロードしてください。",
-            )
+            ):
+                _save_dialog()
 
-    current = st.session_state.step
-    cols = st.columns(len(STEP_LABELS))
+        current = st.session_state.step
+        cols = st.columns(len(STEP_LABELS))
 
-    for i, (col, label) in enumerate(zip(cols, STEP_LABELS), 1):
-        with col:
-            is_current = i == current
-            is_done = i < current
-            accessible = _can_navigate_to(i)
+        for i, (col, label) in enumerate(zip(cols, STEP_LABELS), 1):
+            with col:
+                is_current = i == current
+                is_done = i < current
+                accessible = _can_navigate_to(i)
 
-            if is_current:
-                # 現在のステップ — 緑色のボーダーでハイライト（ボタンではなくHTML div）
-                st.markdown(
-                    f'<div style="'
-                    f"background:#7FFFD4;"
-                    f"border:2px solid #7FFFD4;"
-                    f"border-radius:6px;"
-                    f"text-align:center;"
-                    f"padding:4px 6px;"
-                    f"font-weight:600;"
-                    f"color:#0e1117;"
-                    f"min-height:2rem;"
-                    f"display:flex;"
-                    f"align-items:center;"
-                    f"justify-content:center;"
-                    f"box-sizing:border-box;"
-                    f'">▶ {label}</div>',
-                    unsafe_allow_html=True,
-                )
-            elif is_done:
-                # 完了済みのステップ — クリック可能; 戻る際にauto_processingを停止
-                col.button(
-                    f"✅ {label}",
-                    key=f"nav_{i}",
-                    on_click=_go_to,
-                    args=(i,),
-                    use_container_width=True,
-                )
-            elif accessible:
-                # データが利用可能な将来のステップ — クリック可能
-                col.button(
-                    f"○ {label}",
-                    key=f"nav_{i}",
-                    on_click=_go_to,
-                    args=(i,),
-                    use_container_width=True,
-                )
-            else:
-                # 将来のステップ、データ未準備 — 無効
-                st.button(
-                    f"○ {label}",
-                    key=f"nav_{i}",
-                    use_container_width=True,
-                    disabled=True,
-                )
+                if is_current:
+                    # 現在のステップ — 緑色のボーダーでハイライト（ボタンではなくHTML div）
+                    st.markdown(
+                        f'<div style="'
+                        f"background:rgba(127,255,212,0.18);"
+                        f"border:1.5px solid rgba(127,255,212,0.75);"
+                        f"border-radius:999px;"
+                        f"text-align:center;"
+                        f"padding:3px 12px;"
+                        f"font-weight:700;"
+                        f"letter-spacing:0.01em;"
+                        f"color:#7FFFD4;"
+                        f"min-height:1.9rem;"
+                        f"display:flex;"
+                        f"align-items:center;"
+                        f"justify-content:center;"
+                        f"box-sizing:border-box;"
+                        f'">▶ {label}</div>',
+                        unsafe_allow_html=True,
+                    )
+                elif is_done:
+                    # 完了済みのステップ — クリック可能; 戻る際にauto_processingを停止
+                    col.button(
+                        f"✅ {label}",
+                        key=f"nav_{i}",
+                        on_click=_go_to,
+                        args=(i,),
+                        use_container_width=True,
+                    )
+                elif accessible:
+                    # データが利用可能な将来のステップ — クリック可能
+                    col.button(
+                        f"○ {label}",
+                        key=f"nav_{i}",
+                        on_click=_go_to,
+                        args=(i,),
+                        use_container_width=True,
+                    )
+                else:
+                    # 将来のステップ、データ未準備 — 無効
+                    st.button(
+                        f"○ {label}",
+                        key=f"nav_{i}",
+                        use_container_width=True,
+                        disabled=True,
+                    )
 
-    pct = (current - 1) / (len(STEP_LABELS) - 1) * 100
-    st.markdown(
-        f'<div class="app-progress-wrap" data-pct="{pct:.4f}">'
-        f'<div class="app-progress-track">'
-        f'<div class="app-progress-fill"></div>'
-        f"</div></div>",
-        unsafe_allow_html=True,
-    )
+        n_steps = len(STEP_LABELS)
+        slot_half = 100.0 / (2 * n_steps)          # half a slot width in %
+        fill_w = 2 * (current - 1) * slot_half      # fill ends at current dot center
+        bg_style   = f"left:{slot_half:.3f}%;right:{slot_half:.3f}%"
+        fill_style = f"left:{slot_half:.3f}%;width:{fill_w:.3f}%"
+        dots_html = "".join(
+            f'<div class="app-pd-slot"><div class="app-pd-dot '
+            f'{"pd-done" if i < current else "pd-curr" if i == current else "pd-future"}'
+            f'"></div></div>'
+            for i in range(1, n_steps + 1)
+        )
+        st.markdown(
+            f'<div class="app-progress-wrap">'
+            f'<div class="app-progress-bg-line" style="{bg_style}"></div>'
+            f'<div class="app-progress-fill-line" style="{fill_style}"></div>'
+            f'<div class="app-progress-dots">{dots_html}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-    # 自動処理バナー
-    if st.session_state.get("auto_processing"):
-        _mode = st.session_state.get("run_mode", "manual")
+    # 自動処理バナーはコンテナ外（固定ヘッダーのクローン対象外）に配置し
+    # プログレスバーとの重なりを防ぐ。
+    # run_mode で表示有無を判定することで、タブ移動後も消えないようにする。
+    _mode = st.session_state.get("run_mode", "manual")
+    _auto = st.session_state.get("auto_processing", False)
+    _completed = st.session_state.get("auto_completed", False)
+    if _mode in ("semiauto", "fullauto") and (_auto or _completed):
         _mode_label = "セミオート" if _mode == "semiauto" else "フルオート"
-        _step_label = (
-            STEP_LABELS[current - 1] if 1 <= current <= len(STEP_LABELS) else ""
-        )
-        st.info(
-            f"⚙️ **{_mode_label} 実行中** — "
-            f"ステップ {current} / {len(STEP_LABELS)}「{_step_label}」を処理中...",
-            icon=None,
-        )
-
-    st.divider()
+        if _auto:
+            _step_label = (
+                STEP_LABELS[current - 1] if 1 <= current <= len(STEP_LABELS) else ""
+            )
+            st.info(
+                f"⚙️ **{_mode_label} 実行中** — "
+                f"ステップ {current} / {len(STEP_LABELS)}「{_step_label}」を処理中...",
+                icon=None,
+            )
+        else:
+            st.success(
+                f"✅ **{_mode_label} 完了** — 確認・選択後、手動で続けてください",
+                icon=None,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +1011,21 @@ def step1():
 
         st.divider()
 
+        if (
+            st.session_state.get("filename")
+            and st.session_state.get("detected_tables")
+            and st.session_state.get("source_mode") == "new_file"
+        ):
+            st.button(
+                "次へ：テーブル検出の結果を確認 →",
+                type="primary",
+                use_container_width=True,
+                on_click=_go_to,
+                args=(2,),
+                key="s1_next_new",
+            )
+            st.divider()
+
         uploaded = st.file_uploader(
             "Excel または CSV ファイルを選択してください",
             type=["xlsx", "xlsm", "xls", "csv"],
@@ -885,6 +1064,7 @@ def step1():
                 st.session_state.final_tables = {}
                 st.session_state.selected_ids = set()
                 st.session_state.auto_processing = mode != "manual"
+                st.session_state.auto_completed = False
                 st.session_state.source_mode = "new_file"
                 st.session_state.step = 2
 
@@ -909,6 +1089,15 @@ def step1():
                 f"Step {st.session_state.get('step', 1)} まで完了）  \n"
                 "別のプロジェクトを読み込むと現在のデータは上書きされます。"
             )
+            if st.session_state.get("detected_tables"):
+                st.button(
+                    "次へ：テーブル検出の結果を確認 →",
+                    type="primary",
+                    use_container_width=True,
+                    on_click=_go_to,
+                    args=(2,),
+                    key="s1_next_proj",
+                )
             st.divider()
 
         st.markdown("#### 保存済みプロジェクトを読み込む")
@@ -972,6 +1161,7 @@ def step2():
                     )
                 st.session_state.detected_tables = tables
                 st.session_state.sheet_names = sheets
+                st.rerun()  # re-render header so Save button appears
             except Exception as e:
                 st.error(f"❌ 解析エラー: {e}")
                 return
@@ -1041,7 +1231,7 @@ def step2():
             st.warning("テーブルが検出されませんでした。別のファイルをお試しください。")
         else:
             st.button(
-                "次へ：テーブル関係分析を開始 →",
+                "次へ：テーブル整形を確認 →",
                 type="primary",
                 use_container_width=True,
                 on_click=_go_to,
@@ -1050,12 +1240,647 @@ def step2():
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — テーブル関係分析
+# Step 3 — テーブル整形
+# ---------------------------------------------------------------------------
+
+
+_TH_STYLE = (
+    "position:sticky;top:0;z-index:2;"
+    "background-color:var(--background-color,#0f1117);"
+    "background-image:linear-gradient(rgba(66,153,225,0.20),rgba(66,153,225,0.20));"
+    "color:var(--text-color,#fafafa);"
+    "padding:6px 12px;"
+    "text-align:left;"
+    "border-bottom:2px solid rgba(66,153,225,0.5);"
+    "white-space:nowrap;"
+    "font-weight:600;"
+    "font-size:13px;"
+)
+_TD_STYLE = (
+    "padding:4px 12px;"
+    "font-size:13px;"
+    "border-bottom:1px solid rgba(255,255,255,0.06);"
+)
+_TD_CENTER_STYLE = (
+    "padding:4px 10px;"
+    "font-size:13px;"
+    "text-align:center;"
+    "white-space:nowrap;"
+    "border-bottom:1px solid rgba(255,255,255,0.06);"
+)
+
+
+def _df_to_html(
+    df: pd.DataFrame,
+    max_height: Optional[int] = None,
+    highlight_row_count: int = 0,
+    highlight_row_indices: Optional[set] = None,
+    highlight_col_names: Optional[set] = None,
+    unit_col_names: Optional[set] = None,
+) -> str:
+    """DataFrameをモダンなスタイルのHTMLテーブルに変換する。
+    max_height を指定すると縦スクロール可能なコンテナで包む。
+    highlight_row_count > 0 の場合、先頭 N 行を赤色強調表示する。
+    highlight_row_indices: 赤色強調する行の位置インデックス集合。
+    highlight_col_names: オレンジ色ヘッダーで示す除去列名集合。
+    unit_col_names: 紫色ヘッダーで示す単位付加列名集合。"""
+    col_names = list(df.columns)
+    orange_pos: set = {
+        j for j, c in enumerate(col_names)
+        if highlight_col_names and str(c) in highlight_col_names
+    }
+    purple_pos: set = {
+        j for j, c in enumerate(col_names)
+        if unit_col_names and str(c) in unit_col_names
+    }
+
+    def _th(j: int, c: str) -> str:
+        label = _html.escape(str(c))
+        if j in orange_pos:
+            return (
+                f"<th style='{_TH_STYLE}"
+                f"background-image:linear-gradient(rgba(255,140,0,0.25),rgba(255,140,0,0.25));"
+                f"color:rgba(200,100,0,0.9);border-bottom:2px solid rgba(255,140,0,0.5)'>"
+                f"{label}</th>"
+            )
+        if j in purple_pos:
+            return (
+                f"<th style='{_TH_STYLE}"
+                f"background-image:linear-gradient(rgba(124,58,237,0.35),rgba(124,58,237,0.35));"
+                f"color:rgba(221,214,254,1.0);border-bottom:2px solid rgba(167,139,250,0.7)'>"
+                f"{label}</th>"
+            )
+        return f"<th style='{_TH_STYLE}'>{label}</th>"
+
+    headers = "".join(_th(j, c) for j, c in enumerate(col_names))
+    rows_parts = []
+    for i, (_, row) in enumerate(df.iterrows()):
+        is_red = (i < highlight_row_count) or (
+            highlight_row_indices is not None and i in highlight_row_indices
+        )
+        if is_red:
+            cells = "".join(
+                f"<td style='{_TD_STYLE}"
+                f"{'border-left:3px solid rgba(220,50,50,0.55);' if j == 0 else ''}"
+                f"color:rgba(220,50,50,0.9);'>"
+                f"{_html.escape(str(v))}</td>"
+                for j, v in enumerate(row)
+            )
+            rows_parts.append(
+                f"<tr style='background:rgba(239,68,68,0.10);'>{cells}</tr>"
+            )
+        else:
+            cells = "".join(
+                f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>"
+                for v in row
+            )
+            rows_parts.append(f"<tr>{cells}</tr>")
+    rows = "".join(rows_parts)
+    scroll_style = (
+        f"overflow-x:auto;overflow-y:auto;max-height:{max_height}px"
+        if max_height else "overflow-x:auto"
+    )
+    return (
+        f"<div style='{scroll_style}'>"
+        "<table style='border-collapse:separate;border-spacing:0;width:100%'>"
+        f"<thead><tr>{headers}</tr></thead>"
+        f"<tbody>{rows}</tbody>"
+        "</table></div>"
+    )
+
+
+def _render_merge_detail_body(t: "DetectedTable") -> None:
+    """列名対応表 + before/after プレビュー（expander なし）。"""
+    raw = t.raw_df
+    fmt = t.df
+    n_residue = len(raw) - len(fmt)
+    st.caption(f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました")
+
+    before_cols = list(raw.columns)
+    after_cols = list(fmt.columns)
+    max_len = max(len(before_cols), len(after_cols))
+    col_diff_df = pd.DataFrame(
+        {
+            "整形前（第1行のみ）": before_cols + [""] * (max_len - len(before_cols)),
+            "整形後（多段マージ）": after_cols + [""] * (max_len - len(after_cols)),
+        }
+    ).assign(
+        変化=lambda df: df.apply(
+            lambda r: "→" if r["整形前（第1行のみ）"] != r["整形後（多段マージ）"] else "=",
+            axis=1,
+        )
+    )[["整形前（第1行のみ）", "変化", "整形後（多段マージ）"]]
+
+    st.markdown("**列名の変化**")
+    rows_html = "".join(
+        "<tr>"
+        + f"<td style='{_TD_STYLE}'>{_html.escape(str(r['整形前（第1行のみ）']))}</td>"
+        + f"<td style='{_TD_CENTER_STYLE}'>{_html.escape(str(r['変化']))}</td>"
+        + f"<td style='{_TD_STYLE}'>{_html.escape(str(r['整形後（多段マージ）']))}</td>"
+        + "</tr>"
+        for _, r in col_diff_df.iterrows()
+    )
+    headers_html = (
+        f"<th style='{_TH_STYLE}'>整形前（第1行のみ）</th>"
+        f"<th style='{_TH_STYLE}text-align:center;'>変化</th>"
+        f"<th style='{_TH_STYLE}'>整形後（多段マージ）</th>"
+    )
+    st.markdown(
+        "<div style='overflow-x:auto'>"
+        "<table style='border-collapse:collapse'>"
+        f"<thead><tr>{headers_html}</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        "</table></div>",
+        unsafe_allow_html=True,
+    )
+
+    raw_col_set = {str(c) for c in raw.columns}
+    unit_cols = {str(c) for c in fmt.columns if "[" in str(c) and str(c) not in raw_col_set}
+    col_b, col_a = st.columns(2)
+    with col_b:
+        st.markdown(f"**整形前**（全件 / 赤色 {n_residue} 行が除去対象）")
+        st.markdown(
+            _df_to_html(raw.astype(str), max_height=340, highlight_row_count=n_residue),
+            unsafe_allow_html=True,
+        )
+    with col_a:
+        _after_hint = "紫列 = 単位付加" if unit_cols else ""
+        st.markdown(f"**整形後**（全件{' / ' + _after_hint if _after_hint else ''}）")
+        st.markdown(
+            _df_to_html(fmt.astype(str), max_height=340, unit_col_names=unit_cols or None),
+            unsafe_allow_html=True,
+        )
+
+
+def _merge_detail_body_html(t: "DetectedTable") -> str:
+    """列名対応表 + before/after プレビューをHTML文字列で返す（ネスト details 用）。"""
+    raw = t.raw_df
+    fmt = t.df
+    n_residue = len(raw) - len(fmt)
+
+    before_cols = list(raw.columns)
+    after_cols = list(fmt.columns)
+    max_len = max(len(before_cols), len(after_cols))
+
+    rows_html = ""
+    for i in range(max_len):
+        bc = _html.escape(before_cols[i]) if i < len(before_cols) else ""
+        ac = _html.escape(after_cols[i]) if i < len(after_cols) else ""
+        arrow = "→" if bc != ac else "="
+        rows_html += (
+            f"<tr>"
+            f"<td style='{_TD_STYLE}'>{bc}</td>"
+            f"<td style='{_TD_CENTER_STYLE}'>{arrow}</td>"
+            f"<td style='{_TD_STYLE}'>{ac}</td>"
+            f"</tr>"
+        )
+    headers_html = (
+        f"<th style='{_TH_STYLE}'>整形前（第1行のみ）</th>"
+        f"<th style='{_TH_STYLE}text-align:center;'>変化</th>"
+        f"<th style='{_TH_STYLE}'>整形後（多段マージ）</th>"
+    )
+
+    PREVIEW_ROWS = 10
+    hl = min(n_residue, PREVIEW_ROWS)
+    raw_col_set = {str(c) for c in raw.columns}
+    unit_cols = {str(c) for c in fmt.columns if "[" in str(c) and str(c) not in raw_col_set}
+    before_tbl = _df_to_html(raw.head(PREVIEW_ROWS).astype(str), highlight_row_count=hl)
+    after_tbl  = _df_to_html(
+        fmt.head(PREVIEW_ROWS).astype(str), unit_col_names=unit_cols or None
+    )
+    _after_hint = " / 紫列 = 単位付加" if unit_cols else ""
+
+    return (
+        f"<p style='font-size:0.83em;opacity:0.65;margin:0 0 0.6rem'>"
+        f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました</p>"
+        f"<p style='font-weight:600;margin:0 0 0.3rem'>列名の変化</p>"
+        f"<div style='overflow-x:auto'>"
+        f"<table style='border-collapse:collapse'>"
+        f"<thead><tr>{headers_html}</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table></div>"
+        f"<div style='display:flex;gap:1rem;flex-wrap:wrap;margin-top:0.8rem'>"
+        f"<div style='flex:1;min-width:280px'>"
+        f"<p style='font-weight:600;margin:0 0 0.3rem'>整形前（赤色 {n_residue} 行が除去対象 / 先頭 {PREVIEW_ROWS} 行）</p>"
+        f"{before_tbl}</div>"
+        f"<div style='flex:1;min-width:280px'>"
+        f"<p style='font-weight:600;margin:0 0 0.3rem'>整形後（先頭 {PREVIEW_ROWS} 行{_after_hint}）</p>"
+        f"{after_tbl}</div>"
+        f"</div>"
+    )
+
+
+_MHD_CSS = """
+<style>
+/* ── Level-2: その他の同様処理 ── */
+details.mhd-l2 {
+    border: 1px solid rgba(127,255,212,0.4);
+    border-radius: 8px;
+    margin: 0.6rem 0 1.2rem;
+    background: rgba(127,255,212,0.04);
+    overflow: hidden;
+}
+details.mhd-l2 > summary {
+    padding: 0.65rem 1rem;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-weight: 700;
+    font-size: 0.97rem;
+    user-select: none;
+    transition: background 0.15s;
+    color: rgba(127,255,212,0.9);
+}
+details.mhd-l2 > summary:hover { background: rgba(127,255,212,0.1); }
+details.mhd-l2 > summary::-webkit-details-marker { display: none; }
+details.mhd-l2 > summary::before {
+    content: "▶";
+    font-size: 0.62em;
+    opacity: 0.75;
+    display: inline-block;
+    transition: transform 0.18s ease;
+    flex-shrink: 0;
+}
+details.mhd-l2[open] > summary::before { transform: rotate(90deg); }
+details.mhd-l2 > .mhd-body {
+    padding: 0.6rem 0.8rem;
+    border-top: 1px solid rgba(127,255,212,0.2);
+}
+/* ── Level-3: 個別テーブル ── */
+details.mhd-l3 {
+    border: 1px solid rgba(127,255,212,0.22);
+    border-radius: 6px;
+    margin: 0.35rem 0;
+    background: rgba(0,0,0,0.12);
+    overflow: hidden;
+}
+details.mhd-l3 > summary {
+    padding: 0.5rem 0.85rem;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-weight: 500;
+    font-size: 0.88rem;
+    user-select: none;
+    transition: background 0.15s;
+}
+details.mhd-l3 > summary:hover { background: rgba(127,255,212,0.07); }
+details.mhd-l3 > summary::-webkit-details-marker { display: none; }
+details.mhd-l3 > summary::before {
+    content: "▶";
+    font-size: 0.55em;
+    opacity: 0.55;
+    display: inline-block;
+    transition: transform 0.18s ease;
+    flex-shrink: 0;
+}
+details.mhd-l3[open] > summary::before { transform: rotate(90deg); }
+details.mhd-l3 > .mhd-body {
+    padding: 0.55rem 0.85rem;
+    border-top: 1px solid rgba(127,255,212,0.15);
+}
+</style>
+"""
+
+
+def _make_details_html(label: str, body_html: str, open: bool = False, level: int = 2) -> str:
+    cls = f"mhd-l{level}"
+    open_attr = " open" if open else ""
+    return (
+        f"<details class='{cls}'{open_attr}>"
+        f"<summary>{label}</summary>"
+        f"<div class='mhd-body'>{body_html}</div>"
+        f"</details>"
+    )
+
+
+def _render_header_merge_detail(
+    t: "DetectedTable",
+    rest: "Optional[List[DetectedTable]]" = None,
+) -> None:
+    """代表テーブルの詳細 expander（Streamlit）。
+    rest がある場合はネスト HTML details でその他を表示する。"""
+    title_str = f"  🏷️ `{t.title}`" if t.title else ""
+    with st.expander(
+        f"**`{t.table_id}`**{title_str}  —  シート: {t.sheet_name}",
+        expanded=True,
+    ):
+        _render_merge_detail_body(t)
+
+        if rest:
+            # レベル3: 各テーブルを <details> で包む
+            inner_html = ""
+            for r in rest:
+                r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                lbl = (
+                    f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                    f" — シート: {_html.escape(r.sheet_name)}"
+                )
+                inner_html += _make_details_html(
+                    lbl, _merge_detail_body_html(r), open=False, level=3
+                )
+            # レベル2: 「その他の同様処理」<details>
+            outer_html = _MHD_CSS + _make_details_html(
+                f"その他の同様処理（{len(rest)} 件）",
+                inner_html,
+                open=False,
+                level=2,
+            )
+            st.markdown(outer_html, unsafe_allow_html=True)
+
+
+def _render_agg_removal_body(t: "DetectedTable") -> None:
+    """集計除去の詳細（Streamlit ウィジェット版、expander なし）。"""
+    pre = t.pre_agg_df
+    post = t.df
+
+    removed_rows = t.agg_rows_removed
+    removed_cols = t.agg_cols_removed
+
+    parts = []
+    if removed_rows:
+        parts.append(f"集計行 **{len(removed_rows)}** 行")
+    if removed_cols:
+        parts.append(f"集計列 **{len(removed_cols)}** 列")
+    st.caption("、".join(parts) + " を除去しました")
+
+    # 除去した列
+    if removed_cols:
+        st.markdown("**除去した集計列**")
+        st.markdown(
+            " &nbsp;".join(
+                f"<code style='background:rgba(255,180,100,0.15);"
+                f"border:1px solid rgba(255,180,100,0.4);border-radius:4px;"
+                f"padding:1px 6px'>{_html.escape(c)}</code>"
+                for c in removed_cols
+            ),
+            unsafe_allow_html=True,
+        )
+
+    if removed_rows:
+        n_removed = len(removed_rows)
+        st.markdown(f"**除去した集計行**（{n_removed} 件）")
+        rows_html = "".join(
+            "<tr>"
+            + "".join(
+                (
+                    f"<td style='{_TD_STYLE}'>"
+                    f"<span style='background:rgba(255,140,0,0.22);border:1px solid rgba(255,140,0,0.45);"
+                    f"border-radius:3px;padding:1px 5px;font-weight:600'>"
+                    f"{_html.escape(str(v))}</span></td>"
+                ) if (
+                    "__trigger_col__" in row_info
+                    and k == row_info["__trigger_col__"]
+                ) or (
+                    "__trigger_col__" not in row_info
+                    and _is_agg_label(str(v))
+                ) else (
+                    f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>"
+                )
+                for k, v in row_info.items() if k != "__trigger_col__"
+            )
+            + "</tr>"
+            for row_info in removed_rows
+        )
+        headers_html = "".join(
+            f"<th style='{_TH_STYLE}'>{_html.escape(c)}</th>"
+            for c in removed_rows[0].keys() if c != "__trigger_col__"
+        )
+        row_max_h = 300 if n_removed > 10 else None
+        scroll_style = (
+            f"overflow-x:auto;overflow-y:auto;max-height:{row_max_h}px"
+            if row_max_h else "overflow-x:auto"
+        )
+        st.markdown(
+            f"<div style='{scroll_style}'>"
+            "<table style='border-collapse:collapse'>"
+            f"<thead><tr>{headers_html}</tr></thead>"
+            f"<tbody>{rows_html}</tbody>"
+            "</table></div>",
+            unsafe_allow_html=True,
+        )
+
+    # before / after プレビュー（代表テーブルは全件スクロール）
+    st.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
+    removed_positions = set(getattr(t, "agg_rows_removed_positions", []))
+    n_removed_rows = len(removed_rows)
+    _before_hints = []
+    if n_removed_rows:
+        _before_hints.append(f"赤色 {n_removed_rows} 行が除去対象")
+    if removed_cols:
+        _before_hints.append("オレンジ列が除去対象")
+    _before_label = "全件 / " + "・".join(_before_hints) if _before_hints else "全件"
+    col_b, col_a = st.columns(2)
+    with col_b:
+        st.markdown(f"**除去前**（{_before_label}）")
+        st.markdown(
+            _df_to_html(
+                pre.astype(str),
+                max_height=340,
+                highlight_row_indices=removed_positions,
+                highlight_col_names=set(removed_cols) if removed_cols else None,
+            ),
+            unsafe_allow_html=True,
+        )
+    with col_a:
+        st.markdown("**除去後**（全件）")
+        st.markdown(_df_to_html(post.astype(str), max_height=340), unsafe_allow_html=True)
+
+
+def _render_agg_removal_body_html(t: "DetectedTable") -> str:
+    """集計除去の詳細を HTML 文字列で返す（ネスト details 用）。"""
+    pre = t.pre_agg_df
+    post = t.df
+    removed_rows = t.agg_rows_removed
+    removed_cols = t.agg_cols_removed
+
+    parts = []
+    if removed_rows:
+        parts.append(f"集計行 {len(removed_rows)} 行")
+    if removed_cols:
+        parts.append(f"集計列 {len(removed_cols)} 列")
+    caption = "、".join(parts) + " を除去しました"
+
+    cols_html = ""
+    if removed_cols:
+        badges = " ".join(
+            f"<code style='background:rgba(255,180,100,0.15);"
+            f"border:1px solid rgba(255,180,100,0.4);border-radius:4px;"
+            f"padding:1px 5px;font-size:0.82em'>{_html.escape(c)}</code>"
+            for c in removed_cols
+        )
+        cols_html = f"<p style='margin:0.4em 0 0.2em'><b>除去した集計列:</b> {badges}</p>"
+
+    rows_html_block = ""
+    if removed_rows:
+        n_removed = len(removed_rows)
+        rows_html = "".join(
+            "<tr>"
+            + "".join(
+                (
+                    f"<td style='{_TD_STYLE}'>"
+                    f"<span style='background:rgba(255,140,0,0.22);border:1px solid rgba(255,140,0,0.45);"
+                    f"border-radius:3px;padding:1px 5px;font-weight:600'>"
+                    f"{_html.escape(str(v))}</span></td>"
+                ) if (
+                    "__trigger_col__" in row_info
+                    and k == row_info["__trigger_col__"]
+                ) or (
+                    "__trigger_col__" not in row_info
+                    and _is_agg_label(str(v))
+                ) else (
+                    f"<td style='{_TD_STYLE}'>{_html.escape(str(v))}</td>"
+                )
+                for k, v in row_info.items() if k != "__trigger_col__"
+            )
+            + "</tr>"
+            for row_info in removed_rows
+        )
+        headers_html = "".join(
+            f"<th style='{_TH_STYLE}'>{_html.escape(c)}</th>"
+            for c in removed_rows[0].keys() if c != "__trigger_col__"
+        )
+        row_scroll = (
+            f"overflow-x:auto;overflow-y:auto;max-height:340px"
+            if n_removed > 10 else "overflow-x:auto"
+        )
+        rows_html_block = (
+            f"<p style='margin:0.6em 0 0.2em'><b>除去した集計行（{n_removed} 件）:</b></p>"
+            f"<div style='{row_scroll}'>"
+            "<table style='border-collapse:collapse'>"
+            f"<thead><tr>{headers_html}</tr></thead>"
+            f"<tbody>{rows_html}</tbody>"
+            "</table></div>"
+        )
+
+    PREVIEW = 10
+    removed_positions = set(getattr(t, "agg_rows_removed_positions", []))
+    preview_removed = {p for p in removed_positions if p < PREVIEW}
+    before_tbl = _df_to_html(
+        pre.head(PREVIEW).astype(str),
+        highlight_row_indices=preview_removed,
+        highlight_col_names=set(removed_cols) if removed_cols else None,
+    )
+    after_tbl = _df_to_html(post.head(PREVIEW).astype(str))
+    n_removed_label = len(removed_rows)
+    _hints = []
+    if n_removed_label:
+        _hints.append(f"赤色 {n_removed_label} 行が除去対象")
+    if removed_cols:
+        _hints.append("オレンジ列が除去対象")
+    _before_lbl = f"先頭 {PREVIEW} 行" + (" / " + "・".join(_hints) if _hints else "")
+    preview_html = (
+        f"<div style='display:flex;gap:1rem;flex-wrap:wrap;margin-top:1.2rem'>"
+        f"<div style='flex:1;min-width:280px'>"
+        f"<p style='font-weight:600;margin:0 0 0.3rem'>除去前（{_before_lbl}）</p>{before_tbl}</div>"
+        f"<div style='flex:1;min-width:280px'>"
+        f"<p style='font-weight:600;margin:0 0 0.3rem'>除去後（先頭 {PREVIEW} 行）</p>{after_tbl}</div>"
+        f"</div>"
+    )
+
+    return (
+        f"<p style='font-size:0.82em;opacity:0.7;margin:0 0 0.4em'>{_html.escape(caption)}</p>"
+        f"{cols_html}{rows_html_block}{preview_html}"
+    )
+
+
+def step_format():
+    st.header("🔧 ステップ 3 : テーブル整形")
+
+    tables: List[DetectedTable] = st.session_state.detected_tables
+
+    if st.session_state.auto_processing:
+        st.session_state.step = 4
+        st.rerun()
+
+    formatted = [t for t in tables if t.raw_df is not None]
+    unformatted = [t for t in tables if t.raw_df is None]
+    agg_removed = [t for t in tables if t.pre_agg_df is not None]
+
+    nothing_done = not formatted and not agg_removed
+    if nothing_done:
+        st.info("全テーブルに対して整形処理はありませんでした。")
+    else:
+        # ── ① 多段ヘッダーの検出と解決機能 ──────────────────────────────
+        st.subheader(f"🔗 多段ヘッダーの検出と解決機能（対象：{len(formatted)}テーブル）")
+        if formatted:
+            st.success(
+                f"**{len(formatted)}** テーブルで多段ヘッダーを統合しました"
+                f"（整形なし: {len(unformatted)} テーブル）"
+            )
+            rest = formatted[1:] if len(formatted) > 1 else None
+            _render_header_merge_detail(formatted[0], rest=rest)
+        else:
+            st.info("多段ヘッダーを含むテーブルはありませんでした。")
+
+        st.divider()
+
+        # ── ② 集計行の検出・削除・メタデータ保存機能 ──────────────────────
+        if agg_removed:
+            total_rows = sum(len(t.agg_rows_removed) for t in agg_removed)
+            total_cols = sum(len(t.agg_cols_removed) for t in agg_removed)
+            st.subheader(f"🗑️ 集計行の検出・削除・メタデータ保存機能（対象：{len(agg_removed)}テーブル）")
+            st.success(
+                f"**{len(agg_removed)}** テーブルで集計行・集計列を除去しました  "
+                f"（行: {total_rows} 件、列: {total_cols} 件）"
+            )
+
+            # 代表テーブル（Streamlit expander）
+            rep = agg_removed[0]
+            rep_title = f"  🏷️ `{rep.title}`" if rep.title else ""
+            with st.expander(
+                f"**`{rep.table_id}`**{rep_title}  —  シート: {rep.sheet_name}",
+                expanded=True,
+            ):
+                _render_agg_removal_body(rep)
+
+                # その他を MHD_CSS + <details> でネスト表示
+                rest_agg = agg_removed[1:]
+                if rest_agg:
+                    inner_html = ""
+                    for r in rest_agg:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_agg_removal_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_agg)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
+        else:
+            st.info("集計行・集計列を含むテーブルはありませんでした。")
+
+    c1, c2 = st.columns([1, 4])
+    with c1:
+        st.button("← 戻る", on_click=_go_to, args=(2,))
+    with c2:
+        st.button(
+            "次へ：テーブル関係分析を開始 →",
+            type="primary",
+            use_container_width=True,
+            on_click=_go_to,
+            args=(4,),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step 4 — テーブル関係分析
 # ---------------------------------------------------------------------------
 
 
 def step3():
-    st.header("🧠 ステップ 3 : テーブル関係分析")
+    st.header("🧠 ステップ 4 : テーブル関係分析")
 
     if st.session_state.ai_analysis is None:
         with st.spinner("テーブルを分析中です..."):
@@ -1073,7 +1898,7 @@ def step3():
 
     # 初回の前進パス中のみ自動的に次のステップへ進む
     if st.session_state.auto_processing:
-        st.session_state.step = 4
+        st.session_state.step = 5
         st.rerun()
 
     # サマリーバナー
@@ -1188,14 +2013,14 @@ def step3():
 
     c1, c2 = st.columns([1, 4])
     with c1:
-        st.button("← 戻る", on_click=_go_to, args=(2,))
+        st.button("← 戻る", on_click=_go_to, args=(3,))
     with c2:
         st.button(
             "次へ：新規テーブル案生成 →",
             type="primary",
             use_container_width=True,
             on_click=_go_to,
-            args=(4,),
+            args=(5,),
         )
 
 
@@ -1968,7 +2793,7 @@ def _render_unified_ir_card(
 
 
 def step4():
-    st.header("✅ ステップ 4 : 新規テーブル案生成")
+    st.header("✅ ステップ 5 : 新規テーブル案生成")
 
     components.html(
         """<script>
@@ -1989,11 +2814,12 @@ def step4():
     ):
         with st.spinner("新規テーブル案・マスタ案を自動設定中..."):
             _build_final_tables()
-        st.session_state.step = 5
+        st.session_state.step = 6
         st.rerun()
     elif st.session_state.auto_processing:
         # セミオート: ユーザーが提案を確認できるようここで停止する
         st.session_state.auto_processing = False
+        st.session_state.auto_completed = True
 
     tables_dict = {t.table_id: t for t in st.session_state.detected_tables}
 
@@ -2022,13 +2848,13 @@ def step4():
         st.info("新規テーブルの生成推奨はありません。このステップはスキップします。")
         c1, c2 = st.columns([1, 4])
         with c1:
-            st.button("← 戻る", on_click=_go_to, args=(3,))
+            st.button("← 戻る", on_click=_go_to, args=(4,))
         with c2:
             st.button(
                 "次へ：テーブル選択 →",
                 type="primary",
                 use_container_width=True,
-                on_click=_build_and_go_step5,
+                on_click=_build_and_go_step6,
             )
         return
 
@@ -2192,13 +3018,13 @@ def step4():
     st.divider()
     c1, c2 = st.columns([1, 4])
     with c1:
-        st.button("← 戻る", on_click=_go_to, args=(3,))
+        st.button("← 戻る", on_click=_go_to, args=(4,))
     with c2:
         st.button(
             "次へ：テーブル選択 →",
             type="primary",
             use_container_width=True,
-            on_click=_build_and_go_step5,
+            on_click=_build_and_go_step6,
         )
 
 
@@ -3079,7 +3905,7 @@ def _table_card(tid: str, info: dict, ir=None, tables_dict=None):
 
 
 def step5():
-    st.header("📋 ステップ 5 : テーブル選択")
+    st.header("📋 ステップ 6 : テーブル選択")
 
     # Step 5 が読み込まれるたびに localStorage のsplitter位置をリセットし、
     # 前回の古いドラッグ位置で右列が折りたたまれないようにする。
@@ -3098,7 +3924,7 @@ def step5():
 
     if not final:
         st.warning("表示できるテーブルがありません")
-        st.button("← 戻る", on_click=_go_to, args=(4,))
+        st.button("← 戻る", on_click=_go_to, args=(5,))
         return
 
     # このフィールドが追加される前に保存された古い .tep ファイルから読み込まれたエントリに
@@ -3132,11 +3958,13 @@ def step5():
                 recommended if recommended else set(final.keys())
             )
             st.session_state.auto_processing = False
-            st.session_state.step = 6
+            st.session_state.auto_completed = True
+            st.session_state.step = 7
             st.rerun()
         else:
             # セミオート: 前進パスはここで終了 — ユーザーが手動でテーブルを選択する
             st.session_state.auto_processing = False
+            st.session_state.auto_completed = True
 
     st.info(
         "分析対象とするテーブルを選択してください。"
@@ -3258,7 +4086,7 @@ def step5():
     st.divider()
     c1, c2 = st.columns([1, 4])
     with c1:
-        st.button("← 戻る", on_click=_go_to, args=(4,))
+        st.button("← 戻る", on_click=_go_to, args=(5,))
     with c2:
         n = len(st.session_state.selected_ids)
         if n == 0:
@@ -3269,7 +4097,7 @@ def step5():
                 type="primary",
                 use_container_width=True,
                 on_click=_go_to,
-                args=(6,),
+                args=(7,),
             )
 
 
@@ -3279,7 +4107,7 @@ def step5():
 
 
 def step6():
-    st.header("📥 ステップ 6 : エクスポート")
+    st.header("📥 ステップ 7 : エクスポート")
 
     final: Dict[str, dict] = st.session_state.final_tables
     selected = {
@@ -3288,7 +4116,7 @@ def step6():
 
     if not selected:
         st.warning("エクスポート対象のテーブルが選択されていません")
-        st.button("← テーブル選択に戻る", on_click=_go_to, args=(5,))
+        st.button("← テーブル選択に戻る", on_click=_go_to, args=(6,))
         return
 
     st.success(f"✅ **{len(selected)} テーブル** のエクスポート準備が完了しました")
@@ -3375,19 +4203,28 @@ def step6():
 # ---------------------------------------------------------------------------
 
 
+_SCROLL_TO_TOP_JS = (
+    "<script>"
+    "(function(){"
+    "var fn=function(){"
+    "var d=window.parent.document;"
+    "d.documentElement.scrollTop=0;"
+    "d.body.scrollTop=0;"
+    "['[data-testid=\"stMain\"]','[data-testid=\"stAppViewContainer\"]','.main']"
+    ".forEach(function(s){var el=d.querySelector(s);if(el)el.scrollTop=0;});"
+    "};"
+    "fn();"
+    "[80,250,600].forEach(function(t){setTimeout(fn,t);});"
+    "})();"
+    "</script>"
+)
+
+
 def main():
     _init()
 
-    # ナビゲーション後にページ最上部へスクロールする。
-    # height=42 の iframe はCSSで非表示になるため見た目に影響しない。
-    if st.session_state.pop("_scroll_to_top", False):
-        components.html(
-            "<script>"
-            "window.parent.document.documentElement.scrollTop=0;"
-            "window.parent.document.body.scrollTop=0;"
-            "</script>",
-            height=42,
-        )
+    # _scroll_to_top フラグを保存してから pop（後でステップ描画後に発火するため）
+    scroll_to_top = st.session_state.pop("_scroll_to_top", False)
 
     with st.container():
         _render_header()
@@ -3403,14 +4240,21 @@ def main():
     elif step == 2:
         step2()
     elif step == 3:
-        step3()
+        step_format()
     elif step == 4:
-        step4()
+        step3()
     elif step == 5:
-        step5()
+        step4()
     elif step == 6:
+        step5()
+    elif step == 7:
         step6()
     _inject_splitter_js()
+
+    # ステップコンテンツ全描画後にスクロールトップを発火する。
+    # コンテンツ描画前に発火すると、その後の DOM 追加でブラウザが位置を戻してしまう。
+    if scroll_to_top:
+        components.html(_SCROLL_TO_TOP_JS, height=42)
 
 
 if __name__ == "__main__":

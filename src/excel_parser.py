@@ -7,6 +7,7 @@ import openpyxl
 import pandas as pd
 
 from .models import DetectedTable
+from .table_formatter import detect_header_roles, merge_header_rows, remove_aggregates
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +221,7 @@ _NUM_STRIP = str.maketrans("", "", ",、△▲")
 _STAT_PLACEHOLDERS: frozenset = frozenset({"***", "X", "x", "ｘ", "Ｘ", "－", "…"})
 
 
+
 def _cell_is_numeric(v: Any) -> bool:
     """セルの値が数値として解釈できる場合に True を返す。
     統計秘匿マーカー（***、X 等）も数値扱いとする。"""
@@ -235,6 +237,8 @@ def _cell_is_numeric(v: Any) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
 
 
 # ── 行タイプ定数 ────────────────────────────────────────────────────────
@@ -305,16 +309,18 @@ def _classify_row(p: Dict[str, Any]) -> str:
         # 注釈マーカーまたは非常に長い文 → テーブル外の脚注/注記
         if txt.startswith(_NOTE_PREFIXES) or len(txt) > 60:
             return _RT_NOTE
-        # 標準の注記プレフィックスなしの列挙＋集計キーワード
-        # 例: "C-1・C-2・C-3の合計", "A区・B区の内訳"
+        """標準の注記プレフィックスなしの列挙＋集計キーワード
+        例: "C-1・C-2・C-3の合計", "A区・B区の内訳"
+        """
         if _AGG_ENUM_RE.search(txt):
             return _RT_NOTE
         return _RT_TITLE
 
-    # 入力済みセルがすべて同一テキスト → 行をまたぐ結合セル。
-    # Excel では結合セルがマスターセルの値を範囲内のすべての列に伝播する。
-    # テキストが注釈に見える場合（注記プレフィックス OR 60文字超）は
-    # _RT_NOTE に分類し、ステートマシンがテーブル領域から除外できるようにする。
+    """入力済みセルがすべて同一テキスト → 行をまたぐ結合セル。
+    Excel では結合セルがマスターセルの値を範囲内のすべての列に伝播する。
+    テキストが注釈に見える場合（注記プレフィックス OR 60文字超）は
+    _RT_NOTE に分類し、ステートマシンがテーブル領域から除外できるようにする。
+    """
     if p["numeric"] == 0 and p["text"] >= 2:
         unique = set(p["texts"])
         if len(unique) == 1:
@@ -323,15 +329,17 @@ def _classify_row(p: Dict[str, Any]) -> str:
                 return _RT_NOTE
             if _AGG_ENUM_RE.search(txt):
                 return _RT_NOTE
-            # 4セル以上が同一の短いテキスト → 結合セルによる単位ラベル行
-            # （例: '百万円'×19, 'mil. yen'×19）。タイトルではなく列ヘッダーとして扱う。
+            """4セル以上が同一の短いテキスト → 結合セルによる単位ラベル行
+            （例: '百万円'×19, 'mil. yen'×19）。タイトルではなく列ヘッダーとして扱う。
+            """
             if p["text"] >= 4:
                 return _RT_COL_HDR
             return _RT_TITLE if len(txt) <= 40 else _RT_COL_HDR
 
-    # 非常に長いテキストセルと少数の数値を含む行 →
-    # 注釈/注記。別の列の小さな値に隣接した結合セル内の注記を捕捉する
-    # （「ユニークテキスト」の処理パスが機能しない場合）。
+    """非常に長いテキストセルと少数の数値を含む行 →
+    注釈/注記。別の列の小さな値に隣接した結合セル内の注記を捕捉する
+    （「ユニークテキスト」の処理パスが機能しない場合）。
+    """
     if p["texts"] and max(len(t) for t in p["texts"]) > 80 and n_ratio <= 0.30:
         return _RT_NOTE
 
@@ -470,11 +478,12 @@ def _detect_table_regions(
         if rt == _RT_EMPTY:
             consec_empty += 1
             if cur["data_rows"] and consec_empty >= 2:
-                # データ後に連続した空行が2行 → 明確なテーブル境界。
-                # 空行1行は許容する: 複雑なテーブルでは空のサブ行（例: 住宅用 / 学校向け行）
-                # を持つことがあり、閾値を1にすると誤ってテーブルを分割してしまう。
-                # 注: 空行1行の後に新しいタイトル/幅広ヘッダーが続く場合は、
-                # _RT_TITLE / _RT_COL_HDR のハンドラーでテーブルを閉じる。
+                """データ後に連続した空行が2行 → 明確なテーブル境界。
+                空行1行は許容する: 複雑なテーブルでは空のサブ行（例: 住宅用 / 学校向け行）
+                を持つことがあり、閾値を1にすると誤ってテーブルを分割してしまう。
+                注: 空行1行の後に新しいタイトル/幅広ヘッダーが続く場合は、
+                _RT_TITLE / _RT_COL_HDR のハンドラーでテーブルを閉じる。
+                """
                 _flush(cur, last_filled, regions)
                 cur = _mk()
                 pending_titles = []
@@ -495,10 +504,11 @@ def _detect_table_regions(
                 cur = _mk()
                 pending_titles = []
             elif len(cur["header_rows"]) >= 2:
-                # データなしで COL_HDR 行が2行以上あった後にタイトルが来た →
-                # 直前の行が独立したブロックを形成している（例: 実テーブル上の
-                # ナビゲーション/インデックスセクション）。
-                # 品質フィルタリングで破棄できるようフラッシュする（シグナル3: 短い＋全テキスト＋幅広）。
+                """データなしで COL_HDR 行が2行以上あった後にタイトルが来た →
+                直前の行が独立したブロックを形成している（例: 実テーブル上の
+                ナビゲーション/インデックスセクション）。
+                品質フィルタリングで破棄できるようフラッシュする（シグナル3: 短い＋全テキスト＋幅広）。
+                """
                 _flush(cur, r - 1, regions)
                 cur = _mk()
                 pending_titles = []
@@ -509,12 +519,13 @@ def _detect_table_regions(
         # ── 列ヘッダー行 ──────────────────────────────────────────────
         if rt == _RT_COL_HDR:
             if cur["data_rows"]:
-                # フラッシュ前に、列ヘッダーに見えるだけの小計/集計行でないか確認する。
-                # テーブルに留める2つのシグナル:
-                # (a) スパンがテーブル幅の50%未満（狭い小計ラベル）。
-                # (b) テーブルの列範囲内の充填率が非常に低い — ラベル列が左にあり
-                #     単一の値が右に離れたデータ行は、スパン的には「幅広」に見えるが
-                #     実際はスパースなデータ行（例: "住宅用 | … | 1 | … | blank"）。
+                """フラッシュ前に、列ヘッダーに見えるだけの小計/集計行でないか確認する。
+                テーブルに留める2つのシグナル:
+                (a) スパンがテーブル幅の50%未満（狭い小計ラベル）。
+                (b) テーブルの列範囲内の充填率が非常に低い — ラベル列が左にあり
+                    単一の値が右に離れたデータ行は、スパン的には「幅広」に見えるが
+                    実際はスパースなデータ行（例: "住宅用 | … | 1 | … | blank"）。
+                """
                 tbl_width = cur["col_end"] - cur["col_start"] + 1
                 row_width = (
                     p["col_max"] - p["col_min"] + 1
@@ -538,8 +549,9 @@ def _detect_table_regions(
                     _upd_cols(cur, r)
                     continue
 
-                # データの後に空行なしでヘッダーが現れた
-                # → 構造的な不連続: 現在を閉じ、新しく開始する
+                """データの後に空行なしでヘッダーが現れた
+                → 構造的な不連続: 現在を閉じ、新しく開始する
+                """
                 _flush(cur, r - 1, regions)
                 cur = _mk()
                 # pending_titles はこの新しいテーブルに属する可能性があるため保持する
@@ -682,11 +694,12 @@ def _classify_table_quality(
                 _tally(str(v))
 
     if max_len > 80 or (txt_ct >= 3 and lng_ct / txt_ct > 0.25):
-        # ガード: 迷い込んだ注釈行が領域境界に入り込んだだけで
-        # データの豊富なテーブルを破棄してはならない。
-        # 絶対的な数値カウントが十分に大きい場合、または数値密度
-        # （数値セルの割合）が有意な場合にテーブルを保持する —
-        # 密度チェックは絶対カウント < 10 の小さなテーブルを救済する。
+        """ガード: 迷い込んだ注釈行が領域境界に入り込んだだけで
+        データの豊富なテーブルを破棄してはならない。
+        絶対的な数値カウントが十分に大きい場合、または数値密度
+        （数値セルの割合）が有意な場合にテーブルを保持する —
+        密度チェックは絶対カウント < 10 の小さなテーブルを救済する。
+        """
         total_numeric = sum(
             int(pd.to_numeric(df[c], errors="coerce").notna().sum())
             for c in df.columns
@@ -703,94 +716,6 @@ def _classify_table_quality(
 # ---------------------------------------------------------------------------
 
 
-def _detect_header_rows(rows: List[List[Any]]) -> Tuple[int, int]:
-    """
-    先頭のタイトル行と列ヘッダー行を検出する。
-
-    Returns (n_title, n_header):
-      n_title  — 先頭にあるセクションタイトルの行数（単一セルの文字列で、
-                 より幅広の行が後続する）。DataFrame 構築前にスキップされる。
-      n_header — 列ヘッダーを形成する行数（1段または2段）。
-    """
-    if not rows:
-        return 0, 0
-
-    def _nn(row: List[Any]) -> List[Any]:
-        return [v for v in row if v is not None]
-
-    def _str_count(vals: List[Any]) -> int:
-        return sum(1 for v in vals if isinstance(v, str))
-
-    def _num_count(vals: List[Any]) -> int:
-        return sum(
-            1 for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)
-        )
-
-    # --- ステップ1: 先頭のタイトル行（およびその間の空白スペーサー行）をスキップ ---
-    # タイトル行は正確に1つの非空セル（文字列）を持つ。
-    # 最初の幅広行の前に現れる全空行はタイトルブロック内のスペーサーとして扱い
-    # やはりスキップする。これにより、タイトルと列ヘッダー行の間に1行以上の
-    # 空行がある場合でも正しく認識される
-    # （例: 行2にタイトル、行3が空白、行4にヘッダー）。
-    n_title = 0
-    while n_title < len(rows) - 1:
-        nn_curr = _nn(rows[n_title])
-
-        # 全空行 — より幅広の行が下にあればスペーサーとしてスキップ
-        if not nn_curr:
-            has_wider_below = any(
-                len(_nn(rows[j])) >= 2 for j in range(n_title + 1, len(rows))
-            )
-            if has_wider_below:
-                n_title += 1
-                continue
-            else:
-                break
-
-        if not (len(nn_curr) == 1 and isinstance(nn_curr[0], str)):
-            break
-        # 下により幅広の行が存在する場合のみこの行をタイトルとして受け入れる
-        has_wider_below = any(
-            len(_nn(rows[j])) >= 2 for j in range(n_title + 1, len(rows))
-        )
-        if has_wider_below:
-            n_title += 1
-        else:
-            break
-
-    remaining = rows[n_title:]
-    if not remaining:
-        return n_title, 0
-
-    # --- ステップ2: 残りの行から1段または2段の列ヘッダーを検出 ---
-    nn_first = _nn(remaining[0])
-    if not nn_first:
-        return n_title, 0
-
-    # 非空セルの50%以上が文字列ならば最初の行はヘッダー
-    if _str_count(nn_first) / len(nn_first) < 0.5:
-        return n_title, 0
-
-    # 2行目もヘッダーになるのは以下の条件をすべて満たす場合のみ:
-    #   1. 2行目に数値がない
-    #   2. 2行目の文字列比率が高い
-    #   3. 1行目に重複値がある — 結合セルのスパニングヘッダーの特徴
-    #      （例: "東京支社|東京支社|大阪支社|大阪支社"）。
-    #      1行目の値がすべてユニークなら、1行目はほぼ確実に
-    #      通常の1段ヘッダーで2行目はデータ（全文字列であっても）。
-    if len(remaining) > 1:
-        nn_second = _nn(remaining[1])
-        first_strs = [str(v) for v in nn_first]
-        first_has_duplicates = len(first_strs) != len(set(first_strs))
-        if (
-            nn_second
-            and _num_count(nn_second) == 0
-            and _str_count(nn_second) / len(nn_second) >= 0.8
-            and first_has_duplicates
-        ):
-            return n_title, 2
-
-    return n_title, 1
 
 
 def _make_unique_columns(columns: List[str]) -> List[str]:
@@ -807,21 +732,24 @@ def _make_unique_columns(columns: List[str]) -> List[str]:
     return result
 
 
+
+
 def _extract_dataframe(
     grid: List[List[Any]],
     start_row: int,
     end_row: int,
     start_col: int,
     end_col: int,
-) -> Tuple[pd.DataFrame, Optional[str]]:
-    """
-    矩形領域を DataFrame として抽出する。
+) -> Tuple[pd.DataFrame, Optional[str], Optional[pd.DataFrame]]:
+    """矩形領域を DataFrame として抽出する。
 
-    (df, title) を返す。title はテーブルデータの直上で検出された
-    セクション見出しのテキスト。
+    Returns (df, title, raw_df):
+      df      — 整形済み DataFrame（多段ヘッダーをマージ済み）
+      title   — テーブル直上のセクションタイトルテキスト
+      raw_df  — 整形前 DataFrame（多段ヘッダー時のみ設定、それ以外は None）
     """
     if start_row > end_row or start_col > end_col:
-        return pd.DataFrame(), None
+        return pd.DataFrame(), None, None
 
     rows = [
         [grid[r][c] for c in range(start_col, end_col + 1)]
@@ -829,9 +757,9 @@ def _extract_dataframe(
     ]
 
     if not rows:
-        return pd.DataFrame(), None
+        return pd.DataFrame(), None, None
 
-    n_title, n_header = _detect_header_rows(rows)
+    n_title, header_roles = detect_header_roles(rows)
     num_cols = end_col - start_col + 1
 
     # スキップされたタイトル行からタイトルテキストを収集する
@@ -844,30 +772,33 @@ def _extract_dataframe(
                 title_parts.append(str(vals[0]).strip())
         title = " / ".join(title_parts) if title_parts else None
 
-    # ヘッダー＋データに使用できる行
     remaining = rows[n_title:]
+    n_header = len(header_roles)
 
     if n_header == 0:
         columns = [f"列{i + 1}" for i in range(num_cols)]
         df = pd.DataFrame(remaining, columns=columns)
-    elif n_header == 1:
+        return df.dropna(how="all").reset_index(drop=True), title, None
+
+    if n_header == 1:
         header = _make_unique_columns(
             [str(v) if v is not None else "" for v in remaining[0]]
         )
         df = pd.DataFrame(remaining[1:], columns=header)
-    else:
-        combined = []
-        for c in range(num_cols):
-            parts = [
-                str(remaining[h][c]).strip()
-                for h in range(n_header)
-                if remaining[h][c] is not None and str(remaining[h][c]).strip()
-            ]
-            combined.append("_".join(parts) if parts else f"列{c + 1}")
-        header = _make_unique_columns(combined)
-        df = pd.DataFrame(remaining[n_header:], columns=header)
+        return df.dropna(how="all").reset_index(drop=True), title, None
 
-    return df.dropna(how="all").reset_index(drop=True), title
+    # 多段ヘッダー: 整形前 DataFrame を raw_df として保存
+    raw_header = _make_unique_columns(
+        [str(v) if v is not None else "" for v in remaining[0]]
+    )
+    raw_df = pd.DataFrame(remaining[1:], columns=raw_header).dropna(how="all").reset_index(drop=True)
+
+    header_data = [remaining[i] for i in range(n_header)]
+    merged = merge_header_rows(header_data, header_roles, num_cols)
+    header = _make_unique_columns(merged)
+    df = pd.DataFrame(remaining[n_header:], columns=header)
+
+    return df.dropna(how="all").reset_index(drop=True), title, raw_df
 
 
 # ---------------------------------------------------------------------------
@@ -897,16 +828,17 @@ def _detect_tables_in_grid(
             grid, band_start, band_end, max_col, gap_threshold=2
         )
 
-        # タイトル行をスキップし、最初の列ヘッダー行をテーブル開始行とする。
-        # これにより start_row がシート内の実データヘッダー位置（例: 行8や行10）に
-        # 一致し、タイトル行（行1〜7等）は title フィールドへ格納される。
+        """タイトル行をスキップし、最初の列ヘッダー行をテーブル開始行とする。
+        これにより start_row がシート内の実データヘッダー位置（例: 行8や行10）に
+        一致し、タイトル行（行1〜7等）は title フィールドへ格納される。
+        """
         first_header_row = min(reg["header_rows"]) if reg["header_rows"] else band_start
 
         for col_start, col_end in col_groups:
             if (band_end - first_header_row + 1) < 2:
                 continue
 
-            df, inner_title = _extract_dataframe(
+            df, inner_title, raw_df = _extract_dataframe(
                 grid, first_header_row, band_end, col_start, col_end
             )
             if df.empty or len(df) == 0:
@@ -926,6 +858,10 @@ def _detect_tables_in_grid(
             table_counter[safe] = table_counter.get(safe, 0) + 1
             table_id = f"{safe}_T{table_counter[safe]}"
 
+            # 多段ヘッダー整形後に集計行・列を除去
+            cleaned_df, agg_rows, agg_cols, agg_row_positions = remove_aggregates(df)
+            pre_agg_df = df if (agg_rows or agg_cols) else None
+
             detected.append(
                 DetectedTable(
                     table_id=table_id,
@@ -934,9 +870,14 @@ def _detect_tables_in_grid(
                     end_row=band_end,
                     start_col=col_start,
                     end_col=col_end,
-                    df=df,
+                    df=cleaned_df,
                     title=effective_title,
                     notes=reg.get("trailing_notes", []),
+                    raw_df=raw_df,
+                    pre_agg_df=pre_agg_df,
+                    agg_rows_removed=agg_rows,
+                    agg_cols_removed=agg_cols,
+                    agg_rows_removed_positions=agg_row_positions,
                 )
             )
 

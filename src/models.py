@@ -14,6 +14,11 @@ class DetectedTable:
     df: Optional[pd.DataFrame] = field(default=None, repr=False)
     title: Optional[str] = None  # テーブルの直上で検出されたセクションタイトル行
     notes: List[str] = field(default_factory=list)  # テーブル末尾に続く注釈・脚注行
+    raw_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 整形前 DataFrame（多段ヘッダー整形時のみ）
+    pre_agg_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 集計除去前 DataFrame
+    agg_rows_removed: List[dict] = field(default_factory=list)          # 除去した行のラベル値 [{col: val, ...}, ...]
+    agg_cols_removed: List[str] = field(default_factory=list)           # 除去した列名
+    agg_rows_removed_positions: List[int] = field(default_factory=list) # 除去した行の元 DataFrame 上の整数インデックス
 
     @property
     def row_count(self) -> int:
