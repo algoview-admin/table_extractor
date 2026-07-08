@@ -89,18 +89,7 @@ st.markdown(
         height: 0 !important;
         overflow: hidden !important;
     }
-    #MainMenu {
-        visibility: visible !important;
-        position: fixed !important;
-        top: 22px !important;
-        right: 10px !important;
-        z-index: 10001 !important;
-    }
-    /* ダークヘッダー上では常に白アイコン */
-    #MainMenu button { color: rgba(255,255,255,0.75) !important; }
-    #MainMenu button:hover { color: #ffffff !important; }
-    #MainMenu button svg { fill: rgba(255,255,255,0.75) !important; }
-    #MainMenu button:hover svg { fill: #ffffff !important; }
+    #MainMenu { display: none !important; visibility: hidden !important; }
     footer { visibility: hidden !important; }
 
     /* ── Remove default top padding (both old and new Streamlit selectors) ── */
@@ -281,13 +270,11 @@ st.markdown(
                 el.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;overflow:hidden!important;';
             });
         });
-        // Also hide toolbar buttons that are not inside #MainMenu
+        // Hide all toolbar buttons
         var toolbar = document.querySelector('[data-testid="stToolbar"]');
         if (toolbar) {
             toolbar.querySelectorAll('button').forEach(function (btn) {
-                if (!btn.closest('#MainMenu')) {
-                    btn.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;overflow:hidden!important;';
-                }
+                btn.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;overflow:hidden!important;';
             });
         }
     }
@@ -2373,20 +2360,22 @@ def _ir_column_signature(ir, tables_dict) -> frozenset:
     return frozenset(col_names)
 
 
-def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: dict) -> set:
+def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: dict) -> dict:
     """統合で追加する新カラムのうち、既存データから導出可能な冗長な軸を検出する。
 
     新カラム値に含まれる4桁年（YYYY）が、各テーブルの既存カラムのいずれかに
     すでに含まれている場合、そのカラムは冗長と判定する。
 
-    Returns: 冗長と判定した col_names のインデックス集合
+    Returns: {col_names_index: {triggering_col_name, ...}} — 冗長と判定した軸インデックスと
+             その判断理由となった既存カラム名のセット。in 演算子でインデックス確認可能。
     """
     import re as _r
-    redundant: set = set()
+    redundant: dict = {}
     for ci, col_name in enumerate(col_names):
         # 全テーブルについて「新カラム値の年が既存カラムに存在するか」を確認
         all_found = True
         any_table = False
+        trigger_cols: set = set()  # 判断理由となった既存カラム名
         for tid in ir.table_ids:
             t = tables_dict.get(tid)
             if t is None or t.effective_df is None:
@@ -2410,6 +2399,7 @@ def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: d
                 match_ratio = sum(1 for v in non_null if year in v) / len(non_null)
                 if match_ratio >= 0.5:
                     found_in_col = True
+                    trigger_cols.add(str(ec))
                     break
             if not found_in_col:
                 all_found = False
@@ -2449,7 +2439,7 @@ def _detect_redundant_axes(col_names: list, multi_vals: dict, ir, tables_dict: d
                     if not distinguishable:
                         break
             if distinguishable:
-                redundant.add(ci)
+                redundant[ci] = trigger_cols
     return redundant
 
 
@@ -3568,18 +3558,27 @@ def _build_final_tables():
                     final[_tid]["recommended"] = False
 
             _int_key = f"latent_auto_int_{_rec_id}"
+            _bft_reasoning = _auto_ir.reasoning
+            if _redundant_bft:
+                _bft_supp = []
+                for _bci, _btc in sorted(_redundant_bft.items()):
+                    if _bci < len(_col_names_bft):
+                        _btrig = "・".join(sorted(_btc)) if _btc else "既存列"
+                        _bft_supp.append(f"「{_col_names_bft[_bci]}」軸は既存の「{_btrig}」列から導出可能なため追加を省略しました")
+                if _bft_supp:
+                    _bft_reasoning = _bft_reasoning + "。" + "。".join(_bft_supp) + "。"
             final[_int_key] = {
                 "df": _merged_bft,
                 "display_name": _auto_ir.group_name,
                 "description": _auto_ir.description,
-                "reasoning": _auto_ir.reasoning,
+                "reasoning": _bft_reasoning,
                 "is_integrated": True,
                 "source_ids": _auto_ir.table_ids,
                 "recommended": True,
                 "granularity": "detail",
                 "is_minimum": True,
                 "is_master": False,
-                "new_col_names": _col_names_bft,
+                "new_col_names": [c for i, c in enumerate(_col_names_bft) if i not in _redundant_bft],
             }
 
             # auto-IRに対してもマスタを生成する（AI IRと同じロジック）
@@ -3656,11 +3655,20 @@ def _build_final_tables():
 
         src_ta = next((ta_by_id[tid] for tid in ir.table_ids if tid in ta_by_id), None)
         key = f"integrated_{ir.recommendation_id}"
+        _ir_reasoning = ir.reasoning
+        if redundant_axes:
+            _ir_supp = []
+            for _ici, _itc in sorted(redundant_axes.items()):
+                if _ici < len(col_names):
+                    _itrig = "・".join(sorted(_itc)) if _itc else "既存列"
+                    _ir_supp.append(f"「{col_names[_ici]}」軸は既存の「{_itrig}」列から導出可能なため追加を省略しました")
+            if _ir_supp:
+                _ir_reasoning = _ir_reasoning + "。" + "。".join(_ir_supp) + "。"
         final[key] = {
             "df": merged_df,
             "display_name": ir.group_name,
             "description": ir.description,
-            "reasoning": ir.reasoning,
+            "reasoning": _ir_reasoning,
             "is_integrated": True,
             "source_ids": ir.table_ids,
             "recommended": True,
@@ -3906,6 +3914,13 @@ def _render_integration_before_after(
     _ROW_PX = 35  # st.dataframe の1データ行のおよそのpx高さ
     _HDR_PX = 38  # ヘッダー行の高さ
 
+    # ── 冗長軸の検出（先頭で実行してソースカードのハイライトに利用）────────────
+    redundant_axes_info = _detect_redundant_axes(col_names, multi_vals, ir, tables_dict)
+    # 全軸の triggering col を集約（ソースカード共通ハイライト用）
+    _all_trigger_cols: set = set()
+    for _tc_set in redundant_axes_info.values():
+        _all_trigger_cols |= _tc_set
+
     # ── 軸ごとのユニーク値の順序を構築する ──────────────────────────────────
     axis_val_order: list = [[] for _ in col_names]
     for tid in ir.table_ids:
@@ -3946,8 +3961,18 @@ def _render_integration_before_after(
         )
         if t is not None and t.effective_df is not None and not t.effective_df.empty:
             n_rows = len(t.effective_df)
+            df_disp = t.effective_df.astype(str)
+            # 冗長軸の判断理由となった既存カラムを琥珀色でハイライト
+            valid_trig = [c for c in _all_trigger_cols if c in df_disp.columns]
+            if valid_trig:
+                def _hl_trig(row, _vtc=valid_trig):
+                    s = pd.Series("", index=row.index)
+                    for _c in _vtc:
+                        s[_c] = "background-color:#3d2e00;color:#ffd369;font-weight:600;"
+                    return s
+                df_disp = df_disp.style.apply(_hl_trig, axis=1)
             st.dataframe(
-                t.effective_df.astype(str),
+                df_disp,
                 use_container_width=True,
                 hide_index=True,
                 height=min(
@@ -4030,7 +4055,26 @@ def _render_integration_before_after(
         unsafe_allow_html=True,
     )
 
-    redundant_preview = _detect_redundant_axes(col_names, multi_vals, ir, tables_dict)
+    # redundant_axes_info は関数先頭で計算済み（ソースカードハイライトにも使用）
+    redundant_preview = redundant_axes_info
+
+    # 冗長軸が存在する場合は注釈ボックスを表示
+    if redundant_preview:
+        _suppressed_notes = []
+        for _ci, _tc_set in sorted(redundant_preview.items()):
+            if _ci < len(col_names):
+                _trig_str = "・".join(sorted(_tc_set)) if _tc_set else "既存列"
+                _suppressed_notes.append(
+                    f"「{col_names[_ci]}」軸は既存の「{_trig_str}」列から導出可能なため追加を省略しました"
+                )
+        if _suppressed_notes:
+            st.markdown(
+                '<div style="background:rgba(255,180,0,0.1);border-left:3px solid #ffd369;'
+                'border-radius:0 4px 4px 0;padding:7px 12px;margin:0 0 12px;'
+                'font-size:0.81rem;color:#ffd369;">'
+                + "ℹ️ " + "。".join(_suppressed_notes) + "。</div>",
+                unsafe_allow_html=True,
+            )
 
     frames = []
     for tid in ir.table_ids:
