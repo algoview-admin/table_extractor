@@ -60,8 +60,11 @@ def is_unit_row(row: List[Any]) -> bool:
     vocab_hits = sum(1 for v in vals if v.lower() in UNIT_VOCAB)
     if vocab_hits / len(vals) >= 0.5:
         return True
+    # 繰り返し率が高い場合の補助判定（「百万円」が複数列に並ぶケース等）。
+    # ただし語彙ヒットが 0 件の場合は「年初在庫額」「土地以外のもの」のような
+    # サブカラム名と区別できないため除外する。
     unique_ratio = len({v.lower() for v in vals}) / len(vals)
-    return unique_ratio <= 0.4 and all(len(v) <= 15 for v in vals)
+    return vocab_hits > 0 and unique_ratio <= 0.4 and all(len(v) <= 15 for v in vals)
 
 
 def detect_header_roles(rows: List[List[Any]]) -> Tuple[int, List[str]]:
@@ -131,7 +134,8 @@ def detect_header_roles(rows: List[List[Any]]) -> Tuple[int, List[str]]:
     first_has_dups = len(first_strs) != len(set(first_strs))
 
     # --- ステップ3: 連続するヘッダー行を検出 ---
-    _MAX_HEADER_ROWS = 8
+    # 日本語5段＋英語5段のような深いヘッダー（10行）に対応するため余裕をもたせる
+    _MAX_HEADER_ROWS = 12
     roles: List[str] = []
 
     for i, row in enumerate(remaining[:_MAX_HEADER_ROWS]):
