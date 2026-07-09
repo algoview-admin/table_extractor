@@ -11,20 +11,12 @@ from steps.step4_analyze import (
     _COL_PALETTES,
 )
 from src.models import AIAnalysisResult, DetectedTable, DerivedLatentTable, IntegrationRecommendation
-
-def _granularity_badge(info: dict) -> str:
-    if info["is_integrated"]:
-        return "<span class='step-badge badge-integrated'>🔀 統合</span>"
-    g = info.get("granularity", "unknown")
-    if info.get("is_master"):
-        return "<span class='step-badge badge-master'>📚 マスタ</span>"
-    if info.get("is_minimum"):
-        return "<span class='step-badge badge-detail'>⭐ 最小粒度</span>"
-    if g == "summary":
-        return "<span class='step-badge badge-summary'>📈 集計</span>"
-    if g == "detail":
-        return "<span class='step-badge badge-detail'>🔍 詳細</span>"
-    return "<span class='step-badge badge-ref'>📄 その他</span>"
+from src.step6_select import (
+    granularity_badge as _granularity_badge,
+    group_final_tables,
+    group_integrated_by_columns,
+    safe_table_filename,
+)
 
 
 
@@ -275,35 +267,15 @@ def step5():
             return _s5_ir_by_rec.get(k[len("integrated_") :])
         return None
 
+    integrated, min_tables, master_tables, other_rec, non_rec = group_final_tables(final)
+
     # --- 統合テーブル（列シグネチャでグループ化） ---
-    integrated = {k: v for k, v in final.items() if v["is_integrated"]}
     if integrated:
         st.markdown("### 🔀 統合テーブル")
-
-        def _integrated_col_sig(info: dict) -> frozenset:
-            df = info.get("df")
-            if df is not None:
-                return frozenset(df.columns)
-            return frozenset()
-
-        # 列シグネチャでグループ化: 代表を先頭に、類似はまとめて折りたたむ
-        int_groups: list = []
-        sig_to_int_group: dict = {}
-        for tid, info in integrated.items():
-            sig = _integrated_col_sig(info)
-            if sig not in sig_to_int_group:
-                group = [(tid, info)]
-                int_groups.append(group)
-                sig_to_int_group[sig] = group
-            else:
-                sig_to_int_group[sig].append((tid, info))
-
-        for group in int_groups:
+        for group in group_integrated_by_columns(integrated):
             rep_tid, rep_info = group[0]
             similar_int = group[1:]
-
             _table_card(rep_tid, rep_info)
-
             if similar_int:
                 with st.expander(
                     f"同様の統合テーブル 他 {len(similar_int)} 件",
@@ -313,40 +285,24 @@ def step5():
                         _table_card(tid, info)
 
     # --- 最小粒度テーブル ---
-    min_tables = {
-        k: v for k, v in final.items() if not v["is_integrated"] and v.get("is_minimum")
-    }
     if min_tables:
         st.markdown("### ⭐ 最小粒度データ")
         for tid, info in min_tables.items():
             _table_card(tid, info)
 
     # --- マスタテーブル ---
-    master_tables = {
-        k: v
-        for k, v in final.items()
-        if not v["is_integrated"] and not v.get("is_minimum") and v.get("is_master")
-    }
     if master_tables:
         st.markdown("### 📚 マスタテーブル")
         for tid, info in master_tables.items():
             _table_card(tid, info)
 
     # --- その他の推奨テーブル ---
-    shown = set(integrated) | set(min_tables) | set(master_tables)
-    other_rec = {
-        k: v
-        for k, v in final.items()
-        if k not in shown and v.get("recommended") and not v["is_integrated"]
-    }
     if other_rec:
         st.markdown("### 📊 その他の推奨テーブル")
         for tid, info in other_rec.items():
             _table_card(tid, info)
 
     # --- 非推奨テーブル（折りたたみ） ---
-    shown |= set(other_rec)
-    non_rec = {k: v for k, v in final.items() if k not in shown}
     if non_rec:
         with st.expander(
             f"📄 分析対象 非推奨テーブル（{len(non_rec)} 件）— 任意で選択可能"

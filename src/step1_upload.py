@@ -7,7 +7,7 @@ import openpyxl
 import pandas as pd
 
 from .models import DetectedTable
-from .step3_formatter import (
+from .step3_format import (
     detect_cross_table, detect_header_roles, fill_grouping_cols,
     merge_header_rows, remove_aggregates, stack_cross_table,
 )
@@ -957,7 +957,7 @@ def _propagate_sheet_title(detected: List[DetectedTable]) -> None:
 
 def _apply_cross_table_detection(tables: List[DetectedTable], filename: str) -> None:
     """テーブルリスト全体にクロス集計検出と縦持ち変換を適用する。"""
-    from .step3_formatter import _is_agg_label
+    from .step3_format import _is_agg_label
     for t in tables:
         if t.df is None or t.df.empty:
             continue

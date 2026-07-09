@@ -5,7 +5,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from steps.shared import _go_to, _load_project
-from src.step1_parser import parse_csv, parse_excel
+from src.step1_upload import parse_csv, parse_excel
 from src.models import DetectedTable
 
 def _check_api_config() -> tuple:

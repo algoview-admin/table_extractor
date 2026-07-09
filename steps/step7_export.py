@@ -1,6 +1,4 @@
-import io
 import re
-import zipfile
 from pathlib import Path
 from typing import Dict, List
 
@@ -10,6 +8,7 @@ import streamlit as st
 from steps.shared import _go_to, _reset
 from steps.step6_select import _granularity_badge
 from src.models import DetectedTable
+from src.step7_export import build_export_zip, df_to_csv_bytes, safe_filename
 
 def step6():
     st.header("📥 ステップ 7 : エクスポート")
@@ -26,31 +25,13 @@ def step6():
 
     st.success(f"✅ **{len(selected)} テーブル** のエクスポート準備が完了しました")
 
-    zip_buf = io.BytesIO()
-    export_files: Dict[str, bytes] = {}
-
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for tid, info in selected.items():
-            df: pd.DataFrame = info["df"]
-            safe_name = (
-                info["display_name"]
-                .replace("/", "_")
-                .replace("\\", "_")
-                .replace(" ", "_")
-            )
-            fname = f"{safe_name}.csv"
-
-            csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-            export_files[fname] = csv_bytes
-            zf.writestr(fname, csv_bytes)
-
-    zip_buf.seek(0)
+    zip_bytes, export_files = build_export_zip(selected)
 
     # 一括ダウンロード
     stem = Path(st.session_state.filename).stem
     st.download_button(
         "📦 全テーブルを ZIP でまとめてダウンロード",
-        data=zip_buf.getvalue(),
+        data=zip_bytes,
         file_name=f"{stem}_抽出テーブル.zip",
         mime="application/zip",
         use_container_width=True,
@@ -61,9 +42,7 @@ def step6():
 
     for tid, info in selected.items():
         df: pd.DataFrame = info["df"]
-        safe_name = (
-            info["display_name"].replace("/", "_").replace("\\", "_").replace(" ", "_")
-        )
+        safe_name = safe_filename(info["display_name"])
         fname = export_files.get(f"{safe_name}.csv", b"")
 
         with st.container(border=True):
@@ -86,12 +65,9 @@ def step6():
                     )
             with c_dl:
                 st.markdown("<br>", unsafe_allow_html=True)
-                csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode(
-                    "utf-8-sig"
-                )
                 st.download_button(
                     "⬇️ CSV",
-                    data=csv_bytes,
+                    data=df_to_csv_bytes(df),
                     file_name=f"{safe_name}.csv",
                     mime="text/csv",
                     key=f"dl_{tid}",

@@ -4,23 +4,9 @@ import pandas as pd
 import streamlit as st
 
 from steps.shared import _go_to
-from src.step1_parser import parse_csv, parse_excel
+from src.step1_upload import parse_csv, parse_excel
+from src.step2_detect import get_original_df, build_tree_text, group_tables_by_sheet
 from src.models import DetectedTable
-
-def _get_original_df(t: "DetectedTable") -> "Optional[pd.DataFrame]":
-    """ステップ2表示用: 整形処理適用前の生 DataFrame を返す。
-
-    優先順位: 多段ヘッダー統合前 → ffill 前 → 集計除去前 → 最終 df
-    """
-    for candidate in [
-        t.raw_df,
-        getattr(t, "pre_fill_df", None),
-        t.pre_agg_df,
-        t.df,
-    ]:
-        if candidate is not None and not candidate.empty:
-            return candidate
-    return None
 
 
 def step2():
@@ -57,27 +43,10 @@ def step2():
         f"✅ **{len(sheets)} シート** から **{len(tables)} テーブル** を検出しました"
     )
 
-    # シートでグループ化
-    by_sheet: Dict[str, List[DetectedTable]] = {}
-    for t in tables:
-        by_sheet.setdefault(t.sheet_name, []).append(t)
+    by_sheet = group_tables_by_sheet(tables)
 
     # ── ツリービュー ───────────────────────────────────────────────────────
-    tree_lines = [f"📁 {st.session_state.filename}"]
-    for i, sheet in enumerate(sheets):
-        sh_tables = by_sheet.get(sheet, [])
-        cnt_str = f"{len(sh_tables)} テーブル" if sh_tables else "テーブルなし"
-        is_last_sh = i == len(sheets) - 1
-        sh_pfx = "└── " if is_last_sh else "├── "
-        tree_lines.append(f"{sh_pfx}📋 {sheet}  ({cnt_str})")
-        ch_pfx = "    " if is_last_sh else "│   "
-        for j, t in enumerate(sh_tables):
-            is_last_t = j == len(sh_tables) - 1
-            t_pfx = ch_pfx + ("└── " if is_last_t else "├── ")
-            dims = f"{t.row_count}行×{t.col_count}列"
-            title_part = f"  [{t.title}]" if t.title else ""
-            tree_lines.append(f"{t_pfx}📊 {t.table_id}  {dims}{title_part}")
-    st.code("\n".join(tree_lines), language=None)
+    st.code(build_tree_text(st.session_state.filename, sheets, by_sheet), language=None)
 
     # ── シートごとのexpander（デフォルトで折りたたみ） ─────────────────────
     for sheet in sheets:
@@ -94,7 +63,7 @@ def step2():
                     f"**`{t.table_id}`**{title_str}  —  {t.row_count} 行 × {t.col_count} 列"
                     f"  （行 {t.start_row}〜{t.end_row}, 列 {t.start_col}〜{t.end_col}）"
                 )
-                orig = _get_original_df(t)
+                orig = get_original_df(t)
                 if orig is not None:
                     st.dataframe(
                         orig.astype(str),

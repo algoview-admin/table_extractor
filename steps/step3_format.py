@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 
 from steps.shared import _go_to, _inject_splitter_js, _splitter_marker
 from src.models import DetectedTable
-from src.step3_formatter import UNIT_VOCAB, _is_agg_label
+from src.step3_format import UNIT_VOCAB, _is_agg_label
 
 _TH_STYLE = (
     "position:sticky;top:0;z-index:2;"

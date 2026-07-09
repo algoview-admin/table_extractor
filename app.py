@@ -13,11 +13,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
-from src.step4_analyzer import analyze_tables
-from src.step1_parser import parse_csv, parse_excel
+from src.step4_analyze import analyze_tables
+from src.step1_upload import parse_csv, parse_excel
 from src.models import AIAnalysisResult, DetectedTable
-from src.step3_formatter import UNIT_VOCAB, _is_agg_label
-from src.step5_latent_detector import (
+from src.step3_format import UNIT_VOCAB, _is_agg_label
+from src.step5_generate import (
     find_latent_tables,
     derive_latent_tables,
     LatentTableGroup,

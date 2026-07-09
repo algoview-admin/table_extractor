@@ -14,7 +14,7 @@ from steps.step4_analyze import (
     _collect_unique_master_specs,
     _group_irs_by_similarity,
 )
-from src.step5_latent_detector import find_latent_tables, derive_latent_tables, group_latent_proposals
+from src.step5_generate import find_latent_tables, derive_latent_tables, group_latent_proposals
 from src.models import AIAnalysisResult, DetectedTable, DerivedLatentTable
 
 def step4():
