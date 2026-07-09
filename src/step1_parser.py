@@ -957,7 +957,7 @@ def _propagate_sheet_title(detected: List[DetectedTable]) -> None:
 
 def _apply_cross_table_detection(tables: List[DetectedTable], filename: str) -> None:
     """テーブルリスト全体にクロス集計検出と縦持ち変換を適用する。"""
-    from .table_formatter import _is_agg_label
+    from .step3_formatter import _is_agg_label
     for t in tables:
         if t.df is None or t.df.empty:
             continue
