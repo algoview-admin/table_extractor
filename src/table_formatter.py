@@ -398,10 +398,18 @@ def _is_redundant_agg_row(
         )
 
     # 同じコンテキスト値を持つ他の行を検索
+    def _isnull(v: Any) -> bool:
+        if v is None:
+            return True
+        try:
+            return bool(pd.isna(v))
+        except (TypeError, ValueError):
+            return False
+
     mask = pd.Series(True, index=df.index)
     for cc in context_cols:
         cv = df.at[idx, cc]
-        if cv is None or (isinstance(cv, float) and pd.isna(cv)):
+        if _isnull(cv):
             mask &= df[cc].isna()
         else:
             mask &= df[cc] == cv
@@ -413,31 +421,27 @@ def _is_redundant_agg_row(
         return any(
             not _is_agg_label(str(v))
             for v in matching_vals
-            if v is not None and not (isinstance(v, float) and pd.isna(v))
+            if not _isnull(v)
         )
 
     # コンテキスト一致行が見つからない場合。
     # 2通りの状況がある:
     #
-    # A) コンテキスト列に None が含まれる → fill_grouping_cols が未適用・不完全な可能性。
+    # A) コンテキスト列に None/pd.NA が含まれる → fill_grouping_cols が未適用・不完全な可能性。
     #    集計行のグルーピング列が空白のまま残っているため、一致行が見つからなかった。
     #    → 列全体に非集計値があれば冗長と判定（保守的に除去）。
     #
-    # B) コンテキスト列がすべて非 None（完全なコンテキスト）→ このコンテキストに
+    # B) コンテキスト列がすべて非 null（完全なコンテキスト）→ このコンテキストに
     #    サブレベルのデータが存在しない（例: 2015年は全国計のみで都道府県別データなし）。
     #    他の年のデータ（北海道, 青森など）を誤って「sibling」と見なすべきではない。
     #    → 冗長ではない = 除去しない。
-    has_null_ctx = any(
-        df.at[idx, cc] is None
-        or (isinstance(df.at[idx, cc], float) and pd.isna(df.at[idx, cc]))
-        for cc in context_cols
-    )
+    has_null_ctx = any(_isnull(df.at[idx, cc]) for cc in context_cols)
     if not has_null_ctx:
         return False
     return any(
         not _is_agg_label(str(v))
-        for v in df[col].dropna()
-        if v is not None and not (isinstance(v, float) and pd.isna(v))
+        for v in df[col]
+        if not _isnull(v)
     )
 
 
@@ -464,22 +468,38 @@ def remove_aggregates(
         col for col in df.columns if _is_agg_label(str(col))
     ]
 
-    # ── ラベル列の特定（dtype == object の列）──────────────────────
+    # ── ラベル列の特定（文字列型の列）────────────────────────────
     """
-    'X'（秘匿値）などの混入で dtype==object になっているが実質数値の列を除外する。
+    pandas 2.x では文字列列は dtype=object、pandas 3.x では dtype=StringDtype になる。
+    'X'（秘匿値）などの混入で文字列型になっているが実質数値の列を除外する。
     int/float オブジェクトが過半数の列はデータ列として label_cols から除く。
+    pd.NA（pandas 3.x nullable NA）も null として扱う。
     """
+    def _is_text_dtype(series: Any) -> bool:
+        """pandas 2.x (object) と pandas 3.x (StringDtype) の両方を文字列列として認識する。"""
+        return str(series.dtype) in ('object', 'string')
+
+    def _is_null_scalar(v: Any) -> bool:
+        """None / np.nan / pd.NA など全ての null を安全に判定する。"""
+        if v is None:
+            return True
+        try:
+            r = pd.isna(v)
+            return bool(r)
+        except (TypeError, ValueError):
+            return False
+
     def _is_numeric_values_col(series: Any) -> bool:
-        non_null = [v for v in series if v is not None and not (isinstance(v, float) and pd.isna(v))]
+        non_null = [v for v in series if not _is_null_scalar(v)]
         if not non_null:
             return False
-        n_num = sum(1 for v in non_null if isinstance(v, (int, float)) and not (isinstance(v, float) and pd.isna(v)))
+        n_num = sum(1 for v in non_null if isinstance(v, (int, float)))
         return n_num / len(non_null) >= 0.5
 
     label_cols: List[str] = [
         col for col in df.columns
         if col not in removed_cols
-        and df[col].dtype == object
+        and _is_text_dtype(df[col])
         and not _is_numeric_values_col(df[col])
     ]
 
@@ -509,7 +529,7 @@ def remove_aggregates(
         col_has_nonag[_lc] = any(
             not _is_agg_label(str(v))
             for v in df[_lc]
-            if v is not None and not (isinstance(v, float) and pd.isna(v))
+            if not _is_null_scalar(v)
         )
 
     # 完全一致する集計キーワードのセット（正規化・小文字）
@@ -518,9 +538,7 @@ def remove_aggregates(
     for idx in df.index:
         for col in label_cols:
             val = df.at[idx, col]
-            if val is None:
-                continue
-            if isinstance(val, float) and pd.isna(val):
+            if _is_null_scalar(val):
                 continue
             val_norm = _normalize_label(str(val))
             if not val_norm:
@@ -594,7 +612,8 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
     for col in df.columns:
         series = df[col]
 
-        if series.dtype != object:
+        # pandas 2.x は object, pandas 3.x は string (StringDtype) として文字列列が来る
+        if str(series.dtype) not in ('object', 'string'):
             continue
 
         # None/NaN を持たない列はスキップ
@@ -622,8 +641,11 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
         if original_null.any():
             for _null_idx in df.index[original_null]:
                 _fv = filled.at[_null_idx]
-                if _fv is not None and not (isinstance(_fv, float) and pd.isna(_fv)):
-                    if _is_agg_label(str(_fv)):
+                _fv_null = _fv is None or (isinstance(_fv, float) and pd.isna(_fv)) or (pd.NA is not None and _fv is pd.NA)
+                if not _fv_null and _is_agg_label(str(_fv)):
+                    try:
+                        filled.at[_null_idx] = pd.NA  # StringDtype では None より pd.NA が安全
+                    except Exception:
                         filled.at[_null_idx] = None
 
         # ffill 後のユニーク比率チェック
