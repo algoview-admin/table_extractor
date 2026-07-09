@@ -13,7 +13,7 @@ from .models import (
     SheetClassification,
     TableAnalysisResult,
 )
-from .aggregation_detector import (
+from .step4_aggregation import (
     detect_sheet_levels,
     detect_sum_relations,
     format_relation_facts,

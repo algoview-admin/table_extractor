@@ -7,7 +7,7 @@ import openpyxl
 import pandas as pd
 
 from .models import DetectedTable
-from .table_formatter import (
+from .step3_formatter import (
     detect_cross_table, detect_header_roles, fill_grouping_cols,
     merge_header_rows, remove_aggregates, stack_cross_table,
 )
