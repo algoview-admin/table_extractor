@@ -1,0 +1,26 @@
+# 注記分類キーワード
+# _detect_note_type (step5) で注記テキストを aggregation / exclusion / reference / general
+# に分類するために使用する。
+# テキストに含まれるかどうかで判定（部分一致）。
+
+aggregation:
+  - 合計
+  - 合算
+  - 総計
+  - 小計
+  - 集計
+  - の計
+  - sum
+
+exclusion:
+  - 除く
+  - 除いた
+  - 除外
+  - を除
+
+reference:
+  - 参照
+  - 参考
+  - を見る
+  - については
+  - に記載

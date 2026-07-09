@@ -4,9 +4,9 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
-from steps.shared import _go_to, _load_project
-from src.step1_upload import parse_csv, parse_excel
+from streamlit_ui.shared import _go_to, _load_project
 from src.models import DetectedTable
+
 
 def _check_api_config() -> tuple:
     """環境変数からAPI認証情報を検証する。
@@ -37,7 +37,7 @@ def _check_api_config() -> tuple:
         key = os.getenv("OPENAI_API_KEY", "").strip()
         if not key:
             return False, "", "OPENAI_API_KEY が未設定です。", "OPENAI_API_KEY=sk-..."
-        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        model = os.getenv("OPENAI_MODEL", "gpt-5.4")
         return True, f"OpenAI / {model}", "", ""
 
 
@@ -242,4 +242,3 @@ def step1():
                     st.rerun()
             else:
                 st.error(msg)
-

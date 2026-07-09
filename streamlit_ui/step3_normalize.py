@@ -1,13 +1,14 @@
 import html as _html
+import json
 from typing import Dict, List, Optional, Set
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from steps.shared import _go_to, _inject_splitter_js, _splitter_marker
+from streamlit_ui.shared import _go_to, _inject_splitter_js, _splitter_marker
 from src.models import DetectedTable
-from src.step3_format import UNIT_VOCAB, _is_agg_label
+from src.step3_normalize import UNIT_VOCAB, _is_agg_label
 
 _TH_STYLE = (
     "position:sticky;top:0;z-index:2;"
@@ -585,6 +586,54 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
+_AGG_META_PREVIEW_N = 3  # 画面表示は重量化を避けるため代表件数のみに絞る（全件はエクスポート時に出力）
+
+
+def _agg_meta_details_html(t: "DetectedTable") -> str:
+    """集計除去メタデータ（監査用 JSON）のプレビューを折りたたみ HTML として返す。空なら空文字列。
+
+    件数が多いテーブルでも画面が重くならないよう、行・列それぞれ代表
+    _AGG_META_PREVIEW_N 件のみを表示する（全件はエクスポート時の JSON に出力される）。
+
+    st.expander は入れ子にできないため（呼び出し元が既に expander 内にいる）、
+    Streamlit ウィジェット・HTML 文字列の両方の描画箇所で <details> ベースの
+    この HTML を共通利用する。
+    """
+    row_meta = getattr(t, "agg_removed_row_metadata", [])
+    col_meta = getattr(t, "agg_removed_col_metadata", [])
+    n_row, n_col = len(row_meta), len(col_meta)
+    if not n_row and not n_col:
+        return ""
+
+    preview_json = json.dumps(
+        {
+            "aggregate_rows_removed": row_meta[:_AGG_META_PREVIEW_N],
+            "aggregate_columns_removed": col_meta[:_AGG_META_PREVIEW_N],
+        },
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+    note = (
+        f"<p style='font-size:0.78em;opacity:0.7;margin:0 0 0.4em'>"
+        f"代表{_AGG_META_PREVIEW_N}件のプレビューです（行 {n_row} 件中 / 列 {n_col} 件中）。"
+        f"全件はエクスポート時に JSON として出力されます。</p>"
+    )
+    body = (
+        note
+        + f"<pre style='white-space:pre-wrap;font-size:0.78em;overflow-x:auto;margin:0'>"
+        + f"{_html.escape(preview_json)}</pre>"
+    )
+
+    n_total = n_row + n_col
+    return _make_details_html(
+        f"📋 メタデータストア（除去した集計行・集計列: 計{n_total}件）",
+        body,
+        open=False,
+        level=3,
+    )
+
+
 def _render_agg_removal_body(t: "DetectedTable") -> None:
     """集計除去の詳細（Streamlit ウィジェット版、expander なし）。"""
     pre = t.pre_agg_df
@@ -658,6 +707,13 @@ def _render_agg_removal_body(t: "DetectedTable") -> None:
             "</table></div>",
             unsafe_allow_html=True,
         )
+
+    # メタデータストア（監査用 JSON）
+    # 呼び出し元が既に st.expander 内にいるため、入れ子不可の st.expander ではなく
+    # <details> ベースの HTML（他の「その他の同様処理」箇所と同じ方式）で表示する。
+    meta_details_html = _agg_meta_details_html(t)
+    if meta_details_html:
+        st.markdown(_MHD_CSS + meta_details_html, unsafe_allow_html=True)
 
     # before / after プレビュー（代表テーブルは全件スクロール）
     st.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
@@ -759,6 +815,8 @@ def _render_agg_removal_body_html(t: "DetectedTable") -> str:
             "</table></div>"
         )
 
+    meta_html = _agg_meta_details_html(t)
+
     PREVIEW = 10
     removed_positions = set(getattr(t, "agg_rows_removed_positions", []))
     preview_removed = {p for p in removed_positions if p < PREVIEW}
@@ -786,7 +844,7 @@ def _render_agg_removal_body_html(t: "DetectedTable") -> str:
 
     return (
         f"<p style='font-size:0.82em;opacity:0.7;margin:0 0 0.4em'>{_html.escape(caption)}</p>"
-        f"{cols_html}{rows_html_block}{preview_html}"
+        f"{cols_html}{rows_html_block}{meta_html}{preview_html}"
     )
 
 
@@ -828,14 +886,14 @@ def step_format():
             rest = formatted[1:] if len(formatted) > 1 else None
             _render_header_merge_detail(formatted[0], rest=rest)
 
-        # ── ② グルーピング列の前方補完（視覚結合セル対応） ─────────────────
+        # ── ② グルーピング列の前方補完機能 ─────────────────
         if fill_applied:
             if not first_section:
                 st.divider()
             first_section = False
             total_filled = sum(len(getattr(t, "filled_cols", [])) for t in fill_applied)
             st.subheader(
-                f"↕️ グルーピング列の空白補完機能（対象：{len(fill_applied)}テーブル）"
+                f"↕️ グルーピング列の前方補完機能（対象：{len(fill_applied)}テーブル）"
             )
             st.success(
                 f"**{len(fill_applied)}** テーブルのグルーピング列の空白を上の値で埋めました  "
@@ -967,5 +1025,3 @@ def step_format():
             on_click=_go_to,
             args=(4,),
         )
-
-

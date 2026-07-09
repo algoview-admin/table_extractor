@@ -4,8 +4,8 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from steps.shared import _go_to, _inject_splitter_js, _splitter_marker, _build_and_go_step6
-from steps.step4_analyze import (
+from streamlit_ui.shared import _go_to, _inject_splitter_js, _splitter_marker, _build_and_go_step6
+from streamlit_ui.step4_analyze import (
     _render_integration_before_after,
     _render_derived_before_after,
     _COL_PALETTES,

@@ -5,9 +5,9 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from steps.shared import _go_to, _inject_splitter_js, _splitter_marker, _build_and_go_step6
+from streamlit_ui.shared import _go_to, _inject_splitter_js, _splitter_marker, _build_and_go_step6
 from src.step4_analyze import analyze_tables
-from src.step5_generate import (
+from src.step5_suggest import (
     find_latent_tables, derive_latent_tables, LatentTableGroup, group_latent_proposals,
 )
 from src.models import (

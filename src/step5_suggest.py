@@ -1,26 +1,16 @@
 """
-テーブル外の注記・注釈からの潜在テーブル検出。
+ステップ5 新規テーブル提案モジュール。
 
-検出済みテーブルに隣接する注記・注釈は、ファイル内の他の場所に存在するが
-まだ取得されていないテーブルを示唆することが多い — パースされなかったセクションにある場合や、
-単一セッションの表示範囲外にある場合などが該当する。
-
-このモジュールは、末尾の注記から「エンティティ参照」（潜在的なテーブル名）を抽出し、
-検出済みテーブルリストと照合して、以下の条件を満たすすべてのケースに対して
-LatentTableProposal を返す：
-  - 参照エンティティの少なくとも1件が検出済みテーブルに一致する（関連性の確認）
-  - 参照エンティティの少なくとも1件が一致しない（潜在テーブル）
-
-注記タイプの対応（ルールベース、API 不要）：
-  1. 集計       : "A、B、Cの合計"  →  C が欠損している可能性あり
-  2. 列挙       : "以下4種: A・B・C・D"  →  D が欠損している可能性あり
-  3. 除外       : "AとBを除いた値"  →  A / B が別テーブルの可能性あり
-  4. 参照       : "「A」および「B」を参照"  →  A / B がテーブルの可能性あり
-  5. 並列リスト : 一部の項目がテーブルに一致する、「、」区切りのリスト
-
-上記パターンに当てはまらない複雑な自然言語の注記については、
-呼び出し元が LLM に渡すことも可能（ここでは実装しない；余分なレイテンシを避けるため
-純粋なルールベースを維持）。
+処理概要: テーブル関係分析（step4）の結果を受けて、全ての新規テーブル提案を集約する出口。
+          以下の3種類の提案を扱う：
+            1. 統合テーブル提案  : step4 の AIAnalysisResult.integration_recommendations を受け取る
+            2. 潜在テーブル提案  : 注記・注釈からルールベースで未取得テーブルを示唆する
+            3. 導出テーブル提案  : 親テーブル − 子テーブルの数値差分で算出可能なテーブルを導出する
+          2・3 は API 呼び出しなし。
+入力    : AIAnalysisResult（step4_analyze の出力）、List[DetectedTable]（step3_normalize 適用済み）
+出力    : List[LatentTableProposal]（注記から示唆される潜在テーブル候補）
+          List[DerivedLatentTable]（数値差分で導出した潜在テーブル）
+          ※ integration_recommendations は AIAnalysisResult から読み取って UI に提示する
 """
 
 import difflib
@@ -30,6 +20,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from .keywords import NOTE_AGG_KEYWORDS, NOTE_EXCL_KEYWORDS, NOTE_REF_KEYWORDS
 from .models import DetectedTable, DerivedLatentTable
 
 
@@ -78,25 +69,19 @@ class LatentTableGroup:
 _NOTE_PREFIX_RE = re.compile(r"^[※＊\*注）注\)（注\(注意＜<]+\s*")
 _SPLIT_RE = re.compile(r"[、，,・／/＋+及びおよびとや]+")
 
-# 集計・合計の関係を示すキーワード
-_AGG_KEYWORDS = ("合計", "合算", "総計", "小計", "集計", "の計", "sum")
-# 分割前に除去する集計系の末尾表現
+# 分割前に除去する集計系の末尾表現（辞書ではなく構造的な正規表現のためコードに残す）
 _AGG_SUFFIX_RE = re.compile(
     r"[のをにおける]*(合計|合算|総計|小計|集計|計)\s*$", re.IGNORECASE
 )
-# 除外の関係を示すキーワード
-_EXCL_KEYWORDS = ("除く", "除いた", "除外", "を除")
-# 参照・クロスリファレンスの関係を示すキーワード
-_REF_KEYWORDS = ("参照", "参考", "を見る", "については", "に記載")
 
 
 def _detect_note_type(text: str) -> str:
     """注記の意味タイプを分類する（表示・フィルタリング用）。"""
-    if any(k in text for k in _AGG_KEYWORDS):
+    if any(k in text for k in NOTE_AGG_KEYWORDS):
         return "aggregation"
-    if any(k in text for k in _EXCL_KEYWORDS):
+    if any(k in text for k in NOTE_EXCL_KEYWORDS):
         return "exclusion"
-    if any(k in text for k in _REF_KEYWORDS):
+    if any(k in text for k in NOTE_REF_KEYWORDS):
         return "reference"
     return "general"
 

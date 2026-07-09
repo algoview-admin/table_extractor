@@ -1,0 +1,85 @@
+# 既知単位語彙
+# _is_unit_row (step3) で使用する。
+# 値はすべて小文字で比較されるため、英語エントリは小文字で記載する。
+# 追加・削除はこのファイルのみ編集すれば全処理に反映される。
+
+# ── 日本語単位 ──────────────────────────────────────────────────────────────
+- 人
+- 名
+- 千人
+- 万人
+- 円
+- 千円
+- 万円
+- 百万円
+- 億円
+- 兆円
+- "%"
+- ％
+- ha
+- ㎡
+- m²
+- km²
+- m³
+- m
+- km
+- cm
+- mm
+- t
+- kg
+- g
+- トン
+- kl
+- l
+- 戸
+- 棟
+- 件
+- 社
+- 箇所
+- か所
+- ヶ所
+- 店
+- 台
+- 基
+- 千
+- 百万
+- 億
+- 万
+- kw
+- kwh
+- mw
+
+# ── 英語単位（小文字） ──────────────────────────────────────────────────────
+- persons
+- person
+- yen
+- mil. yen
+- thou. yen
+- billion yen
+- million yen
+- 1,000 yen
+- percent
+- ratio
+- rate
+- index
+- t
+- ton
+- tons
+- kg
+- g
+- kl
+- number
+- numbers
+- cases
+- units
+- households
+- establishments
+- workers
+- mil.
+- thou.
+- million
+- billion
+- thousand
+- kw
+- kwh
+- mw

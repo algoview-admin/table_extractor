@@ -1,0 +1,980 @@
+<title>step2_detect — 処理フロー</title>
+<style>
+/* ── ライトパレット（常時） ─────────────────────────────────────────── */
+:root {
+  --bg:       #F5F7FF;
+  --surface:  #FFFFFF;
+  --sur2:     #F8FAFF;
+  --sur3:     #EEF2FF;
+
+  --tx1: #1A1D3C;
+  --tx2: #4F5578;
+  --tx3: #9BA3C0;
+
+  --bd:  #DDE3F5;
+  --bd2: #C9D2EE;
+
+  --sh-sm: 0 1px 4px rgba(30,40,100,.07);
+  --sh:    0 2px 10px rgba(30,40,100,.09), 0 1px 3px rgba(30,40,100,.05);
+
+  /* Stage accent — S1 sky, S2 violet, S3 emerald, S4 amber */
+  --s1:#0284C7; --s1-bg:#EFF9FF; --s1-lt:#BAE6FD;
+  --s2:#6D28D9; --s2-bg:#F5F3FF; --s2-lt:#DDD6FE;
+  --s3:#059669; --s3-bg:#ECFDF5; --s3-lt:#A7F3D0;
+  --s4:#C2410C; --s4-bg:#FFF7ED; --s4-lt:#FED7AA;
+
+  --fc-p: #475569; --fc-c: #B45309; --fc-r: #059669;
+  --fc-ln: #CBD5E1;
+
+  --mono: 'Cascadia Code','SF Mono','Fira Code',Consolas,monospace;
+  --r: 10px; --rsm: 5px;
+}
+
+/* optional dark override via viewer toggle only */
+:root[data-theme="dark"] {
+  --bg:#0F172A; --surface:#1E293B; --sur2:#162032; --sur3:#0C1F40;
+  --tx1:#F1F5F9; --tx2:#94A3B8; --tx3:#475569;
+  --bd:#2E4060; --bd2:#3E5272;
+  --sh-sm:0 1px 4px rgba(0,0,0,.25); --sh:0 2px 10px rgba(0,0,0,.3);
+  --s1:#38BDF8; --s1-bg:#042F2E; --s1-lt:#0C4A6E;
+  --s2:#A78BFA; --s2-bg:#1A0F3A; --s2-lt:#2E1B5E;
+  --s3:#34D399; --s3-bg:#042F2E; --s3-lt:#064E3B;
+  --s4:#FB923C; --s4-bg:#1C0A00; --s4-lt:#431407;
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--bg);color:var(--tx1);
+  font-family:system-ui,-apple-system,'Segoe UI',Helvetica,sans-serif;
+  font-size:13px;line-height:1.6;display:flex;flex-direction:column;
+}
+
+/* ── Topbar ── */
+.topbar{
+  flex-shrink:0;display:flex;align-items:center;gap:.6rem;
+  padding:.5rem 1.25rem;background:var(--surface);
+  border-bottom:1.5px solid var(--bd);box-shadow:var(--sh-sm);
+}
+.tb-mod{font-family:var(--mono);font-size:11px;color:var(--tx3)}
+.tb-sep{color:var(--bd2);font-size:12px}
+.tb-title{font-size:13.5px;font-weight:700;color:var(--tx1)}
+.tb-hint{margin-left:auto;font-size:11px;color:var(--tx3);font-style:italic}
+
+/* ── Root layout ── */
+#app{flex:1;display:flex;min-height:0;overflow:hidden}
+
+/* ── Left wrap (stage overview) ── */
+#left-wrap{flex:1;overflow-y:auto}
+#left-wrap::-webkit-scrollbar{width:4px}
+#left-wrap::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+#left-inner{max-width:680px;margin:0 auto;padding:1.5rem 2rem 2.5rem}
+#app.s-split #left-wrap{flex:none}
+#app.s-split #left-inner{max-width:none;margin:0;padding:1rem 1.1rem 2rem}
+
+/* ── Mid wrap (stage function flow) ── */
+#mid-wrap{
+  display:none;overflow:auto;
+  background:var(--sur2);border-left:1.5px solid var(--bd);
+}
+#mid-wrap::-webkit-scrollbar{width:4px}
+#mid-wrap::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+#app.s-split #mid-wrap{display:block;flex:1;min-width:260px}
+#mid-inner{padding:1.25rem 1.25rem 2rem}
+
+/* ── Drag handles ── */
+.dvd{
+  display:none;width:5px;flex-shrink:0;cursor:col-resize;
+  background:var(--bd);position:relative;transition:background .15s;
+}
+.dvd::after{
+  content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:32px;border-radius:2px;background:var(--bd2);
+}
+.dvd:hover,.dvd.drag{background:var(--sc,var(--s1))}
+.dvd:hover::after,.dvd.drag::after{background:var(--sc,var(--s1))}
+#app.s-split #dvd1{display:block}
+
+/* ── IO Banner ── */
+.io-bar{
+  display:flex;border:1.5px solid var(--bd);border-radius:var(--r);
+  overflow:hidden;background:var(--surface);margin-bottom:1.25rem;
+  box-shadow:var(--sh-sm);
+}
+.io-cell{flex:1;padding:.65rem 1rem}
+.io-cell+.io-cell{border-left:1.5px solid var(--bd)}
+.io-lbl{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--sc,var(--s1));margin-bottom:.2rem;
+}
+.io-val{font-family:var(--mono);font-size:11.5px;color:var(--tx1);font-weight:600}
+.io-sub{font-size:11px;color:var(--tx3);margin-top:.1rem}
+
+/* ── Stage card ── */
+.stage-card{
+  background:var(--surface);border:2px solid var(--bd);
+  border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm);
+  cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .12s;
+}
+.stage-card:hover{
+  border-color:var(--sc);transform:translateY(-1px);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 10%,transparent),var(--sh);
+}
+.stage-card.active{
+  border-color:var(--sc);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 14%,transparent),var(--sh);
+  background:color-mix(in srgb,var(--sc) 3%,var(--surface));
+}
+.stage-hd{
+  display:flex;align-items:center;gap:.55rem;
+  padding:.5rem .9rem;background:var(--sc-bg);border-bottom:1.5px solid var(--bd);
+}
+.stage-chip{
+  font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--sc);background:var(--surface);border:1.5px solid var(--sc);
+  border-radius:4px;padding:2px 7px;flex-shrink:0;
+}
+.stage-name{font-size:12.5px;font-weight:700;color:var(--sc)}
+.stage-body{padding:.7rem 1rem .9rem}
+.stage-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.55rem}
+.fn-pills{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.6rem}
+.pill{
+  font-family:var(--mono);font-size:11px;padding:.18rem .5rem;
+  border-radius:4px;border:1.5px solid var(--bd);
+  background:var(--sur2);color:var(--tx2);white-space:nowrap;
+}
+.pill.pub{
+  border-color:color-mix(in srgb,var(--sc) 35%,transparent);
+  background:color-mix(in srgb,var(--sc) 8%,transparent);
+  color:var(--sc);
+}
+.detail-rows{
+  border-top:1px solid var(--bd);padding:.5rem 0 .2rem;
+  display:flex;flex-direction:column;gap:.3rem;
+}
+.dr{display:grid;grid-template-columns:auto 1fr;gap:.4rem .8rem;align-items:baseline}
+.dk{font-size:10.5px;font-weight:700;color:var(--tx3);white-space:nowrap}
+.dv{font-size:12px;color:var(--tx2);line-height:1.45}
+
+/* toggle hint on active card */
+.stage-card.active .stage-hd::after{
+  content:'クリックで戻る';margin-left:auto;font-size:10px;
+  color:var(--sc);opacity:.7;
+}
+
+/* ── Arrow between cards ── */
+.arr{display:flex;flex-direction:column;align-items:center;padding:.3rem 0}
+.arr-line{width:1.5px;height:14px;background:var(--bd2)}
+.arr-head{
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-top:7px solid var(--bd2);
+}
+
+/* ── Click hint ── */
+.click-hint{margin-top:1rem;text-align:center;font-size:11.5px;color:var(--tx3)}
+
+/* ── Right: stage flow ── */
+.rf-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:.8rem}
+.rf-close{
+  width:28px;height:28px;border-radius:6px;border:1.5px solid var(--bd);
+  background:var(--surface);color:var(--tx3);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+  transition:background .13s,color .13s,border-color .13s;flex-shrink:0;
+}
+.rf-close:hover{background:var(--bd);color:var(--tx1);border-color:var(--bd2)}
+.sf-tag{font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--sc);margin-bottom:.3rem}
+.sf-title{font-size:15.5px;font-weight:800;color:var(--tx1);letter-spacing:-.015em;margin-bottom:.3rem}
+.sf-overview{font-size:12.5px;color:var(--tx2);line-height:1.65;margin-bottom:1rem}
+
+.sec-label{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--tx3);margin-bottom:.65rem;display:flex;align-items:center;gap:.5rem;
+}
+.sec-label::after{content:'';flex:1;height:1px;background:var(--bd)}
+
+/* ── Function flow box ── */
+.fn-box{
+  background:var(--surface);border:1.5px solid var(--bd);border-radius:var(--rsm);
+  padding:.65rem .9rem;cursor:pointer;margin-bottom:.5rem;
+  transition:border-color .13s,box-shadow .13s;
+}
+.fn-box:hover{
+  border-color:var(--sc);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 10%,transparent);
+}
+.fn-box.fx-active{
+  border-color:var(--sc);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 15%,transparent);
+  background:color-mix(in srgb,var(--sc) 4%,var(--surface));
+}
+.fn-box.fx-active > .fn-bh::after{
+  content:'▲ 閉じる';margin-left:auto;font-size:9.5px;font-weight:700;
+  color:var(--sc);opacity:.75;
+}
+.fn-bh{display:flex;align-items:center;gap:.45rem;margin-bottom:.3rem}
+.fn-nm{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--tx1)}
+.fn-box:hover .fn-nm,.fn-box.fx-active .fn-nm{color:var(--sc)}
+.fn-badge{
+  font-size:9px;font-weight:700;letter-spacing:.03em;
+  padding:1px 6px;border-radius:3px;flex-shrink:0;
+}
+.fb-pub{background:var(--sc);color:#fff}
+.fb-prv{background:var(--sur2);color:var(--tx3);border:1px solid var(--bd)}
+.fn-desc{font-size:11.5px;color:var(--tx2);margin-bottom:.4rem;line-height:1.45}
+.fn-uses{display:flex;flex-direction:column;gap:.2rem;margin-bottom:.35rem}
+.use-row{display:flex;align-items:baseline;gap:.35rem;font-size:11.5px}
+.use-arr{color:var(--tx3);font-size:10px;flex-shrink:0}
+.use-fn{
+  font-family:var(--mono);font-size:11px;color:var(--sc);cursor:pointer;
+  text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;
+}
+.use-fn:hover{text-decoration-style:solid}
+.use-fn.uf-active{color:var(--sc);font-weight:700;text-decoration-style:solid}
+.use-nt{color:var(--tx3);font-size:11px}
+.fn-ret{
+  display:flex;align-items:baseline;gap:.4rem;font-size:11px;
+  border-top:1px dashed var(--bd);padding-top:.3rem;color:var(--tx3);
+}
+.fn-ret-lbl{font-weight:700;flex-shrink:0}
+.fn-ret-val{font-family:var(--mono);color:var(--tx2)}
+
+/* ── Inline function detail (expands below the card, within stage flow) ── */
+.fn-inline-detail{
+  margin-top:.65rem;padding-top:.65rem;border-top:1.5px dashed var(--bd);
+}
+.fn-inline-detail .fd-io{margin-bottom:.75rem}
+.fn-inline-detail .sec-label{margin-top:0}
+
+/* two-column body inside an expanded card: steps (left) + nested-fn inspector (right).
+   Split starts at the card's center (50/50) and is drag-resizable via .fid-dvd. */
+.fid-body{display:flex;align-items:stretch}
+.fid-steps{flex:1 1 auto;min-width:160px}
+.fid-steps .steps{max-width:none}
+
+/* drag handle between a card's own steps and its nested-fn inspector */
+.fid-dvd{
+  width:6px;flex-shrink:0;align-self:stretch;cursor:col-resize;
+  background:var(--bd);position:relative;transition:background .15s;
+  margin:0 .55rem;
+}
+.fid-dvd::after{
+  content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:28px;border-radius:2px;background:var(--bd2);
+}
+.fid-dvd:hover,.fid-dvd.drag{background:var(--sc)}
+.fid-dvd:hover::after,.fid-dvd.drag::after{background:var(--sc)}
+
+/* ── Nested-function inspector (shown to the right of a step's own steps, inside the same card) ── */
+.fid-sub{
+  flex:1 1 auto;min-width:160px;
+}
+.fid-sub-hd{margin-bottom:.5rem}
+.fid-crumb{font-size:10.5px;color:var(--tx3);display:flex;flex-wrap:wrap;gap:.3rem;align-items:center;margin-bottom:.2rem}
+.cr-lnk{color:var(--sc);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px}
+.cr-lnk:hover{text-decoration-style:solid}
+.cr-sep{color:var(--tx3)}
+/* 子関数ヘッダー: 親カードの「▲ 閉じる」と同じ配置・挙動（右上・クリックで閉じる） */
+.fid-sub .fn-bh{margin-bottom:.4rem;cursor:pointer}
+.fid-sub .fn-bh:hover .fn-nm{color:var(--sc)}
+.fid-sub-close-hint{
+  margin-left:auto;font-size:9.5px;font-weight:700;color:var(--sc);opacity:.75;
+}
+.fid-sub .fd-desc{font-size:11.5px;color:var(--tx2);line-height:1.55;margin-bottom:.6rem}
+.fid-sub .fd-io{margin-bottom:.65rem}
+.fid-sub .steps{max-width:none}
+
+/* step-level "calls" links (inline, inside a step's body) */
+.step-calls{margin-top:.3rem}
+
+/* flow arrow */
+.flow-arr{display:flex;flex-direction:column;align-items:center;padding:.15rem 0;margin:.1rem 0}
+.fa-ln{width:1.5px;height:16px;background:var(--fc-ln)}
+.fa-lbl{font-size:10px;color:var(--tx3);margin:.05rem 0;text-align:center}
+.fa-hd{border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid var(--fc-ln)}
+
+.fd-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.75rem}
+.fd-io{display:flex;border:1.5px solid var(--bd);border-radius:var(--rsm);overflow:hidden;margin-bottom:1rem;background:var(--sur2)}
+.fd-io .io-cell{padding:.5rem .8rem}
+
+/* steps */
+.steps{display:flex;flex-direction:column;max-width:520px}
+.step-row{display:flex;gap:.6rem;position:relative}
+.step-row:not(:last-child)::before{
+  content:'';position:absolute;left:12px;top:26px;bottom:-2px;
+  width:1.5px;background:var(--fc-ln);z-index:0;
+}
+.si{
+  flex-shrink:0;width:25px;height:25px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;margin-top:.1rem;position:relative;z-index:1;
+}
+.si-p{background:color-mix(in srgb,#64748B 12%,transparent);color:#64748B;border:1.5px solid #64748B}
+/* 菱形: ::before=外枠(amber), ::after=内塗り(cream), テキストは最前面 */
+.si-c{
+  border-radius:0;background:transparent;
+  color:#92400E;font-size:9px;font-family:var(--mono);
+  isolation:isolate;
+}
+.si-c::before{
+  content:'';position:absolute;inset:0;
+  background:#D97706;
+  clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%);
+  z-index:-1;
+}
+.si-c::after{
+  content:'';position:absolute;inset:2.5px;
+  background:#FEF3C7;
+  clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%);
+  z-index:-1;
+}
+.si-r{background:color-mix(in srgb,#059669 15%,transparent);color:#059669;border:1.5px solid #059669}
+.sb{flex:1;padding:.2rem 0 .85rem;min-width:0}
+.st{font-size:12.5px;color:var(--tx1);font-weight:500;line-height:1.45}
+.sn{font-size:11.5px;color:var(--tx2);margin-top:.2rem;line-height:1.45}
+.sbr{margin-top:.3rem;display:flex;flex-direction:column;gap:.2rem}
+.br{display:flex;align-items:baseline;gap:.35rem;font-size:11.5px}
+.by{font-size:9px;font-weight:700;background:#D1FAE5;color:#065F46;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bn{font-size:9px;font-weight:700;background:#FEF3C7;color:#92400E;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bt{color:var(--tx2)}
+.step-lg{
+  display:flex;gap:.75rem;flex-wrap:wrap;font-size:11px;color:var(--tx3);
+  margin-top:.75rem;padding-top:.6rem;border-top:1px solid var(--bd);
+}
+.lg-i{display:flex;align-items:center;gap:.3rem}
+.lg-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0}
+</style>
+
+<div class="topbar">
+  <a href="flow.html" style="font-size:11px;color:var(--tx3);text-decoration:none;flex-shrink:0" title="全体処理フローに戻る">← 全体フロー</a>
+  <span class="tb-sep">›</span>
+  <span class="tb-mod">src / step2_detect.py</span>
+  <span class="tb-sep">›</span>
+  <span class="tb-title">テーブル検出_処理フロー</span>
+</div>
+
+<div id="app">
+  <div id="left-wrap"><div id="left-inner"></div></div>
+  <div id="dvd1" class="dvd"></div>
+  <div id="mid-wrap"><div id="mid-inner"></div></div>
+</div>
+
+<script>
+/* ══════════ DATA ══════════ */
+const STAGES = [
+  { id:1, k:'s1',
+    name:'行分類とテーブル領域検出機能',
+    emoji:'🔍',
+    desc:'生グリッドの各行のコンテンツ（数値/文字列/充填状況）をプロファイリングして行タイプに分類し、状態遷移でテーブル候補領域と列グループを切り出す。',
+    fns:[{n:'_is_filled',pub:false},{n:'_cell_is_numeric',pub:false},{n:'_row_content_profile',pub:false},{n:'_classify_row',pub:false},{n:'_find_column_groups',pub:false},{n:'_detect_table_regions',pub:false}],
+    rows:[
+      {k:'行タイプ',v:'empty / title / col_hdr / data / mixed / note の6種に分類'},
+      {k:'データ判定',v:'数値比率 ≥ 55% の行を data 行とみなす'},
+      {k:'列グループ',v:'空白列が2列以上連続する箇所で列範囲を分割（_find_column_groups）'},
+      {k:'状態遷移',v:'_detect_table_regions が行を1行ずつ走査し band_start/band_end 等を更新'},
+    ]},
+  { id:2, k:'s2',
+    name:'テーブル品質判定とDataFrame抽出機能',
+    emoji:'🧪',
+    desc:'候補領域が実質的なテーブルかを充填率・密度・テキスト長から判定し、合格した領域をヘッダー統合込みで pandas DataFrame に変換する。',
+    fns:[{n:'_classify_table_quality',pub:false},{n:'_make_unique_columns',pub:false},{n:'_extract_dataframe',pub:false}],
+    rows:[
+      {k:'品質判定',v:'raw_filled比率 < 20% ／ dense_rows < 2 などで "discard" を返す'},
+      {k:'極小表除外',v:'行数≤5 かつ 列数≥5 で数値セルが皆無なら破棄'},
+      {k:'長文除外',v:'長いテキストが多く数値が少ない領域はメタ情報欄とみなして破棄'},
+      {k:'ヘッダー統合',v:'detect_header_roles / merge_header_rows（step3_normalize）に委譲'},
+    ]},
+  { id:3, k:'s3',
+    name:'テーブル構築統括機能',
+    emoji:'🏗️',
+    desc:'シート単位で領域検出・品質判定・DataFrame抽出・正規化処理（step3_normalize）を統括し、DetectedTable のリストを構築する2つの公開エントリポイント。',
+    fns:[{n:'_propagate_sheet_title',pub:false},{n:'_apply_cross_table_detection',pub:false},{n:'_detect_tables_in_grid',pub:false},{n:'detect_tables',pub:true},{n:'detect_from_csv',pub:true}],
+    rows:[
+      {k:'正規化委譲',v:'fill_grouping_cols / remove_aggregates / detect_cross_table / stack_cross_table を step3_normalize から呼び出し'},
+      {k:'タイトル伝播',v:'同一シート内の複数テーブルへ共通シートタイトルを引き継ぐ（_propagate_sheet_title）'},
+      {k:'公開API',v:'detect_tables（Excel・複数シート）/ detect_from_csv（CSV・単一テーブル）の2エントリポイント'},
+    ]},
+  { id:4, k:'s4',
+    name:'検出後ユーティリティ機能',
+    emoji:'🧰',
+    desc:'検出済み DetectedTable をUI表示・ツリー出力・シート別グルーピングのために加工する、互いに独立した小さなヘルパー群。',
+    fns:[{n:'get_original_df',pub:true},{n:'build_tree_text',pub:true},{n:'group_tables_by_sheet',pub:true}],
+    rows:[
+      {k:'元データ復元',v:'raw_df → pre_fill_df → pre_agg_df → df の優先順で最も生に近いDataFrameを返す'},
+      {k:'ツリー表示',v:'ファイル/シート/テーブルの階層をテキストツリーとして整形'},
+      {k:'シート別集約',v:'sheet_name をキーに DetectedTable をグループ化'},
+    ]},
+];
+
+const FLOWS = {
+  1:{ overview:'_detect_table_regions が全行を _row_content_profile / _classify_row でプロファイリングしながら状態遷移でテーブル候補領域を構築する。_find_column_groups は各領域内の列を空白でグループ分割する（Stage3 の _detect_tables_in_grid から呼び出される）。',
+      nodes:[
+        {fn:'_detect_table_regions',pub:false,desc:'グリッドの全行を状態遷移で走査し、タイトル・ヘッダー・データ・注記行を判別しながらテーブル候補領域（行範囲・列範囲）を構築する',
+         uses:[{fn:'_row_content_profile',note:'各行のセル充填状況・数値/文字列比率を集計'},{fn:'_classify_row',note:'プロファイルから行タイプ（empty/title/col_hdr/data/mixed/note）を判定'}],
+         ret:'List[Dict]（band_start/band_end/col_start/col_end/title_rows/header_rows/data_rows/trailing_notes を持つ領域辞書のリスト）'},
+        {type:'arrow',label:'領域ごとに列グループへ分割（_detect_tables_in_grid が呼び出す）'},
+        {fn:'_find_column_groups',pub:false,desc:'行範囲内の列充填状況を集計し、空白列が閾値（既定2）以上連続する箇所で列グループに分割する',
+         uses:[{fn:'_is_filled',note:'各セルの充填判定'}],ret:'List[Tuple[int,int]]（列グループ範囲のリスト）'},
+      ]},
+  2:{ overview:'_extract_dataframe が矩形領域をヘッダー行数に応じて分岐しながら DataFrame 化し、_classify_table_quality が充填率・密度・テキスト長から採否を判定する。いずれも Stage3 の _detect_tables_in_grid から呼び出される。',
+      nodes:[
+        {fn:'_extract_dataframe',pub:false,desc:'矩形領域をヘッダー行数（0行/1行/複数行）に応じて処理を切り替えながら DataFrame として抽出する',
+         uses:[
+           {fn:'detect_header_roles',note:'ヘッダー行数と役割(name/unit)を判定（step3_normalize・モジュール横断）'},
+           {fn:'_make_unique_columns',note:'列名の重複を解消'},
+           {fn:'merge_header_rows',note:'複数ヘッダー行を1行の列名にマージ（step3_normalize・モジュール横断）'},
+         ],ret:'(df, title, raw_df)'},
+        {type:'arrow',label:'抽出結果を品質判定へ（_detect_tables_in_grid が呼び出す）'},
+        {fn:'_classify_table_quality',pub:false,desc:'充填率・密度・テキスト長などから候補領域が実質的なテーブルかを判定する',
+         uses:[{fn:'_is_filled',note:'矩形内の充填セル数を集計'}],ret:"'ok' | 'discard'"},
+      ]},
+  3:{ overview:'detect_tables（Excel・複数シート）と detect_from_csv（CSV・単一テーブル）の2つの公開エントリポイントが、_detect_tables_in_grid によるシート単位の領域検出・品質判定・抽出と、_apply_cross_table_detection による横断的なクロス集計変換を統括する。',
+      nodes:[
+        {fn:'detect_tables',pub:true,desc:'Excelブック全体（複数シート）からテーブルを検出する公開エントリポイント。シートごとに _detect_tables_in_grid を呼び出し、最後に全テーブル横断でクロス集計検出を適用する',
+         uses:[
+           {fn:'_detect_tables_in_grid',note:'シート単位でテーブル領域検出・品質判定・DataFrame抽出・正規化を実行'},
+           {fn:'_apply_cross_table_detection',note:'検出済み全テーブルにクロス集計検出・縦持ち変換を適用'},
+         ],ret:'(all_tables: List[DetectedTable], sheet_names: List[str])'},
+        {type:'arrow',label:'CSVの場合はこちらの経路'},
+        {fn:'detect_from_csv',pub:true,desc:'CSV読み込み済み DataFrame を単一テーブルとして扱う公開エントリポイント',
+         uses:[{fn:'_apply_cross_table_detection',note:'クロス集計検出・縦持ち変換を適用'}],ret:'([DetectedTable], ["CSV"])'},
+      ]},
+  4:{ overview:'検出処理完了後、UI表示・ログ出力のために使う独立した小さなユーティリティ群。互いに呼び出し合う関係はない。',
+      nodes:[
+        {fn:'get_original_df',pub:true,desc:'整形処理適用前の生 DataFrame を、raw_df → pre_fill_df → pre_agg_df → df の優先順で返す',
+         uses:[],ret:'pd.DataFrame | None'},
+        {fn:'build_tree_text',pub:true,desc:'ファイル・シート・テーブルの階層をツリー形式のテキストに整形する',
+         uses:[],ret:'str（ツリーテキスト）'},
+        {fn:'group_tables_by_sheet',pub:true,desc:'検出済みテーブルリストをシート名でグループ化した辞書に変換する',
+         uses:[],ret:'dict（sheet_name → List[DetectedTable]）'},
+      ]},
+};
+
+const FN = {
+  _is_filled:{s:1,pub:false,io:{i:'Any（セル値）',o:'bool'},
+    desc:'セルが「充填されている」とみなせるかを判定する。None・空白のみの文字列は非充填。',
+    steps:[
+      {t:'c',tx:'value is None？',yes:'return False'},
+      {t:'c',tx:'文字列型？',yes:'.strip() した結果が空でなければ True'},
+      {t:'r',tx:'return True（None・空文字列以外はすべて充填とみなす）'},
+    ]},
+  _cell_is_numeric:{s:1,pub:false,io:{i:'Any（セル値）',o:'bool'},
+    desc:'セルの値が数値として解釈できるかを判定する。統計秘匿マーカー（***, X 等）も数値扱いとする。',
+    steps:[
+      {t:'c',tx:'bool型？',yes:'return False'},
+      {t:'c',tx:'int / float型？',yes:'return v == v（NaN以外なら True）'},
+      {t:'p',tx:'文字列化して strip'},
+      {t:'c',tx:'STAT_PLACEHOLDERS（統計秘匿マーカー）に一致？',yes:'return True'},
+      {t:'p',tx:'カンマ・全角記号（、△▲）を除去して float 変換を試行'},
+      {t:'c',tx:'変換に成功？',yes:'return True',no:'return False'},
+    ]},
+  _row_content_profile:{s:1,pub:false,io:{i:'grid, r（行番号）, max_col',o:'Dict（numeric, text, filled, col_min, col_max, texts）'},
+    desc:'指定行1行分のセルを走査し、数値/文字列の件数や充填列範囲などのプロファイルを集計する。',
+    steps:[
+      {t:'p',tx:'numeric=text=0, col_min=col_max=None, texts=[] を初期化'},
+      {t:'p',tx:'列 1〜max_col を走査し、_is_filled で各セルの充填判定',calls:['_is_filled']},
+      {t:'c',tx:'セルが空？',yes:'スキップして次の列へ'},
+      {t:'p',tx:'col_min / col_max を更新（充填列の最小・最大）'},
+      {t:'c',tx:'_cell_is_numeric でセルが数値？',yes:'numeric をインクリメント',no:'text をインクリメントし texts に文字列を追加',calls:['_cell_is_numeric']},
+      {t:'r',tx:'return プロファイル辞書 {numeric, text, filled, col_min, col_max, texts}'},
+    ]},
+  _classify_row:{s:1,pub:false,io:{i:'Dict（_row_content_profile の戻り値）',o:"str（'empty'|'title'|'col_hdr'|'data'|'mixed'|'note'）"},
+    desc:'行のコンテンツプロファイルから行タイプを判定する。数値比率・テキスト件数・文字長・注記パターンなどで分岐する。',
+    steps:[
+      {t:'c',tx:'filled == 0？',yes:"return 'empty'"},
+      {t:'p',tx:'n_ratio = numeric / filled を計算'},
+      {t:'c',tx:'n_ratio ≥ 0.55？',yes:"return 'data'"},
+      {t:'c',tx:'filled==1 かつ text==1（単一テキストセル）？',yes:'注記プレフィックス／60文字超／集計列挙パターンに一致すれば "note"、それ以外は "title"'},
+      {t:'c',tx:'numeric==0 かつ text≥2 かつ 全テキストが同一値？',yes:'注記パターンなら "note" ／ text≥4 なら "col_hdr" ／ 40文字以下なら "title"、それ以外は "col_hdr"'},
+      {t:'c',tx:'最長テキストが80文字超 かつ n_ratio ≤ 0.30？',yes:"return 'note'"},
+      {t:'c',tx:'text ≥ 2 かつ n_ratio ≤ 0.30？',yes:"return 'col_hdr'"},
+      {t:'r',tx:"return 'mixed'"},
+    ]},
+  _find_column_groups:{s:1,pub:false,io:{i:'grid, start_row, end_row, max_col, gap_threshold=2',o:'List[Tuple[int,int]]'},
+    desc:'指定した行範囲内で列ごとの充填有無を集計し、空白列が gap_threshold 以上連続する箇所で列を (start_col, end_col) のグループに分割する。',
+    steps:[
+      {t:'p',tx:'col_has_content 配列を初期化し、start_row〜end_row の全セルを走査して各列の充填有無を記録',calls:['_is_filled']},
+      {t:'p',tx:'列 1〜max_col を順に走査し、group_start・empty_streak を管理'},
+      {t:'c',tx:'列に内容あり？',yes:'group_start が未設定なら現在列に設定し empty_streak を0にリセット',no:'group_start 設定済みなら empty_streak をインクリメント'},
+      {t:'c',tx:'empty_streak ≥ gap_threshold？',yes:'groups に (group_start, 現列-empty_streak) を追加し group_start・empty_streak をリセット'},
+      {t:'c',tx:'走査終了後も group_start が残っている？',yes:'最後の充填列までを最終グループとして groups に追加'},
+      {t:'r',tx:'return groups（列グループ範囲のリスト）'},
+    ]},
+  _detect_table_regions:{s:1,pub:false,io:{i:'grid, max_row, max_col',o:'List[Dict]（候補領域のリスト）'},
+    desc:'grid の全行を状態遷移で走査し、タイトル・ヘッダー・データ・注記行を判別しながらテーブル候補領域を構築する、Stage1の中核となるステートマシン。',
+    steps:[
+      {t:'c',tx:'max_row==0 または max_col==0？',yes:'return []（空グリッド）'},
+      {t:'p',tx:'全行について _row_content_profile と _classify_row を実行し、profiles / row_types 辞書を構築',calls:['_row_content_profile','_classify_row']},
+      {t:'p',tx:'領域構築用の内部ヘルパーを準備',nt:'_mk() で空領域辞書を生成 ／ _upd_cols() で col_start・col_end を更新 ／ _flush() は data_rows があるか header_rows≥2 の領域のみ regions に確定する小さなクロージャ'},
+      {t:'p',tx:'cur=_mk(), pending_titles=[], consec_empty=0 を初期化し、行1〜max_rowを順に走査'},
+      {t:'c',tx:'行タイプ = empty？',yes:'consec_empty をインクリメント。data_rows あり かつ consec_empty≥2 なら現領域を flush して初期化 ／ consec_empty>4 なら pending_titles を破棄 → 次の行へ'},
+      {t:'c',tx:'行タイプ = title？',yes:'data_rows あり、または header_rows≥2 なら現領域を flush して初期化 → text を pending_titles に追記 → 次の行へ'},
+      {t:'c',tx:'行タイプ = col_hdr かつ cur に data_rows あり？',yes:'行幅が領域幅の50%未満 または 充填密度<30%なら分割データ行の続きとみなし data_rows に追加して次の行へ、そうでなければ現領域を flush して初期化',no:'そのままヘッダー処理へ'},
+      {t:'p',tx:'（col_hdr 行）cur.band_start が未設定なら pending_titles を title_rows に移して band_start を確定 → header_rows に行を追加',nt:'band_start = title_rows[0]の行番号（タイトルがなければ現在行）'},
+      {t:'c',tx:'行タイプ = note？',yes:'重複除去した注記テキストを取得。data_rows ありなら現領域を flush し直前確定領域の trailing_notes に追記／band_start 未設定かつ既存領域があれば直前領域の trailing_notes に追記 → 次の行へ'},
+      {t:'p',tx:'（data または mixed 行）cur.band_start が未設定なら pending_titles を title_rows に移して band_start を確定 → data_rows に行を追加'},
+      {t:'c',tx:'走査終了後、cur.band_start が設定済み？',yes:'最終領域を _flush(cur, last_filled) で確定'},
+      {t:'r',tx:'return regions（テーブル候補領域のリスト）'},
+    ]},
+  _classify_table_quality:{s:2,pub:false,io:{i:'df, grid, band_start, band_end, col_start, col_end',o:"str（'ok' | 'discard'）"},
+    desc:'検出された矩形領域が実質的なテーブルかを、充填率・密な行数・テキスト長などの複数条件から判定する。',
+    steps:[
+      {t:'p',tx:'raw_total = 矩形全体のセル数（行数×列数）を計算'},
+      {t:'c',tx:'raw_total == 0？',yes:"return 'discard'"},
+      {t:'p',tx:'raw_filled = 矩形内の充填セル数をカウント',calls:['_is_filled']},
+      {t:'c',tx:'raw_filled / raw_total < 0.20？',yes:"return 'discard'（充填率が低すぎる）"},
+      {t:'c',tx:'df.empty？',yes:"return 'discard'"},
+      {t:'p',tx:'各行の非空セル比率が25%以上の行数（dense_rows）をカウント'},
+      {t:'c',tx:'dense_rows < 2？',yes:"return 'discard'"},
+      {t:'c',tx:'行数 ≤ 5 かつ 列数 ≥ 5？',yes:'各列を数値変換して数値セル総数(num_ct)を計算 → num_ct==0 なら return "discard"（極小・非数値の表を除外）'},
+      {t:'p',tx:'_tally ヘルパーで列名・全セル値のテキスト長を集計',nt:'_tally は数値変換できる値をスキップし、非数値テキストの件数(txt_ct)・40文字超の件数(lng_ct)・最大長(max_len)を更新する小さなクロージャ'},
+      {t:'c',tx:'max_len > 80 または（txt_ct≥3 かつ 長文比率>25%）？',yes:'総数値セル数と数値密度を計算し、数値が少ない場合（total_numeric<10 かつ numeric_density<0.15）のみ return "discard"（説明文・メタ情報欄を除外）'},
+      {t:'r',tx:"return 'ok'"},
+    ]},
+  _make_unique_columns:{s:2,pub:false,io:{i:'List[str]（列名候補リスト）',o:'List[str]（重複のない列名リスト）'},
+    desc:'列名リストの重複を連番サフィックスで解消する。空の列名は「列」に置換する。',
+    steps:[
+      {t:'p',tx:'seen 辞書と result リストを初期化'},
+      {t:'p',tx:'各列名を走査し、空なら "列" に置換'},
+      {t:'c',tx:'列名が seen に存在？',yes:'"{col}_{連番}" にリネームして追加',no:'そのまま追加して seen に登録'},
+      {t:'r',tx:'return result（重複のない列名リスト）'},
+    ]},
+  _extract_dataframe:{s:2,pub:false,io:{i:'grid, start_row, end_row, start_col, end_col',o:'(df, title, raw_df)'},
+    desc:'矩形領域を、検出されたヘッダー行数（0行/1行/複数行）に応じて処理を切り替えながら pandas DataFrame として抽出する。',
+    steps:[
+      {t:'c',tx:'start_row > end_row または start_col > end_col？',yes:'return (空DataFrame, None, None)'},
+      {t:'p',tx:'矩形領域を2次元リスト（rows）として切り出し'},
+      {t:'c',tx:'rows が空？',yes:'return (空DataFrame, None, None)'},
+      {t:'p',tx:'detect_header_roles でタイトル行数(n_title)とヘッダー役割(header_roles)を取得',nt:'step3_normalize に委譲（モジュール横断）',calls:['detect_header_roles']},
+      {t:'c',tx:'n_title > 0？',yes:'各タイトル行の先頭値を " / " で連結して title を構築'},
+      {t:'p',tx:'remaining = rows[n_title:]（タイトル行を除いた残り）、n_header = len(header_roles)'},
+      {t:'c',tx:'n_header == 0？',yes:'"列1"..."列N" の連番列名で DataFrame化 → dropna・reset_index → return (df, title, None)'},
+      {t:'c',tx:'n_header == 1？',yes:'_make_unique_columns で1行を列名化 → DataFrame化 → return (df, title, None)',calls:['_make_unique_columns']},
+      {t:'p',tx:'n_header ≥ 2：1行目を _make_unique_columns で仮列名化して raw_df（マージ前の生DataFrame）を構築',calls:['_make_unique_columns']},
+      {t:'p',tx:'merge_header_rows で複数ヘッダー行を1行の列名にマージ → _make_unique_columns で重複解消',nt:'merge_header_rows は step3_normalize に委譲（モジュール横断）',calls:['merge_header_rows','_make_unique_columns']},
+      {t:'r',tx:'return (df, title, raw_df)（df・raw_df はいずれも dropna・reset_index 済み）'},
+    ]},
+  _propagate_sheet_title:{s:3,pub:false,io:{i:'List[DetectedTable]',o:'None（detected を直接変更）'},
+    desc:'同一シート内で複数テーブルを検出した際、先頭テーブルタイトルのシート共通部分を「年度のみ」の後続タイトルに引き継ぐ。',
+    steps:[
+      {t:'c',tx:'detected が空？',yes:'return（何もしない）'},
+      {t:'p',tx:'sheet_name で groupby してシートごとにテーブルをグループ化'},
+      {t:'c',tx:'シート内テーブル数 < 2？',yes:'次のシートへ（スキップ）'},
+      {t:'c',tx:'先頭テーブルの title に " / " が含まれない？',yes:'次のシートへ（スキップ）'},
+      {t:'p',tx:'title を "/" で分割し、西暦を含まない部分を sheet_parts、含む部分を section_parts に分離'},
+      {t:'c',tx:'sheet_parts が空？',yes:'次のシートへ（スキップ）'},
+      {t:'p',tx:'sheet_title = sheet_parts を結合'},
+      {t:'c',tx:'後続テーブルの title が「年度のみ」パターンに一致？',yes:'"{sheet_title}_{年度}" に置換（伝播）'},
+      {t:'c',tx:'1件以上伝播 かつ section_parts あり？',yes:'先頭テーブルの title も "{sheet_title}_{section_parts[0]}" に更新'},
+      {t:'r',tx:'return（戻り値なし、detected を破壊的に更新）'},
+    ]},
+  _apply_cross_table_detection:{s:3,pub:false,io:{i:'List[DetectedTable], filename',o:'None（tables を直接変更）'},
+    desc:'テーブルリスト全体にクロス集計形式の検出と縦持ち変換を適用する。変換後に集計ラベル行があれば除外する。',
+    steps:[
+      {t:'p',tx:'step3_normalize から _is_agg_label を遅延importし、各テーブルを走査'},
+      {t:'c',tx:'t.df が None または空？',yes:'次のテーブルへ（スキップ）'},
+      {t:'p',tx:'detect_cross_table でクロス集計形式かを判定',nt:'step3_normalize に委譲（モジュール横断）',calls:['detect_cross_table']},
+      {t:'c',tx:'stack_info（info）が取得できた？',yes:'t.stack_info に保存し stack_cross_table で縦持ち DataFrame に変換',no:'次のテーブルへ',calls:['stack_cross_table']},
+      {t:'c',tx:'変換後 DataFrame に var_name 列が存在？',yes:'_is_agg_label で各値が集計ラベルかを判定するマスクを作成',calls:['_is_agg_label']},
+      {t:'c',tx:'集計ラベル行が1件以上ある？',yes:'該当行を除外してインデックスをリセット'},
+      {t:'r',tx:'t.stacked_df に結果を保存（戻り値なし）'},
+    ]},
+  _detect_tables_in_grid:{s:3,pub:false,io:{i:'grid, max_row, max_col, sheet_name, table_counter',o:'List[DetectedTable]'},
+    desc:'1シート分のグリッドに対し、領域検出→列グループ分割→抽出→品質判定→正規化を通しで実行し、DetectedTable のリストを構築するシート単位の統括関数。',
+    steps:[
+      {t:'c',tx:'max_row==0 または max_col==0？',yes:'return []'},
+      {t:'p',tx:'_detect_table_regions でテーブル候補領域を検出',calls:['_detect_table_regions']},
+      {t:'p',tx:'各領域(reg)を走査し、_find_column_groups で列グループに分割',calls:['_find_column_groups']},
+      {t:'p',tx:'first_header_row = header_rows の最小値（なければ band_start）を算出'},
+      {t:'c',tx:'各列グループについて (band_end - first_header_row + 1) < 2？',yes:'テーブルとして小さすぎるためスキップ'},
+      {t:'p',tx:'_extract_dataframe で DataFrame を抽出',calls:['_extract_dataframe']},
+      {t:'c',tx:'抽出結果の df が空？',yes:'スキップ'},
+      {t:'p',tx:'_classify_table_quality で品質判定',calls:['_classify_table_quality']},
+      {t:'c',tx:'quality != "ok"？',yes:'スキップ'},
+      {t:'p',tx:'effective_title を決定',nt:'inner_title があればそれを使用、なければ reg["title_rows"] を " / " で連結'},
+      {t:'p',tx:'table_counter でシートごとの連番から table_id を採番'},
+      {t:'p',tx:'fill_grouping_cols でグルーピング列を前方補完',nt:'step3_normalize に委譲（モジュール横断）',calls:['fill_grouping_cols']},
+      {t:'p',tx:'remove_aggregates で集計行・集計列を除去',nt:'step3_normalize に委譲（モジュール横断）',calls:['remove_aggregates']},
+      {t:'p',tx:'raw_df・pre_fill_df・pre_agg_df 等の中間DataFrameとともに DetectedTable を構築し detected リストに追加',nt:'これらは get_original_df が後から元データを復元する際に参照する'},
+      {t:'p',tx:'_propagate_sheet_title で同一シート内のタイトルを伝播',calls:['_propagate_sheet_title']},
+      {t:'r',tx:'return detected（DetectedTable のリスト）'},
+    ]},
+  detect_tables:{s:3,pub:true,io:{i:'sheets: List[SheetGrid], filename: str',o:'(all_tables: List[DetectedTable], sheet_names: List[str])'},
+    desc:'SheetGrid のリスト（Excelブック全体）からテーブルを検出する公開エントリポイント。',
+    steps:[
+      {t:'p',tx:'all_tables=[], table_counter={} を初期化'},
+      {t:'p',tx:'各シートについて _detect_tables_in_grid を呼び出し、結果を all_tables に連結',calls:['_detect_tables_in_grid']},
+      {t:'p',tx:'_apply_cross_table_detection で全テーブルにクロス集計検出・縦持ち変換を適用',calls:['_apply_cross_table_detection']},
+      {t:'r',tx:'return (all_tables, sheet_names)'},
+    ]},
+  detect_from_csv:{s:3,pub:true,io:{i:'df: pd.DataFrame, filename: str',o:'([DetectedTable], ["CSV"])'},
+    desc:'CSV読み込み済み DataFrame を単一テーブルとして検出する公開エントリポイント。',
+    steps:[
+      {t:'p',tx:'ファイル名から拡張子を除いた安全な文字列(safe)を生成'},
+      {t:'p',tx:'df全体を単一の DetectedTable（table_id=f"{safe}_T1", sheet_name="CSV"）として構築'},
+      {t:'p',tx:'_apply_cross_table_detection でクロス集計検出・縦持ち変換を適用',calls:['_apply_cross_table_detection']},
+      {t:'r',tx:'return ([table], ["CSV"])'},
+    ]},
+  get_original_df:{s:4,pub:true,io:{i:'t: DetectedTable',o:'pd.DataFrame | None'},
+    desc:'整形処理適用前の生 DataFrame を返す。raw_df → pre_fill_df → pre_agg_df → df の優先順で最初に見つかった非空の候補を返す。',
+    steps:[
+      {t:'p',tx:'候補を [raw_df, pre_fill_df, pre_agg_df, df] の優先順に用意'},
+      {t:'c',tx:'候補が None でなく空でもない？',yes:'その候補を return（最初に見つかったもの）'},
+      {t:'r',tx:'return None（全候補が空だった場合）'},
+    ]},
+  build_tree_text:{s:4,pub:true,io:{i:'filename, sheets: List[str], tables_by_sheet: dict',o:'str（ツリーテキスト）'},
+    desc:'ファイル・シート・テーブルの階層構造をツリー表示用のテキストとして整形する。',
+    steps:[
+      {t:'p',tx:'lines = ["📁 {filename}"] で初期化'},
+      {t:'p',tx:'各シートを走査し、テーブル数の文字列(cnt_str)と枝記号（├──／└──）を決定'},
+      {t:'p',tx:'シート行を追加後、そのシートに属する各テーブルを走査'},
+      {t:'p',tx:'各テーブルの行×列数・タイトルを整形し、枝記号付きで追加'},
+      {t:'r',tx:'return lines を改行結合した文字列'},
+    ]},
+  group_tables_by_sheet:{s:4,pub:true,io:{i:'tables: List[DetectedTable]',o:'dict（sheet_name → List[DetectedTable]）'},
+    desc:'検出済みテーブルリストをシート名をキーとした辞書にグループ化する。',
+    steps:[
+      {t:'p',tx:'by_sheet={} を初期化'},
+      {t:'p',tx:'各テーブルを t.sheet_name のキーに setdefault でリスト追加'},
+      {t:'r',tx:'return by_sheet'},
+    ]},
+  detect_header_roles:{s:2,pub:true,io:{i:'List[List[Any]]（行リスト）',o:'(n_title, roles)'},
+    desc:'（step3_normalize.py で定義）先頭タイトル行をスキップし、ヘッダー行を name / unit の役割に分類する。step2_detect からはモジュール横断で呼び出される委譲先で、詳細ロジックは step3_normalize のフローページを参照。',
+    steps:[
+      {t:'p',tx:'→ step3_normalize.py のフローページを参照',nt:'_extract_dataframe（step2_detect, Stage2）から呼び出される'},
+    ]},
+  merge_header_rows:{s:2,pub:true,io:{i:'header_data, roles, n_cols',o:'List[str]（列名リスト）'},
+    desc:'（step3_normalize.py で定義）複数のヘッダー行を1つの列名リストにマージする。詳細は step3_normalize のフローページを参照。',
+    steps:[
+      {t:'p',tx:'→ step3_normalize.py のフローページを参照',nt:'_extract_dataframe（step2_detect, Stage2）から呼び出される'},
+    ]},
+  fill_grouping_cols:{s:3,pub:true,io:{i:'pd.DataFrame',o:'(filled_df, filled_col_names)'},
+    desc:'（step3_normalize.py で定義）グルーピング列の内部 None を ffill で前方補完する。詳細は step3_normalize のフローページを参照。',
+    steps:[
+      {t:'p',tx:'→ step3_normalize.py のフローページを参照',nt:'_detect_tables_in_grid（step2_detect, Stage3）から呼び出される'},
+    ]},
+  remove_aggregates:{s:3,pub:true,io:{i:'pd.DataFrame',o:'(cleaned_df, removed_rows_info, removed_cols, removed_row_indices, agg_removed_row_metadata, agg_removed_col_metadata)'},
+    desc:'（step3_normalize.py で定義）集計行・集計列を検出して除去し、監査用メタデータを生成する。詳細は step3_normalize のフローページを参照。',
+    steps:[
+      {t:'p',tx:'→ step3_normalize.py のフローページを参照',nt:'_detect_tables_in_grid（step2_detect, Stage3）から呼び出される'},
+    ]},
+  detect_cross_table:{s:3,pub:true,io:{i:'pd.DataFrame, title?, filename?',o:'Dict | None'},
+    desc:'（step3_normalize.py で定義）DataFrame がクロス集計形式（横持ち）かを検出する。詳細は step3_normalize のフローページを参照。',
+    steps:[
+      {t:'p',tx:'→ step3_normalize.py のフローページを参照',nt:'_apply_cross_table_detection（step2_detect, Stage3）から呼び出される'},
+    ]},
+  stack_cross_table:{s:3,pub:true,io:{i:'pd.DataFrame, stack_info',o:'pd.DataFrame（縦持ち）'},
+    desc:'（step3_normalize.py で定義）クロス集計形式（横持ち）を縦持ち（long format）に変換する。詳細は step3_normalize のフローページを参照。',
+    steps:[
+      {t:'p',tx:'→ step3_normalize.py のフローページを参照',nt:'_apply_cross_table_detection（step2_detect, Stage3）から呼び出される'},
+    ]},
+  _is_agg_label:{s:3,pub:false,io:{i:'str',o:'bool'},
+    desc:'（step3_normalize.py で定義）値が集計ラベルかを判定する。詳細は step3_normalize のフローページを参照。',
+    steps:[
+      {t:'p',tx:'→ step3_normalize.py のフローページを参照',nt:'_apply_cross_table_detection（step2_detect, Stage3）から遅延importして呼び出される（fill_grouping_cols 内でも再利用）'},
+    ]},
+};
+
+/* ══════════ COLOR VARS ══════════ */
+const SV = {
+  s1:{c:'var(--s1)',bg:'var(--s1-bg)'},
+  s2:{c:'var(--s2)',bg:'var(--s2-bg)'},
+  s3:{c:'var(--s3)',bg:'var(--s3-bg)'},
+  s4:{c:'var(--s4)',bg:'var(--s4-bg)'},
+};
+const KEYS = ['s1','s2','s3','s4'];
+function sv(k){const v=SV[k];return `--sc:${v.c};--sc-bg:${v.bg}`}
+
+/* ══════════ STATE ══════════ */
+let activeStage=null, isStageSplit=false, leftW=460;
+let expandedFns=new Set(); // 中央パネルでカード下に詳細展開中の関数名
+let subFnStack={}; // カード内右側インスペクタのナビゲーションスタック: { [トップ関数名]: [子関数名, 孫関数名, ...] }
+let subSplitRatio={}; // カード内の 処理ステップ/子関数インスペクタ 分割比率: { [トップ関数名]: 0〜1（既定 0.5 = 中央） }
+
+/* ══════════ BUILD OVERVIEW ══════════ */
+function buildOverview(){
+  let h=`
+    <div class="io-bar">
+      <div class="io-cell" style="--sc:var(--s1)">
+        <div class="io-lbl">入力</div>
+        <div class="io-val">List[SheetGrid] / pd.DataFrame（CSV の場合）、ファイル名</div>
+        <div class="io-sub">List[SheetGrid] は step1_upload が構築した生グリッド</div>
+      </div>
+      <div class="io-cell" style="--sc:var(--s4)">
+        <div class="io-lbl">出力</div>
+        <div class="io-val">List[DetectedTable]</div>
+        <div class="io-sub">検出されたテーブルごとの位置・DataFrame・タイトル・注記を含む</div>
+      </div>
+    </div>`;
+
+  STAGES.forEach((s,i)=>{
+    const k=KEYS[i];
+    const pills=s.fns.map(f=>`<span class="pill${f.pub?' pub':''}">${f.n}</span>`).join('');
+    const rows=s.rows.map(r=>`<div class="dr"><span class="dk">${r.k}</span><span class="dv">${r.v}</span></div>`).join('');
+    const isActive=activeStage===s.id;
+    h+=`
+      <div class="stage-card${isActive?' active':''}" id="sc${s.id}" style="${sv(k)}" onclick="selectStage(${s.id})">
+        <div class="stage-hd">
+          <span class="stage-chip">S${s.id}</span>
+          <span style="font-size:15px">${s.emoji}</span>
+          <span class="stage-name">${s.name}</span>
+        </div>
+        <div class="stage-body">
+          <div class="stage-desc">${s.desc}</div>
+          <div class="fn-pills">${pills}</div>
+          <div class="detail-rows">${rows}</div>
+        </div>
+      </div>`;
+    if(i<3) h+=`<div class="arr"><div class="arr-line"></div><div class="arr-head"></div></div>`;
+  });
+  h+=`<div class="click-hint">▲ カードをクリックして関数フローを表示 / 再クリックで全体に戻る</div>`;
+  document.getElementById('left-inner').innerHTML=h;
+}
+
+/* ══════════ SELECT / TOGGLE STAGE ══════════ */
+function selectStage(id){
+  if(activeStage===id && isStageSplit){ closeSplit(); return; }
+  if(activeStage!==id){ expandedFns.clear(); subFnStack={}; subSplitRatio={}; }
+  activeStage=id;
+  document.querySelectorAll('.stage-card').forEach(c=>c.classList.remove('active'));
+  const card=document.getElementById('sc'+id);
+  if(card) card.classList.add('active');
+  if(!isStageSplit){
+    isStageSplit=true;
+    document.getElementById('app').classList.add('s-split');
+    document.getElementById('left-wrap').style.width=leftW+'px';
+  }
+  renderStageFlow(id);
+}
+
+/* ══════════ CLOSE SPLIT ══════════ */
+function closeSplit(){
+  isStageSplit=false; activeStage=null;
+  expandedFns.clear(); subFnStack={}; subSplitRatio={};
+  const app=document.getElementById('app');
+  app.classList.remove('s-split');
+  document.getElementById('left-wrap').style.width='';
+  document.getElementById('mid-inner').innerHTML='';
+  document.querySelectorAll('.stage-card').forEach(c=>c.classList.remove('active'));
+}
+
+/* ══════════ RENDER STAGE FLOW ══════════ */
+function renderStageFlow(id, resetScroll=true){
+  const s=STAGES[id-1], k=KEYS[id-1], fl=FLOWS[id];
+  const nodesHtml=fl.nodes.map(n=>{
+    if(n.type==='arrow') return `
+      <div class="flow-arr">
+        <div class="fa-ln"></div>
+        <span class="fa-lbl">${n.label}</span>
+        <div class="fa-hd"></div>
+      </div>`;
+    const curSub=(subFnStack[n.fn]||[]).slice(-1)[0];
+    const uses=n.uses.length?`<div class="fn-uses">${n.uses.map(u=>`
+      <div class="use-row">
+        <span class="use-arr">↳ 呼び出し</span>
+        <span class="use-fn${curSub===u.fn?' uf-active':''}" onclick="event.stopPropagation();openSubFn('${n.fn}','${u.fn}')">${u.fn}</span>
+        <span class="use-nt">— ${u.note}</span>
+      </div>`).join('')}</div>`:'';
+    const isOpen=expandedFns.has(n.fn);
+    const inlineDetail=isOpen?buildInlineDetailHtml(n.fn):'';
+    return `<div class="fn-box${isOpen?' fx-active':''}" onclick="toggleInline('${n.fn}')">
+      <div class="fn-bh">
+        <span class="fn-nm">${n.fn}</span>
+        <span class="fn-badge ${n.pub?'fb-pub':'fb-prv'}">${n.pub?'Public':'Private'}</span>
+      </div>
+      <div class="fn-desc">${n.desc}</div>
+      ${uses}
+      <div class="fn-ret"><span class="fn-ret-lbl">→ return</span><span class="fn-ret-val">${n.ret}</span></div>
+      ${inlineDetail}
+    </div>`;
+  }).join('');
+
+  const midEl=document.getElementById('mid-inner');
+  if(!midEl) return;
+  midEl.innerHTML=`
+    <div style="${sv(k)}">
+      <div class="rf-top">
+        <div>
+          <div class="sf-tag">${s.emoji} Stage ${id}</div>
+          <div class="sf-title">${s.name}</div>
+        </div>
+        <button class="rf-close" onclick="closeSplit()" title="全体に戻る (←)">✕</button>
+      </div>
+      <div class="sf-overview">${fl.overview}</div>
+      <div class="sec-label">関数フロー（カードをクリックで詳細展開）</div>
+      <div id="fn-flow-area">${nodesHtml}</div>
+    </div>`;
+  if(resetScroll) document.getElementById('mid-wrap').scrollTop=0;
+}
+
+/* ══════════ TOGGLE INLINE FUNCTION DETAIL (below the card) ══════════ */
+function toggleInline(fn){
+  if(expandedFns.has(fn)) expandedFns.delete(fn); else expandedFns.add(fn);
+  rerenderMid();
+}
+
+/* ══════════ NESTED-FUNCTION INSPECTOR (right side of the card) ══════════ */
+function openSubFn(cardFn, targetFn){
+  expandedFns.add(cardFn);
+  const stack=subFnStack[cardFn]||(subFnStack[cardFn]=[]);
+  if(stack[stack.length-1]!==targetFn) stack.push(targetFn);
+  rerenderMid();
+}
+function jumpSubFn(cardFn, idx){
+  const stack=subFnStack[cardFn];
+  if(!stack) return;
+  stack.length=idx+1;
+  rerenderMid();
+}
+function closeSubFn(cardFn){
+  delete subFnStack[cardFn];
+  delete subSplitRatio[cardFn];
+  rerenderMid();
+}
+function rerenderMid(){
+  const mw=document.getElementById('mid-wrap');
+  const st=mw.scrollTop;
+  renderStageFlow(activeStage, false);
+  mw.scrollTop=st;
+}
+
+function buildInlineDetailHtml(fnName){
+  const fn=FN[fnName];
+  if(!fn) return '';
+  const stack=subFnStack[fnName]||[];
+  const stepsHtml=`<div class="steps">${buildStepsHtml(fn,fnName)}</div>`;
+  let bodyHtml;
+  if(stack.length){
+    const ratio=subSplitRatio[fnName] ?? 0.5; // 既定は親関数のちょうど中心
+    bodyHtml=`
+      <div class="fid-body" data-card="${fnName}">
+        <div class="fid-steps" style="flex:0 0 calc(${(ratio*100).toFixed(2)}% - 3px)">${stepsHtml}</div>
+        <div class="fid-dvd" data-card="${fnName}" title="ドラッグで幅調整"></div>
+        <div class="fid-sub">${renderSubFnPanel(fnName,stack)}</div>
+      </div>`;
+  } else {
+    bodyHtml=`<div class="fid-body"><div class="fid-steps">${stepsHtml}</div></div>`;
+  }
+  return `
+    <div class="fn-inline-detail" onclick="event.stopPropagation()">
+      <div class="fd-io">
+        <div class="io-cell" style="--sc:var(--s2)"><div class="io-lbl">入力</div><div class="io-val">${fn.io.i}</div></div>
+        <div class="io-cell" style="--sc:var(--s4)"><div class="io-lbl">出力</div><div class="io-val">${fn.io.o}</div></div>
+      </div>
+      <div class="sec-label">処理ステップ</div>
+      ${bodyHtml}
+    </div>`;
+}
+
+function renderSubFnPanel(cardFn, stack){
+  const cur=stack[stack.length-1];
+  const sf=FN[cur];
+  if(!sf) return '';
+  const ancestors=stack.slice(0,-1);
+  const crumbHtml=ancestors.length?`<div class="fid-crumb">${ancestors.map((name,i)=>
+    `<span class="cr-lnk" onclick="event.stopPropagation();jumpSubFn('${cardFn}',${i})">${name}</span><span class="cr-sep">›</span>`
+  ).join('')}</div>`:'';
+  return `
+    <div class="fid-sub-hd">
+      ${crumbHtml}
+      <div class="fn-bh" onclick="event.stopPropagation();closeSubFn('${cardFn}')" title="クリックで閉じる">
+        <span class="fn-nm">${cur}</span>
+        <span class="fn-badge ${sf.pub?'fb-pub':'fb-prv'}">${sf.pub?'Public':'Private'}</span>
+        <span class="fid-sub-close-hint">▲ 閉じる</span>
+      </div>
+    </div>
+    <div class="fd-desc">${sf.desc}</div>
+    <div class="fd-io">
+      <div class="io-cell" style="--sc:var(--s2)"><div class="io-lbl">入力</div><div class="io-val">${sf.io.i}</div></div>
+      <div class="io-cell" style="--sc:var(--s4)"><div class="io-lbl">出力</div><div class="io-val">${sf.io.o}</div></div>
+    </div>
+    <div class="steps">${buildStepsHtml(sf,cardFn)}</div>`;
+}
+
+function buildStepsHtml(fn, cardFn){
+  return fn.steps.map((st,i)=>{
+    const num=i+1, icon=st.t==='c'?'if':st.t==='r'?'↩':num;
+    const br=(st.yes||st.no)?`<div class="sbr">
+      ${st.yes?`<div class="br"><span class="by">YES</span><span class="bt">${st.yes}</span></div>`:''}
+      ${st.no ?`<div class="br"><span class="bn">NO</span><span class="bt">${st.no}</span></div>`:''}
+    </div>`:'';
+    const curSub=(subFnStack[cardFn]||[]).slice(-1)[0];
+    const calls=(st.calls&&st.calls.length)?`<div class="fn-uses step-calls">${st.calls.map(c=>`
+      <div class="use-row">
+        <span class="use-arr">↳ 呼び出し</span>
+        <span class="use-fn${curSub===c?' uf-active':''}" onclick="event.stopPropagation();openSubFn('${cardFn}','${c}')">${c}</span>
+      </div>`).join('')}</div>`:'';
+    return `<div class="step-row">
+      <div class="si si-${st.t}">${icon}</div>
+      <div class="sb">
+        <div class="st">${st.tx}</div>
+        ${st.nt?`<div class="sn">${st.nt}</div>`:''}
+        ${br}
+        ${calls}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ══════════ DRAG RESIZE ══════════ */
+(function(){
+  function makeDrag(dvdId, getEl, getW, setW){
+    const dvd=document.getElementById(dvdId);
+    let drag=false, dsx=0, dsw=0;
+    dvd.addEventListener('mousedown',e=>{
+      drag=true; dsx=e.clientX;
+      dsw=getEl().getBoundingClientRect().width;
+      dvd.classList.add('drag');
+      document.body.style.userSelect='none';
+      document.body.style.cursor='col-resize';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove',e=>{
+      if(!drag) return;
+      const app=document.getElementById('app');
+      const nw=Math.max(240,Math.min(dsw+(e.clientX-dsx),app.clientWidth-240));
+      setW(nw); getEl().style.width=nw+'px';
+    });
+    document.addEventListener('mouseup',()=>{
+      if(!drag) return;
+      drag=false; dvd.classList.remove('drag');
+      document.body.style.userSelect=''; document.body.style.cursor='';
+    });
+  }
+  makeDrag('dvd1',()=>document.getElementById('left-wrap'), ()=>leftW, v=>{leftW=v});
+})();
+
+/* ══════════ NESTED-PANEL DRAG RESIZE (per-card, elements are re-created on every render → event delegation) ══════════ */
+(function(){
+  let dragCard=null, startX=0, startRatio=0.5, containerW=0;
+  document.addEventListener('mousedown', e=>{
+    const dvd=e.target.closest('.fid-dvd');
+    if(!dvd) return;
+    dragCard=dvd.dataset.card;
+    startX=e.clientX;
+    containerW=dvd.closest('.fid-body').getBoundingClientRect().width;
+    startRatio=subSplitRatio[dragCard] ?? 0.5;
+    dvd.classList.add('drag');
+    document.body.style.userSelect='none';
+    document.body.style.cursor='col-resize';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e=>{
+    if(!dragCard || !containerW) return;
+    let ratio=startRatio + (e.clientX-startX)/containerW;
+    ratio=Math.max(.2,Math.min(.8,ratio));
+    subSplitRatio[dragCard]=ratio;
+    document.querySelectorAll(`.fid-body[data-card="${dragCard}"] .fid-steps`).forEach(el=>{
+      el.style.flex=`0 0 calc(${(ratio*100).toFixed(2)}% - 3px)`;
+    });
+  });
+  document.addEventListener('mouseup', ()=>{
+    if(!dragCard) return;
+    document.querySelectorAll('.fid-dvd.drag').forEach(el=>el.classList.remove('drag'));
+    document.body.style.userSelect=''; document.body.style.cursor='';
+    dragCard=null; containerW=0;
+  });
+})();
+
+/* ══════════ INIT ══════════ */
+buildOverview();
+</script>

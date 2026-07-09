@@ -62,7 +62,7 @@ def _go_to(step: int, stop_auto: bool = True) -> None:
 
 
 def _build_and_go_step6() -> None:
-    from steps.step4_analyze import _build_final_tables
+    from streamlit_ui.step4_analyze import _build_final_tables
     _build_final_tables()
     st.session_state.step = 6
     st.session_state._scroll_to_top = True

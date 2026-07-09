@@ -1,0 +1,1008 @@
+<title>step4_analyze — 処理フロー</title>
+<style>
+/* ── ライトパレット（常時） ─────────────────────────────────────────── */
+:root {
+  --bg:       #F5F7FF;
+  --surface:  #FFFFFF;
+  --sur2:     #F8FAFF;
+  --sur3:     #EEF2FF;
+
+  --tx1: #1A1D3C;
+  --tx2: #4F5578;
+  --tx3: #9BA3C0;
+
+  --bd:  #DDE3F5;
+  --bd2: #C9D2EE;
+
+  --sh-sm: 0 1px 4px rgba(30,40,100,.07);
+  --sh:    0 2px 10px rgba(30,40,100,.09), 0 1px 3px rgba(30,40,100,.05);
+
+  /* Stage accent — S1 sky, S2 violet, S3 emerald, S4 amber, S5 rose */
+  --s1:#0284C7; --s1-bg:#EFF9FF; --s1-lt:#BAE6FD;
+  --s2:#6D28D9; --s2-bg:#F5F3FF; --s2-lt:#DDD6FE;
+  --s3:#059669; --s3-bg:#ECFDF5; --s3-lt:#A7F3D0;
+  --s4:#C2410C; --s4-bg:#FFF7ED; --s4-lt:#FED7AA;
+  --s5:#BE123C; --s5-bg:#FFF1F3; --s5-lt:#FECDD3;
+
+  --fc-p: #475569; --fc-c: #B45309; --fc-r: #059669;
+  --fc-ln: #CBD5E1;
+
+  --mono: 'Cascadia Code','SF Mono','Fira Code',Consolas,monospace;
+  --r: 10px; --rsm: 5px;
+}
+
+/* optional dark override via viewer toggle only */
+:root[data-theme="dark"] {
+  --bg:#0F172A; --surface:#1E293B; --sur2:#162032; --sur3:#0C1F40;
+  --tx1:#F1F5F9; --tx2:#94A3B8; --tx3:#475569;
+  --bd:#2E4060; --bd2:#3E5272;
+  --sh-sm:0 1px 4px rgba(0,0,0,.25); --sh:0 2px 10px rgba(0,0,0,.3);
+  --s1:#38BDF8; --s1-bg:#042F2E; --s1-lt:#0C4A6E;
+  --s2:#A78BFA; --s2-bg:#1A0F3A; --s2-lt:#2E1B5E;
+  --s3:#34D399; --s3-bg:#042F2E; --s3-lt:#064E3B;
+  --s4:#FB923C; --s4-bg:#1C0A00; --s4-lt:#431407;
+  --s5:#FB7185; --s5-bg:#280008; --s5-lt:#4C0519;
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--bg);color:var(--tx1);
+  font-family:system-ui,-apple-system,'Segoe UI',Helvetica,sans-serif;
+  font-size:13px;line-height:1.6;display:flex;flex-direction:column;
+}
+
+/* ── Topbar ── */
+.topbar{
+  flex-shrink:0;display:flex;align-items:center;gap:.6rem;
+  padding:.5rem 1.25rem;background:var(--surface);
+  border-bottom:1.5px solid var(--bd);box-shadow:var(--sh-sm);
+}
+.tb-mod{font-family:var(--mono);font-size:11px;color:var(--tx3)}
+.tb-sep{color:var(--bd2);font-size:12px}
+.tb-title{font-size:13.5px;font-weight:700;color:var(--tx1)}
+.tb-hint{margin-left:auto;font-size:11px;color:var(--tx3);font-style:italic}
+
+/* ── Root layout ── */
+#app{flex:1;display:flex;min-height:0;overflow:hidden}
+
+/* ── Left wrap (stage overview) ── */
+#left-wrap{flex:1;overflow-y:auto}
+#left-wrap::-webkit-scrollbar{width:4px}
+#left-wrap::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+#left-inner{max-width:680px;margin:0 auto;padding:1.5rem 2rem 2.5rem}
+#app.s-split #left-wrap{flex:none}
+#app.s-split #left-inner{max-width:none;margin:0;padding:1rem 1.1rem 2rem}
+
+/* ── Mid wrap (stage function flow) ── */
+#mid-wrap{
+  display:none;overflow:auto;
+  background:var(--sur2);border-left:1.5px solid var(--bd);
+}
+#mid-wrap::-webkit-scrollbar{width:4px}
+#mid-wrap::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+#app.s-split #mid-wrap{display:block;flex:1;min-width:260px}
+#mid-inner{padding:1.25rem 1.25rem 2rem}
+
+/* ── Drag handles ── */
+.dvd{
+  display:none;width:5px;flex-shrink:0;cursor:col-resize;
+  background:var(--bd);position:relative;transition:background .15s;
+}
+.dvd::after{
+  content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:32px;border-radius:2px;background:var(--bd2);
+}
+.dvd:hover,.dvd.drag{background:var(--sc,var(--s1))}
+.dvd:hover::after,.dvd.drag::after{background:var(--sc,var(--s1))}
+#app.s-split #dvd1{display:block}
+
+/* ── IO Banner ── */
+.io-bar{
+  display:flex;border:1.5px solid var(--bd);border-radius:var(--r);
+  overflow:hidden;background:var(--surface);margin-bottom:1.25rem;
+  box-shadow:var(--sh-sm);
+}
+.io-cell{flex:1;padding:.65rem 1rem}
+.io-cell+.io-cell{border-left:1.5px solid var(--bd)}
+.io-lbl{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--sc,var(--s1));margin-bottom:.2rem;
+}
+.io-val{font-family:var(--mono);font-size:11.5px;color:var(--tx1);font-weight:600}
+.io-sub{font-size:11px;color:var(--tx3);margin-top:.1rem}
+
+/* ── Stage card ── */
+.stage-card{
+  background:var(--surface);border:2px solid var(--bd);
+  border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm);
+  cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .12s;
+}
+.stage-card:hover{
+  border-color:var(--sc);transform:translateY(-1px);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 10%,transparent),var(--sh);
+}
+.stage-card.active{
+  border-color:var(--sc);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 14%,transparent),var(--sh);
+  background:color-mix(in srgb,var(--sc) 3%,var(--surface));
+}
+.stage-hd{
+  display:flex;align-items:center;gap:.55rem;
+  padding:.5rem .9rem;background:var(--sc-bg);border-bottom:1.5px solid var(--bd);
+}
+.stage-chip{
+  font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--sc);background:var(--surface);border:1.5px solid var(--sc);
+  border-radius:4px;padding:2px 7px;flex-shrink:0;
+}
+.stage-name{font-size:12.5px;font-weight:700;color:var(--sc)}
+.stage-body{padding:.7rem 1rem .9rem}
+.stage-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.55rem}
+.fn-pills{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.6rem}
+.pill{
+  font-family:var(--mono);font-size:11px;padding:.18rem .5rem;
+  border-radius:4px;border:1.5px solid var(--bd);
+  background:var(--sur2);color:var(--tx2);white-space:nowrap;
+}
+.pill.pub{
+  border-color:color-mix(in srgb,var(--sc) 35%,transparent);
+  background:color-mix(in srgb,var(--sc) 8%,transparent);
+  color:var(--sc);
+}
+.detail-rows{
+  border-top:1px solid var(--bd);padding:.5rem 0 .2rem;
+  display:flex;flex-direction:column;gap:.3rem;
+}
+.dr{display:grid;grid-template-columns:auto 1fr;gap:.4rem .8rem;align-items:baseline}
+.dk{font-size:10.5px;font-weight:700;color:var(--tx3);white-space:nowrap}
+.dv{font-size:12px;color:var(--tx2);line-height:1.45}
+
+/* toggle hint on active card */
+.stage-card.active .stage-hd::after{
+  content:'クリックで戻る';margin-left:auto;font-size:10px;
+  color:var(--sc);opacity:.7;
+}
+
+/* ── Arrow between cards ── */
+.arr{display:flex;flex-direction:column;align-items:center;padding:.3rem 0}
+.arr-line{width:1.5px;height:14px;background:var(--bd2)}
+.arr-head{
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-top:7px solid var(--bd2);
+}
+
+/* ── Click hint ── */
+.click-hint{margin-top:1rem;text-align:center;font-size:11.5px;color:var(--tx3)}
+
+/* ── Right: stage flow ── */
+.rf-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:.8rem}
+.rf-close{
+  width:28px;height:28px;border-radius:6px;border:1.5px solid var(--bd);
+  background:var(--surface);color:var(--tx3);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+  transition:background .13s,color .13s,border-color .13s;flex-shrink:0;
+}
+.rf-close:hover{background:var(--bd);color:var(--tx1);border-color:var(--bd2)}
+.sf-tag{font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--sc);margin-bottom:.3rem}
+.sf-title{font-size:15.5px;font-weight:800;color:var(--tx1);letter-spacing:-.015em;margin-bottom:.3rem}
+.sf-overview{font-size:12.5px;color:var(--tx2);line-height:1.65;margin-bottom:1rem}
+
+.sec-label{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--tx3);margin-bottom:.65rem;display:flex;align-items:center;gap:.5rem;
+}
+.sec-label::after{content:'';flex:1;height:1px;background:var(--bd)}
+
+/* ── Function flow box ── */
+.fn-box{
+  background:var(--surface);border:1.5px solid var(--bd);border-radius:var(--rsm);
+  padding:.65rem .9rem;cursor:pointer;margin-bottom:.5rem;
+  transition:border-color .13s,box-shadow .13s;
+}
+.fn-box:hover{
+  border-color:var(--sc);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 10%,transparent);
+}
+.fn-box.fx-active{
+  border-color:var(--sc);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 15%,transparent);
+  background:color-mix(in srgb,var(--sc) 4%,var(--surface));
+}
+.fn-box.fx-active > .fn-bh::after{
+  content:'▲ 閉じる';margin-left:auto;font-size:9.5px;font-weight:700;
+  color:var(--sc);opacity:.75;
+}
+.fn-bh{display:flex;align-items:center;gap:.45rem;margin-bottom:.3rem}
+.fn-nm{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--tx1)}
+.fn-box:hover .fn-nm,.fn-box.fx-active .fn-nm{color:var(--sc)}
+.fn-badge{
+  font-size:9px;font-weight:700;letter-spacing:.03em;
+  padding:1px 6px;border-radius:3px;flex-shrink:0;
+}
+.fb-pub{background:var(--sc);color:#fff}
+.fb-prv{background:var(--sur2);color:var(--tx3);border:1px solid var(--bd)}
+.fn-desc{font-size:11.5px;color:var(--tx2);margin-bottom:.4rem;line-height:1.45}
+.fn-uses{display:flex;flex-direction:column;gap:.2rem;margin-bottom:.35rem}
+.use-row{display:flex;align-items:baseline;gap:.35rem;font-size:11.5px}
+.use-arr{color:var(--tx3);font-size:10px;flex-shrink:0}
+.use-fn{
+  font-family:var(--mono);font-size:11px;color:var(--sc);cursor:pointer;
+  text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;
+}
+.use-fn:hover{text-decoration-style:solid}
+.use-fn.uf-active{color:var(--sc);font-weight:700;text-decoration-style:solid}
+.use-nt{color:var(--tx3);font-size:11px}
+.fn-ret{
+  display:flex;align-items:baseline;gap:.4rem;font-size:11px;
+  border-top:1px dashed var(--bd);padding-top:.3rem;color:var(--tx3);
+}
+.fn-ret-lbl{font-weight:700;flex-shrink:0}
+.fn-ret-val{font-family:var(--mono);color:var(--tx2)}
+
+/* ── Inline function detail (expands below the card, within stage flow) ── */
+.fn-inline-detail{
+  margin-top:.65rem;padding-top:.65rem;border-top:1.5px dashed var(--bd);
+}
+.fn-inline-detail .fd-io{margin-bottom:.75rem}
+.fn-inline-detail .sec-label{margin-top:0}
+
+/* two-column body inside an expanded card: steps (left) + nested-fn inspector (right).
+   Split starts at the card's center (50/50) and is drag-resizable via .fid-dvd. */
+.fid-body{display:flex;align-items:stretch}
+.fid-steps{flex:1 1 auto;min-width:160px}
+.fid-steps .steps{max-width:none}
+
+/* drag handle between a card's own steps and its nested-fn inspector */
+.fid-dvd{
+  width:6px;flex-shrink:0;align-self:stretch;cursor:col-resize;
+  background:var(--bd);position:relative;transition:background .15s;
+  margin:0 .55rem;
+}
+.fid-dvd::after{
+  content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:28px;border-radius:2px;background:var(--bd2);
+}
+.fid-dvd:hover,.fid-dvd.drag{background:var(--sc)}
+.fid-dvd:hover::after,.fid-dvd.drag::after{background:var(--sc)}
+
+/* ── Nested-function inspector (shown to the right of a step's own steps, inside the same card) ── */
+.fid-sub{
+  flex:1 1 auto;min-width:160px;
+}
+.fid-sub-hd{margin-bottom:.5rem}
+.fid-crumb{font-size:10.5px;color:var(--tx3);display:flex;flex-wrap:wrap;gap:.3rem;align-items:center;margin-bottom:.2rem}
+.cr-lnk{color:var(--sc);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px}
+.cr-lnk:hover{text-decoration-style:solid}
+.cr-sep{color:var(--tx3)}
+/* 子関数ヘッダー: 親カードの「▲ 閉じる」と同じ配置・挙動（右上・クリックで閉じる） */
+.fid-sub .fn-bh{margin-bottom:.4rem;cursor:pointer}
+.fid-sub .fn-bh:hover .fn-nm{color:var(--sc)}
+.fid-sub-close-hint{
+  margin-left:auto;font-size:9.5px;font-weight:700;color:var(--sc);opacity:.75;
+}
+.fid-sub .fd-desc{font-size:11.5px;color:var(--tx2);line-height:1.55;margin-bottom:.6rem}
+.fid-sub .fd-io{margin-bottom:.65rem}
+.fid-sub .steps{max-width:none}
+
+/* step-level "calls" links (inline, inside a step's body) */
+.step-calls{margin-top:.3rem}
+
+/* flow arrow */
+.flow-arr{display:flex;flex-direction:column;align-items:center;padding:.15rem 0;margin:.1rem 0}
+.fa-ln{width:1.5px;height:16px;background:var(--fc-ln)}
+.fa-lbl{font-size:10px;color:var(--tx3);margin:.05rem 0;text-align:center}
+.fa-hd{border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid var(--fc-ln)}
+
+.fd-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.75rem}
+.fd-io{display:flex;border:1.5px solid var(--bd);border-radius:var(--rsm);overflow:hidden;margin-bottom:1rem;background:var(--sur2)}
+.fd-io .io-cell{padding:.5rem .8rem}
+
+/* steps */
+.steps{display:flex;flex-direction:column;max-width:520px}
+.step-row{display:flex;gap:.6rem;position:relative}
+.step-row:not(:last-child)::before{
+  content:'';position:absolute;left:12px;top:26px;bottom:-2px;
+  width:1.5px;background:var(--fc-ln);z-index:0;
+}
+.si{
+  flex-shrink:0;width:25px;height:25px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;margin-top:.1rem;position:relative;z-index:1;
+}
+.si-p{background:color-mix(in srgb,#64748B 12%,transparent);color:#64748B;border:1.5px solid #64748B}
+/* 菱形: ::before=外枠(amber), ::after=内塗り(cream), テキストは最前面 */
+.si-c{
+  border-radius:0;background:transparent;
+  color:#92400E;font-size:9px;font-family:var(--mono);
+  isolation:isolate;
+}
+.si-c::before{
+  content:'';position:absolute;inset:0;
+  background:#D97706;
+  clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%);
+  z-index:-1;
+}
+.si-c::after{
+  content:'';position:absolute;inset:2.5px;
+  background:#FEF3C7;
+  clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%);
+  z-index:-1;
+}
+.si-r{background:color-mix(in srgb,#059669 15%,transparent);color:#059669;border:1.5px solid #059669}
+.sb{flex:1;padding:.2rem 0 .85rem;min-width:0}
+.st{font-size:12.5px;color:var(--tx1);font-weight:500;line-height:1.45}
+.sn{font-size:11.5px;color:var(--tx2);margin-top:.2rem;line-height:1.45}
+.sbr{margin-top:.3rem;display:flex;flex-direction:column;gap:.2rem}
+.br{display:flex;align-items:baseline;gap:.35rem;font-size:11.5px}
+.by{font-size:9px;font-weight:700;background:#D1FAE5;color:#065F46;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bn{font-size:9px;font-weight:700;background:#FEF3C7;color:#92400E;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bt{color:var(--tx2)}
+.step-lg{
+  display:flex;gap:.75rem;flex-wrap:wrap;font-size:11px;color:var(--tx3);
+  margin-top:.75rem;padding-top:.6rem;border-top:1px solid var(--bd);
+}
+.lg-i{display:flex;align-items:center;gap:.3rem}
+.lg-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0}
+</style>
+
+<div class="topbar">
+  <a href="flow.html" style="font-size:11px;color:var(--tx3);text-decoration:none;flex-shrink:0" title="全体処理フローに戻る">← 全体フロー</a>
+  <span class="tb-sep">›</span>
+  <span class="tb-mod">src / step4_analyze.py</span>
+  <span class="tb-sep">›</span>
+  <span class="tb-title">テーブル分析_処理フロー</span>
+</div>
+
+<div id="app">
+  <div id="left-wrap"><div id="left-inner"></div></div>
+  <div id="dvd1" class="dvd"></div>
+  <div id="mid-wrap"><div id="mid-inner"></div></div>
+</div>
+
+<script>
+/* ══════════ DATA ══════════ */
+const STAGES = [
+  { id:1, k:'s1',
+    name:'合計関係・シート階層のルールベース事前計算機能',
+    emoji:'🧮',
+    desc:'pandas/numpy のみで、テーブル間の「合計＝子テーブルの合算」関係とシート単位の集計階層をAI呼び出し前に検出し、事実としてプロンプトに注入する。',
+    fns:[{n:'detect_sum_relations',pub:true},{n:'format_relation_facts',pub:true},{n:'detect_sheet_levels',pub:true},{n:'format_sheet_level_hints',pub:true},{n:'_group_by_columns',pub:false},{n:'_numeric_array',pub:false},{n:'_total',pub:false},{n:'_match_ratio',pub:false},{n:'_find_relations_in_group',pub:false},{n:'_drop_supersets',pub:false}],
+    rows:[
+      {k:'グルーピング条件',v:'列名（trim後）が完全一致するテーブルを同一スキーマとしてグループ化（2件未満のグループは除外）'},
+      {k:'組合せ探索',v:'合計値の小さい順に親候補を走査し、最大14件の子候補から最大9個までの組合せを総当たり（上限5万通り）'},
+      {k:'一致判定',v:'相対誤差3%以内に収まるセルの割合が88%以上で関係を確定、上位集合は _drop_supersets で除去'},
+      {k:'集計シート判定',v:'最大シートの合計が他シート平均の1.5倍以上 かつ 他シートが2件以上で集計シート候補とする'},
+    ]},
+  { id:2, k:'s2',
+    name:'APIクライアント準備機能',
+    emoji:'🔌',
+    desc:'環境変数 OPENAI_API_TYPE に基づき OpenAI または Azure OpenAI のクライアントとモデル名を構築する。',
+    fns:[{n:'_make_client',pub:false}],
+    rows:[
+      {k:'OpenAI',v:'OPENAI_API_KEY / OPENAI_MODEL（既定 gpt-5.4）から構築'},
+      {k:'Azure OpenAI',v:'AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_VERSION / AZURE_OPENAI_DEPLOYMENT（既定 gpt-5.4）から構築'},
+    ]},
+  { id:3, k:'s3',
+    name:'プロンプト構築機能',
+    emoji:'📝',
+    desc:'各テーブルの構造・サンプルデータ・注記をAIが解釈しやすいテキストに整形し、クロスシート統合候補も事前計算してプロンプトに付加する。',
+    fns:[{n:'_format_table_detail',pub:false},{n:'_format_merge_candidates',pub:false},{n:'_compute_merge_recommendations',pub:false},{n:'_format_table_light',pub:false}],
+    rows:[
+      {k:'詳細版',v:'_format_table_detail — 列名・先頭/末尾サンプル行・計/合計行の見出し例・テーブル外注記を含むフル記述（単一呼び出し／Phase1用）'},
+      {k:'軽量版',v:'_format_table_light — 列名先頭8件・粒度・表示名のみの1行サマリー（Phase2クロスシート統合用）'},
+      {k:'統合候補事前計算',v:'同一親タイトル×同一子数で複数シートに跨るグループを検出し、テキスト整形(_format_merge_candidates)と構造化データ(_compute_merge_recommendations)の両方を生成'},
+    ]},
+  { id:4, k:'s4',
+    name:'API呼び出しとバッチ処理統括機能',
+    emoji:'🚀',
+    desc:'テーブル数に応じて単一呼び出しと、シート別バッチ並列＋クロスシート統合の2フェーズ処理を切り替え、429エラー時は指数バックオフでリトライする。',
+    fns:[{n:'analyze_tables',pub:true},{n:'_analyze_single',pub:false},{n:'_analyze_chunked',pub:false},{n:'_analyze_sheet_batch',pub:false},{n:'_call_api',pub:false},{n:'_merge_raws',pub:false}],
+    rows:[
+      {k:'分岐条件',v:'テーブル数 ≤ _SINGLE_CALL_LIMIT(50) → 単一呼び出し（_analyze_single） / 超過 → チャンク分割（_analyze_chunked）'},
+      {k:'バッチ分割',v:'シートごとに最大 _MAX_TABLES_PER_BATCH(10) 件ずつのサブバッチに分割し ThreadPoolExecutor(max_workers=3) で並列実行'},
+      {k:'リトライ',v:'429 / レートリミットエラー時のみ 15秒→30秒→60秒の指数バックオフで最大4回試行'},
+      {k:'Phase2フォールバック',v:'クロスシート統合呼び出しが失敗した場合は integration_recommendations=[] にフォールバックしベストエフォートで継続'},
+    ]},
+  { id:5, k:'s5',
+    name:'レスポンス解析機能',
+    emoji:'🔍',
+    desc:'APIから返された生JSONを検証・フィルタリングし、AIAnalysisResult データクラスへ変換する。',
+    fns:[{n:'_parse_response',pub:false}],
+    rows:[
+      {k:'ID検証',v:'table_id / parent_table_ids / child_table_ids / similar_table_ids 等を valid_ids でフィルタし不正なIDを除外'},
+      {k:'重複排除',v:'(parent_id, frozenset(child_ids)) をキーに integration_recommendations の重複を除去'},
+      {k:'新旧形式互換',v:'new_column_name(単数・旧)と new_column_names(複数・新)、axis_parent_table_ids 等を吸収して統一形式に変換'},
+    ]},
+];
+
+const FLOWS = {
+  1:{ overview:'detect_sum_relations と format_relation_facts が合計関係の検出とプロンプト整形を担い、detect_sheet_levels と format_sheet_level_hints が集計シート階層の検出とプロンプト整形を担う。いずれも pandas/numpy のみで完結するルールベース処理でAI呼び出しは行わない。',
+      nodes:[
+        {fn:'detect_sum_relations',pub:true,desc:'同一スキーマのテーブル群から「親テーブル ≈ 子テーブルの合算」関係を数値計算で検出',
+         uses:[
+           {fn:'_group_by_columns',note:'列名完全一致でテーブルをグループ化'},
+           {fn:'_find_relations_in_group',note:'グループ内で親子の組合せを総当たり探索'},
+           {fn:'_drop_supersets',note:'冗長な上位集合の関係を除去'},
+         ],ret:'List[Dict]（parent_id, child_ids, match_ratio）'},
+        {type:'arrow',label:'relations を渡す'},
+        {fn:'format_relation_facts',pub:true,desc:'検出済み合計関係をAI向けプロンプトセクションに整形',
+         uses:[],ret:'str（プロンプト埋め込み用テキスト、関係なしなら空文字列）'},
+        {fn:'detect_sheet_levels',pub:true,desc:'同一スキーマのテーブル群でシート単位の数値合計を比較し、集計シート候補を特定',
+         uses:[
+           {fn:'_group_by_columns',note:'列名完全一致でテーブルをグループ化（detect_sum_relations と共有）'},
+           {fn:'_numeric_array',note:'各テーブルの数値配列を取得しシート単位で合計'},
+         ],ret:'List[Dict]（aggregate_sheet, source_sheets）'},
+        {type:'arrow',label:'hints を渡す'},
+        {fn:'format_sheet_level_hints',pub:true,desc:'集計シート候補をAI向けプロンプトセクションに整形',
+         uses:[],ret:'str（プロンプト埋め込み用テキスト、候補なしなら空文字列）'},
+      ]},
+  2:{ overview:'_make_client が環境変数から API 種別（OpenAI / Azure OpenAI）を判定し、対応するクライアントとモデル名を構築する単独の準備関数。',
+      nodes:[
+        {fn:'_make_client',pub:false,desc:'OPENAI_API_TYPE 環境変数に基づき (client, model_or_deployment) を構築する',
+         uses:[],ret:'Tuple[Any, str]（client, model）'},
+      ]},
+  3:{ overview:'4つの整形関数がそれぞれ独立してプロンプト用テキスト／データを生成する。互いに呼び出し合うことはなく、いずれも stage4 のバッチ処理関数から利用される。',
+      nodes:[
+        {fn:'_format_table_detail',pub:false,desc:'テーブル1件分の詳細記述（列名・サンプル行・計行見出し・注記）を生成',
+         uses:[],ret:'str（1テーブル分のプロンプト用テキストブロック）'},
+        {fn:'_format_merge_candidates',pub:false,desc:'数値確認済みの合計関係から複数シートに跨る親子構造グループを検出し、Phase2プロンプト用テキストに整形',
+         uses:[],ret:'str（クロスシート統合候補セクション、候補なしなら空文字列）'},
+        {fn:'_compute_merge_recommendations',pub:false,desc:'_format_merge_candidates と同じグループ化ロジックで、AI不要の決定論的な2軸統合推奨を直接生成',
+         uses:[],ret:'List[Dict]（決定論的な2軸 integration_recommendation）'},
+        {fn:'_format_table_light',pub:false,desc:'クロスシート統合プロンプト用にテーブル1件を1行サマリーに整形',
+         uses:[],ret:'str（1行サマリー）'},
+      ]},
+  4:{ overview:'analyze_tables が唯一の公開エントリポイント。stage1 のルールベース事前計算と stage2 のクライアント準備を行った後、テーブル数に応じて _analyze_single（単一API呼び出し）または _analyze_chunked（シート別バッチ並列＋クロスシート統合の2フェーズ）に処理を委譲する。',
+      nodes:[
+        {fn:'analyze_tables',pub:true,desc:'テーブル数に応じて単一呼び出し／チャンク分割の処理経路を選択する統括エントリポイント',
+         uses:[
+           {fn:'_make_client',note:'APIクライアントとモデル名を取得（stage2）'},
+           {fn:'detect_sum_relations',note:'合計関係を事前計算（stage1）'},
+           {fn:'format_relation_facts',note:'合計関係をプロンプト用テキストに整形（stage1）'},
+           {fn:'detect_sheet_levels',note:'集計シート候補を事前計算（stage1）'},
+           {fn:'format_sheet_level_hints',note:'集計シート候補をプロンプト用テキストに整形（stage1）'},
+           {fn:'_analyze_single',note:'テーブル数 ≤ 50 の場合の単一API呼び出しパス'},
+           {fn:'_analyze_chunked',note:'テーブル数 > 50 の場合の2フェーズ・チャンク分割パス'},
+         ],ret:'AIAnalysisResult'},
+      ]},
+  5:{ overview:'_parse_response が API から返された生JSONを検証・正規化し、AIAnalysisResult データクラスに変換する。',
+      nodes:[
+        {fn:'_parse_response',pub:false,desc:'生JSONレスポンスを検証・フィルタリングして AIAnalysisResult に変換する',
+         uses:[],ret:'AIAnalysisResult'},
+      ]},
+};
+
+const FN = {
+  detect_sum_relations:{s:1,pub:true,io:{i:'tables: List[DetectedTable]',o:'List[Dict]（parent_id, child_ids, match_ratio）'},
+    desc:'同一スキーマのテーブル群を対象に、検証済みの全合計関係（親の数値 ≈ 子の要素ごとの合計）を返す。',
+    steps:[
+      {t:'p',tx:'_group_by_columns で同一スキーマ（列名完全一致）のテーブル群にグルーピング',calls:['_group_by_columns']},
+      {t:'p',tx:'各グループを走査'},
+      {t:'c',tx:'グループ内のテーブル数 ≥ 3？',yes:'_find_relations_in_group で合計関係を検出し relations に追加',no:'スキップ（3件未満では親子関係を判定できない）',calls:['_find_relations_in_group']},
+      {t:'r',tx:'return _drop_supersets(relations)（上位集合となる冗長な関係を除去）',calls:['_drop_supersets']},
+    ]},
+  format_relation_facts:{s:1,pub:true,io:{i:'relations: List[Dict], tables: List[DetectedTable]',o:'str（プロンプト用テキスト、関係なしなら空文字列）'},
+    desc:'事前計算済みの合計関係をAI向けプロンプトセクションとして整形する。',
+    steps:[
+      {t:'c',tx:'relations が空？',yes:'return ""'},
+      {t:'p',tx:'table_id → タイトル の対応辞書を構築'},
+      {t:'p',tx:'見出し行（"事前検証済み：数値合計関係" セクションのヘッダー）を組み立て'},
+      {t:'p',tx:'各関係を "親 ≈ 子1 + 子2 …　[数値一致率xx%]" 形式の行に整形',nt:'match_ratio を百分率表記に変換'},
+      {t:'p',tx:'granularity_level / is_minimum_granularity_candidate の判定基準の説明行を追加'},
+      {t:'r',tx:'return "\\n".join(lines)（プロンプト埋め込み用テキスト）'},
+    ]},
+  detect_sheet_levels:{s:1,pub:true,io:{i:'tables: List[DetectedTable]',o:'List[Dict]（aggregate_sheet, source_sheets）'},
+    desc:'同一スキーマのテーブルグループ内でシート単位の数値合計を比較し、集計シートの候補を特定する。',
+    steps:[
+      {t:'p',tx:'_group_by_columns で同一スキーマのテーブル群にグルーピング',calls:['_group_by_columns']},
+      {t:'p',tx:'各グループでシートごとの数値合計(sheet_sums)を集計',nt:'_numeric_array で数値配列を取得し絶対値の総和を加算（合計1.0未満のテーブルは無視）',calls:['_numeric_array']},
+      {t:'c',tx:'グループ内のシート数 < 3？',yes:'このグループはスキップ（比較対象が少なすぎる）'},
+      {t:'p',tx:'シート合計を降順ソートし、最大シート(top_sheet/top_total)と残りシートの平均(avg_other)を算出'},
+      {t:'c',tx:'top_total ≥ avg_other×1.5 かつ 残りシート数 ≥ 2？',yes:'top_sheet に集計シート票を1票加算し、残りシートを smaller_peers に記録',no:'このグループでは集計シートなしと判定'},
+      {t:'r',tx:'return 得票数 ≥1 かつ集計元シートが2件以上の集計シート候補一覧（aggregate_sheet, source_sheets）'},
+    ]},
+  format_sheet_level_hints:{s:1,pub:true,io:{i:'hints: List[Dict]',o:'str（プロンプト用テキスト、候補なしなら空文字列）'},
+    desc:'集計シート候補をAI向けプロンプトセクションとして整形する。',
+    steps:[
+      {t:'c',tx:'hints が空？',yes:'return ""'},
+      {t:'p',tx:'"シート間集計構造（推定）" の絶対ルール見出し行（集計シート内は summary 確定）を組み立て'},
+      {t:'p',tx:'各ヒントを "【集計シート候補】 シート名 ← 集計元候補シート: ..." 形式の行に整形',nt:'集計元シートは先頭6件のみ表示し超過分は "…" で省略'},
+      {t:'r',tx:'return "\\n".join(lines) + "\\n"（プロンプト埋め込み用テキスト）'},
+    ]},
+  _group_by_columns:{s:1,pub:false,io:{i:'tables: List[DetectedTable]',o:'List[List[DetectedTable]]（同一スキーマのグループ、2件未満は除外）'},
+    desc:'完全に同一の列名（trim後）を持つテーブルをグループ化する。',
+    steps:[
+      {t:'p',tx:'各テーブルを走査'},
+      {t:'c',tx:'df が None または空？',yes:'スキップ'},
+      {t:'p',tx:'列名（strip済み）のタプルをキーとしてバケットに追加'},
+      {t:'r',tx:'return 2件以上のテーブルを含むバケットのみをグループとして返す'},
+    ]},
+  _numeric_array:{s:1,pub:false,io:{i:'t: DetectedTable',o:'np.ndarray | None'},
+    desc:'テーブルの数値列のみを抽出し float 配列として返す。',
+    steps:[
+      {t:'c',tx:'df が None？',yes:'return None'},
+      {t:'p',tx:'select_dtypes で数値型の列のみを抽出'},
+      {t:'c',tx:'数値列が空？',yes:'return None',no:'return float 配列に変換した値'},
+    ]},
+  _total:{s:1,pub:false,io:{i:'t: DetectedTable',o:'float'},
+    desc:'テーブルの数値セルの絶対値合計を返す。',
+    steps:[
+      {t:'p',tx:'_numeric_array で数値配列を取得',calls:['_numeric_array']},
+      {t:'c',tx:'配列が None？',yes:'return 0.0'},
+      {t:'r',tx:'return 絶対値の総和（NaN除外）'},
+    ]},
+  _match_ratio:{s:1,pub:false,io:{i:'parent: DetectedTable, children: List[DetectedTable], tol=0.03',o:'float（一致率 0〜1、比較不能なら -1.0）'},
+    desc:'相対許容誤差 tol の範囲内で parent_value ≈ sum(child_values) を満たす数値セルの割合を返す。',
+    steps:[
+      {t:'p',tx:'親テーブルの数値配列を取得',calls:['_numeric_array']},
+      {t:'c',tx:'親の配列が None？',yes:'return -1.0'},
+      {t:'p',tx:'各子テーブルの数値配列を取得',calls:['_numeric_array']},
+      {t:'c',tx:'いずれかの子が None または親と形状不一致？',yes:'return -1.0（比較不能）'},
+      {t:'p',tx:'子テーブルの配列を要素ごとに加算して child_sum を算出（NaN→0）'},
+      {t:'p',tx:'親配列の絶対値が0.5超のセルのみを比較対象マスク(mask)として抽出'},
+      {t:'c',tx:'比較対象セルが0件？',yes:'return -1.0'},
+      {t:'r',tx:'return 相対誤差が tol（既定3%）以内のセルの割合（一致率）'},
+    ]},
+  _find_relations_in_group:{s:1,pub:false,io:{i:'group: List[DetectedTable]',o:'List[Dict]（parent_id, child_ids, match_ratio）'},
+    desc:'構造的に同一のテーブル集合内で、数値合計が一致する全ての親子関係を総当たりで検出する。',
+    steps:[
+      {t:'p',tx:'各テーブルの合計値(totals)を _total で算出し、合計値の昇順にソート',calls:['_total']},
+      {t:'p',tx:'ソート済みリストの各テーブルを親候補（i番目、i≥2）として走査'},
+      {t:'c',tx:'親候補の合計値 < 1.0？',yes:'次の親候補へ（無視できるほど小さい）'},
+      {t:'p',tx:'親より合計値が小さい かつ 合計値 > 0.1 のテーブルを子候補(smaller)として収集'},
+      {t:'c',tx:'子候補が2件未満？',yes:'次の親候補へ'},
+      {t:'c',tx:'子候補が MAX_SMALLER(14件) 超？',yes:'同一シート優先で最大14件に絞り込み',nt:'組合せ爆発を防ぐため、親と同シートの子を優先し残りを他シートから補充'},
+      {t:'p',tx:'組合せ数が COMBO_CAP(5万) 以下になるまで最大組合せサイズ(max_k、初期値9)を1ずつ引き下げ'},
+      {t:'p',tx:'k=2〜max_k の全組合せ(combinations)を走査し、子の合計が親の72%〜115%に収まる部分集合のみ候補化'},
+      {t:'c',tx:'部分集合が親と異なるシートの子を含む？',yes:'その全子が他シート由来 かつ グループ内の全他シートを網羅する場合のみ許可（cross-sheet集計の検証）',no:'そのまま候補として許可'},
+      {t:'p',tx:'_match_ratio で候補の数値一致率を検証し、88%以上なら found_sets に追加',calls:['_match_ratio']},
+      {t:'p',tx:'found_sets から他の集合の上位集合になっているものを除去し最小構成(minimal)のみ残す'},
+      {t:'r',tx:'return 親候補ごとに minimal な (parent_id, child_ids, match_ratio) を relations に追加して返す'},
+    ]},
+  _drop_supersets:{s:1,pub:false,io:{i:'relations: List[Dict]',o:'List[Dict]（親ごとの最小分解のみ）'},
+    desc:'各親に対して上位集合となる子集合のみを除去し、全ての最小分解を保持する。',
+    steps:[
+      {t:'p',tx:'relations を parent_id でソートしグルーピング(groupby)'},
+      {t:'p',tx:'親ごとに子集合(frozenset)のリストを構築'},
+      {t:'c',tx:'他の子集合の真の上位集合になっている？',yes:'除去（より細かい分解が既に存在するため冗長）',no:'結果に残す'},
+      {t:'r',tx:'return 各親について最小分解のみを残した relations'},
+    ]},
+  _make_client:{s:2,pub:false,io:{i:'なし（環境変数から読み込み）',o:'Tuple[Any, str]（client, model_or_deployment）'},
+    desc:'OPENAI_API_TYPE 環境変数に基づいて OpenAI または Azure OpenAI のクライアントとモデル名を構築する。',
+    steps:[
+      {t:'p',tx:'環境変数 OPENAI_API_TYPE を取得（既定 "openai"）'},
+      {t:'c',tx:'api_type が "azure"？',yes:'AzureOpenAI クライアントを AZURE_OPENAI_* 環境変数から構築し、model は AZURE_OPENAI_DEPLOYMENT（既定 gpt-5.4）',no:'OpenAI クライアントを OPENAI_API_KEY から構築し、model は OPENAI_MODEL（既定 gpt-5.4）'},
+      {t:'r',tx:'return (client, model)'},
+    ]},
+  _format_table_detail:{s:3,pub:false,io:{i:'t: DetectedTable, max_sample=5, max_tail=3',o:'str（プロンプト埋め込み用テーブル詳細テキスト）'},
+    desc:'テーブル1件分の詳細記述（列名・サンプル行・計行見出し・注記）をプロンプト用テキストに整形する。',
+    steps:[
+      {t:'p',tx:'to_summary_dict() でテーブルの列名・サンプル行・タイトル等の要約 dict を取得',nt:'max_sample_rows=max_sample'},
+      {t:'p',tx:'列名一覧を整形（20列超なら "ほかN列" を付記）'},
+      {t:'p',tx:'サンプル先頭行を "先頭行N: 列=値、…" 形式で整形（各行10列まで）'},
+      {t:'c',tx:'行数 > max_sample？',yes:'df.tail(max_tail) を取得し "末尾行N: ..." として整形',nt:'AIがテーブル間の合計値を比較できるよう末尾行も含める'},
+      {t:'p',tx:'セクションタイトル行を整形（存在する場合のみ）'},
+      {t:'p',tx:'各行の先頭3セルを走査し「計」「合計」「総計」「小計」等のマーカーを含む行見出しを収集',nt:'構造整合性チェック用に "計・合計行の見出し例" として付記'},
+      {t:'p',tx:'テーブル外注記(notes)を先頭3件、各120文字までに整形'},
+      {t:'r',tx:'return テーブルID・シート名・位置・サイズ・列名・各行情報を結合した1テーブル分のテキストブロック'},
+    ]},
+  _format_merge_candidates:{s:3,pub:false,io:{i:'relations: List[Dict], tables: List[DetectedTable], aggregate_sheets: Optional[Set[str]]=None',o:'str（クロスシート統合候補セクション、候補なしなら空文字列）'},
+    desc:'数値確認済みの合計関係から、複数の支店シートに跨って存在する同一タイプの親子構造をPhase2プロンプト用テキストに整形する。',
+    steps:[
+      {t:'c',tx:'relations が空？',yes:'return ""'},
+      {t:'p',tx:'各 relation を (親タイトル, 子数k) キーでグループ化(by_type)',nt:'親テーブルが見つからない・タイトル空・k<2 の関係は除外'},
+      {t:'p',tx:'グループごとに、集計シート以外(branch_entries)のシート集合(branch_sheets)を算出'},
+      {t:'c',tx:'branch_sheets が2件未満？',yes:'このグループはスキップ（複数シートに跨っていない）'},
+      {t:'p',tx:'該当グループの全子テーブルID・親テーブルID・子の区分例タイトル・集計シート側の親ID(agg_parent_ids)を集約し cross_sheet_groups に追加'},
+      {t:'c',tx:'cross_sheet_groups が空？',yes:'return ""（クロスシート候補なし）'},
+      {t:'p',tx:'"【必須】クロスシート2軸統合候補" セクションの見出し・絶対ルール説明を組み立て'},
+      {t:'p',tx:'各グループを「対象シート」「親テーブルID」「★全子テーブルIDs」「子テーブルの区分例」等の行として整形'},
+      {t:'r',tx:'return "\\n".join(lines)（Phase2プロンプト埋め込み用テキスト）'},
+    ]},
+  _compute_merge_recommendations:{s:3,pub:false,io:{i:'relations: List[Dict], tables: List[DetectedTable], aggregate_sheets: Optional[Set[str]]=None',o:'List[Dict]（決定論的な2軸 integration_recommendation）'},
+    desc:'数値確認済みの関係から直接、AI不要で2軸統合推奨のdictを生成する（_format_merge_candidatesと同じグループ化ロジックを使用）。',
+    steps:[
+      {t:'c',tx:'relations が空？',yes:'return []'},
+      {t:'p',tx:'_format_merge_candidates と同じロジックで (親タイトル, 子数k) ごとにグループ化(by_type)'},
+      {t:'p',tx:'グループごとに集計シート以外のシート集合(branch_sheets)を算出'},
+      {t:'c',tx:'branch_sheets が2件未満？',yes:'このグループはスキップ'},
+      {t:'p',tx:'全子テーブルIDと new_column_values（{子ID: [シート名, テーブルタイトル]}）を構築'},
+      {t:'p',tx:'axis_parent_table_ids を決定',nt:'index0=集計シート側の同タイプ親（あれば）、index1=最初の支店シートの親'},
+      {t:'p',tx:'group_name・description・reasoning を定型文で生成し dict を recs に追加',nt:'recommendation_id は "IR_AUTO_連番"'},
+      {t:'r',tx:'return recs（Python計算のみで確定した2軸統合推奨リスト、AI呼び出し不要）'},
+    ]},
+  _format_table_light:{s:3,pub:false,io:{i:'t: DetectedTable, granularity="", display_name=""',o:'str（クロスシート統合プロンプト用1行サマリー）'},
+    desc:'クロスシート統合プロンプト（Phase2）で使用する、テーブル1件分の1行サマリーを生成する。',
+    steps:[
+      {t:'p',tx:'先頭8列の列名を取得し整形（8列超なら "…ほかN列" を付記）'},
+      {t:'p',tx:'タイトル・粒度(granularity)・表示名の各修飾テキストを条件付きで組み立て',nt:'値が空なら該当テキストは付与しない'},
+      {t:'r',tx:'return "[table_id] シート:… [タイトル] (粒度) 表示名:「…」 | 行×列 | 列: …" の1行サマリー'},
+    ]},
+  analyze_tables:{s:4,pub:true,io:{i:'tables: List[DetectedTable], sheet_names: List[str]',o:'AIAnalysisResult'},
+    desc:'OpenAI/Azure OpenAI を使用してテーブルの関係を分析する統括エントリポイント。テーブル数が多い場合は2フェーズのチャンク分割に切り替える。',
+    steps:[
+      {t:'p',tx:'_make_client で API クライアントとモデル名を取得',calls:['_make_client']},
+      {t:'p',tx:'detect_sum_relations で合計関係を事前計算し、format_relation_facts でプロンプト用テキストに整形',calls:['detect_sum_relations','format_relation_facts']},
+      {t:'p',tx:'detect_sheet_levels で集計シート候補を事前計算し、format_sheet_level_hints でプロンプト用テキストに整形',calls:['detect_sheet_levels','format_sheet_level_hints']},
+      {t:'c',tx:'テーブル数 n ≤ _SINGLE_CALL_LIMIT(50)？',yes:'_analyze_single で単一API呼び出しパスへ',no:'_analyze_chunked で2フェーズ・チャンク分割パスへ',calls:['_analyze_single','_analyze_chunked']},
+      {t:'r',tx:'return AIAnalysisResult（_analyze_single または _analyze_chunked の戻り値）'},
+    ]},
+  _analyze_single:{s:4,pub:false,io:{i:'client, model, tables, sheet_names, relation_facts, sheet_level_hints=""',o:'AIAnalysisResult'},
+    desc:'テーブル数が _SINGLE_CALL_LIMIT 以下の場合の単一API呼び出しパス（レガシーパス）。',
+    steps:[
+      {t:'p',tx:'テーブル数 n に応じてサンプル行数(max_sample)・末尾行数(max_tail)を段階的に縮小',nt:'n>25→3/2、n>15→4/3、それ以外→5/3（プロンプト長を抑制）'},
+      {t:'p',tx:'_format_table_detail で各テーブルの詳細テキストを生成し結合',calls:['_format_table_detail']},
+      {t:'p',tx:'USER_PROMPT に sheet_list / sheet_level_hints / table_details / relation_facts を埋め込みユーザーメッセージを構築'},
+      {t:'p',tx:'出力トークン上限(completion_tokens)を n×300 に基づき 8192〜16384 の範囲で決定'},
+      {t:'p',tx:'_call_api で system/user メッセージを送信',calls:['_call_api']},
+      {t:'c',tx:'レスポンスが不正な JSON？',yes:'ValueError を送出（レスポンス先頭500文字を含む）'},
+      {t:'r',tx:'return _parse_response(raw, tables)',calls:['_parse_response']},
+    ]},
+  _analyze_chunked:{s:4,pub:false,io:{i:'client, model, tables, sheet_names, relations, sheet_hints_raw, relation_facts, sheet_level_hints=""',o:'AIAnalysisResult'},
+    desc:'大規模テーブルセット向けの2フェーズチャンクパス。Phase1でシート別に並列分析し、Phase2でクロスシート統合推奨を生成する。',
+    steps:[
+      {t:'p',tx:'テーブルをシート名でグループ化(by_sheet)し、各シートを _MAX_TABLES_PER_BATCH(10件)ごとのサブバッチ(batches)に分割'},
+      {t:'p',tx:'_run_batch クロージャを定義',nt:'内部で _analyze_sheet_batch を呼び出し (バッチindex, 生JSON) を返す小さなラッパー。ThreadPoolExecutor に渡すためだけに存在する内部専用関数（独立したFNエントリ化はしない）',calls:['_analyze_sheet_batch']},
+      {t:'p',tx:'ThreadPoolExecutor(max_workers=3) で全サブバッチを並列実行し、as_completed で完了順に batch_raws[idx] へ格納（Phase1: シート別並列分析）'},
+      {t:'p',tx:'Phase1結果から table_id → table_analysis の対応(ta_by_id)を構築'},
+      {t:'p',tx:'_format_table_light で全テーブルの1行サマリー(table_summaries)を生成',calls:['_format_table_light']},
+      {t:'p',tx:'Phase1の統合推奨(intra_recs)を集約し、先頭30件を要約行に整形（超過分は省略）'},
+      {t:'p',tx:'sheet_hints_raw から集計シート集合(aggregate_sheets)を構築'},
+      {t:'p',tx:'_compute_merge_recommendations で決定論的な2軸統合推奨(auto_recs)を生成し、_format_merge_candidates でPhase2プロンプト用テキスト(merge_candidates)を生成',calls:['_compute_merge_recommendations','_format_merge_candidates']},
+      {t:'p',tx:'CROSS_SHEET_USER に table_summaries / intra_recs_summary / merge_candidates / relation_facts を埋め込みPhase2ユーザーメッセージを構築'},
+      {t:'c',tx:'_call_api によるクロスシート統合呼び出し（Phase2）が成功？',yes:'JSON パースして phase2_raw に格納',no:'phase2_raw = {"integration_recommendations": []}（ベストエフォート、サブバッチ結果のみにフォールバック）',calls:['_call_api']},
+      {t:'r',tx:'return _merge_raws(batch_raws, phase2_raw, tables, auto_recs=auto_recs)',calls:['_merge_raws']},
+    ]},
+  _call_api:{s:4,pub:false,io:{i:'client, model, messages: List[Dict], max_completion_tokens: int, timeout=360.0',o:'str（レスポンス本文の content）'},
+    desc:'429／レートリミットエラー時に指数バックオフでリトライしながらチャット補完APIを呼び出す。',
+    steps:[
+      {t:'p',tx:'attempt=0〜3 の最大4回リトライループを開始'},
+      {t:'p',tx:'client.chat.completions.create() でチャット補完APIを呼び出す',nt:'response_format={"type":"json_object"}, temperature=0.1, max_completion_tokens, timeout=360秒（既定）'},
+      {t:'c',tx:'finish_reason が "length"（トークン上限で打ち切り）？',yes:'ValueError を送出（応答が途中で切れたことを明示）'},
+      {t:'r',tx:'return choice.message.content（例外なく完了した場合、空文字列フォールバック）'},
+      {t:'c',tx:'例外発生時、429 / too_many_requests / rate_limit を示すエラーか？',no:'例外をそのまま re-raise（リトライしない）'},
+      {t:'c',tx:'リトライ残数あり（attempt<3）？',yes:'15秒×2^attempt（15/30/60秒）待機して次の attempt へ',no:'ループを抜けて最終 raise へ'},
+      {t:'r',tx:'return（到達せず）— ループを抜けた場合は RuntimeError("API呼び出しが最大リトライ回数を超えました") を送出'},
+    ]},
+  _analyze_sheet_batch:{s:4,pub:false,io:{i:'client, model, batch_tables, sheet_names, relation_facts, sheet_level_hints=""',o:'Dict[str, Any]（このサブバッチの生JSONレスポンス）'},
+    desc:'テーブルの1サブバッチ（最大10件）を分析し、生のJSON dictを返す。',
+    steps:[
+      {t:'p',tx:'バッチサイズ n に応じてサンプル行数・末尾行数を調整',nt:'n>7 → 3/2、それ以外 → 5/3'},
+      {t:'p',tx:'_format_table_detail でバッチ内各テーブルの詳細テキストを生成し結合',calls:['_format_table_detail']},
+      {t:'p',tx:'USER_PROMPT にバッチ分のテーブル詳細・relation_facts・sheet_level_hints を埋め込みユーザーメッセージを構築'},
+      {t:'p',tx:'_call_api で system/user メッセージを送信（max_completion_tokens=16384固定）',nt:'テーブル10件以下の出力は3,000〜6,000トークン程度に収まるため常に上限をリクエスト',calls:['_call_api']},
+      {t:'c',tx:'レスポンスが不正な JSON？',yes:'ValueError を送出（先頭300文字を含む）'},
+      {t:'r',tx:'return json.loads(content)（このサブバッチの生JSON dict）'},
+    ]},
+  _merge_raws:{s:4,pub:false,io:{i:'phase1_raws: List[Dict], phase2_raw: Dict, tables: List[DetectedTable], auto_recs=None',o:'AIAnalysisResult'},
+    desc:'Phase1（シート別）とPhase2（クロスシート）の結果、および自動生成の推奨をマージする。',
+    steps:[
+      {t:'p',tx:'phase1_raws（各サブバッチの生JSON）から sheet_classifications / table_analyses / integration_recommendations / master_tables / summary を集約'},
+      {t:'p',tx:'phase2_raw（クロスシート統合結果）から integration_recommendations を取得し、auto_recs（Python計算による2軸推奨）と合わせて "スーパーセットプール" を構築'},
+      {t:'p',tx:'Phase1の推奨から、スーパーセットプールの部分集合になっているものを除外(filtered_phase1)',nt:'多支店2軸推奨に包含される単一支店推奨を除去'},
+      {t:'p',tx:'Phase2の推奨から、auto_recs と完全一致するものを除外(filtered_phase2)（完全重複排除）'},
+      {t:'p',tx:'auto + filtered_phase2 + filtered_phase1 の優先順位で結合し、recommendation_id を "IR_連番" で振り直す'},
+      {t:'p',tx:'集約結果を1つの生JSON dict(merged)にまとめる（summary は先頭3件を " / " 結合）'},
+      {t:'r',tx:'return _parse_response(merged, tables)',calls:['_parse_response']},
+    ]},
+  _parse_response:{s:5,pub:false,io:{i:'raw: Dict[str, Any], tables: List[DetectedTable]',o:'AIAnalysisResult'},
+    desc:'APIから返された生JSONを検証・フィルタリングし、AIAnalysisResult データクラスに変換する。',
+    steps:[
+      {t:'p',tx:'tables から有効なテーブルID集合(valid_ids)と id→DetectedTable 辞書を構築'},
+      {t:'p',tx:'sheet_classifications を SheetClassification のリストに変換'},
+      {t:'p',tx:'table_analyses を走査し、有効IDのみ TableAnalysisResult に変換',nt:'display_name にシート名が含まれない場合は先頭に補完し、parent/child/similar_table_ids は valid_ids でフィルタ'},
+      {t:'p',tx:'is_minimum_granularity_candidate=true のテーブルID集合(min_gran_ids)を算出'},
+      {t:'p',tx:'integration_recommendations を走査し、有効ID2件未満・重複関係・階層検出時に最小粒度以外を含むものを除外しつつ IntegrationRecommendation に変換',nt:'seen_relations で (parent_id, frozenset(child_ids)) の重複を排除'},
+      {t:'p',tx:'new_column_names/new_column_values の新形式（複数軸）・旧形式（単一列）の両方をサポートして正規化',nt:'旧形式のみの場合は ["区分"] にフォールバック'},
+      {t:'p',tx:'axis_parent_table_ids / axis_parent_label_columns を col_names の長さにパディングし、後方互換用の単軸フィールド(compat_parent_tid/compat_parent_col)を導出'},
+      {t:'p',tx:'master_tables を走査し、有効IDのみ MasterTableInfo に変換'},
+      {t:'r',tx:'return AIAnalysisResult(sheet_classifications, table_analyses, integration_recommendations, master_tables, summary, raw_response=raw)'},
+    ]},
+};
+
+/* ══════════ COLOR VARS ══════════ */
+const SV = {
+  s1:{c:'var(--s1)',bg:'var(--s1-bg)'},
+  s2:{c:'var(--s2)',bg:'var(--s2-bg)'},
+  s3:{c:'var(--s3)',bg:'var(--s3-bg)'},
+  s4:{c:'var(--s4)',bg:'var(--s4-bg)'},
+  s5:{c:'var(--s5)',bg:'var(--s5-bg)'},
+};
+const KEYS = ['s1','s2','s3','s4','s5'];
+function sv(k){const v=SV[k];return `--sc:${v.c};--sc-bg:${v.bg}`}
+
+/* ══════════ STATE ══════════ */
+let activeStage=null, isStageSplit=false, leftW=460;
+let expandedFns=new Set(); // 中央パネルでカード下に詳細展開中の関数名
+let subFnStack={}; // カード内右側インスペクタのナビゲーションスタック: { [トップ関数名]: [子関数名, 孫関数名, ...] }
+let subSplitRatio={}; // カード内の 処理ステップ/子関数インスペクタ 分割比率: { [トップ関数名]: 0〜1（既定 0.5 = 中央） }
+
+/* ══════════ BUILD OVERVIEW ══════════ */
+function buildOverview(){
+  let h=`
+    <div class="io-bar">
+      <div class="io-cell" style="--sc:var(--s1)">
+        <div class="io-lbl">入力</div>
+        <div class="io-val">List[DetectedTable]（正規化済み）、ファイル名</div>
+        <div class="io-sub">List[DetectedTable] は step3_normalize 適用済み</div>
+      </div>
+      <div class="io-cell" style="--sc:var(--s5)">
+        <div class="io-lbl">出力</div>
+        <div class="io-val">AIAnalysisResult</div>
+        <div class="io-sub">シート分類・テーブル分析・統合推奨・マスタテーブル情報・要約を含む</div>
+      </div>
+    </div>`;
+
+  STAGES.forEach((s,i)=>{
+    const k=KEYS[i];
+    const pills=s.fns.map(f=>`<span class="pill${f.pub?' pub':''}">${f.n}</span>`).join('');
+    const rows=s.rows.map(r=>`<div class="dr"><span class="dk">${r.k}</span><span class="dv">${r.v}</span></div>`).join('');
+    const isActive=activeStage===s.id;
+    h+=`
+      <div class="stage-card${isActive?' active':''}" id="sc${s.id}" style="${sv(k)}" onclick="selectStage(${s.id})">
+        <div class="stage-hd">
+          <span class="stage-chip">S${s.id}</span>
+          <span style="font-size:15px">${s.emoji}</span>
+          <span class="stage-name">${s.name}</span>
+        </div>
+        <div class="stage-body">
+          <div class="stage-desc">${s.desc}</div>
+          <div class="fn-pills">${pills}</div>
+          <div class="detail-rows">${rows}</div>
+        </div>
+      </div>`;
+    if(i<3) h+=`<div class="arr"><div class="arr-line"></div><div class="arr-head"></div></div>`;
+  });
+  h+=`<div class="click-hint">▲ カードをクリックして関数フローを表示 / 再クリックで全体に戻る</div>`;
+  document.getElementById('left-inner').innerHTML=h;
+}
+
+/* ══════════ SELECT / TOGGLE STAGE ══════════ */
+function selectStage(id){
+  if(activeStage===id && isStageSplit){ closeSplit(); return; }
+  if(activeStage!==id){ expandedFns.clear(); subFnStack={}; subSplitRatio={}; }
+  activeStage=id;
+  document.querySelectorAll('.stage-card').forEach(c=>c.classList.remove('active'));
+  const card=document.getElementById('sc'+id);
+  if(card) card.classList.add('active');
+  if(!isStageSplit){
+    isStageSplit=true;
+    document.getElementById('app').classList.add('s-split');
+    document.getElementById('left-wrap').style.width=leftW+'px';
+  }
+  renderStageFlow(id);
+}
+
+/* ══════════ CLOSE SPLIT ══════════ */
+function closeSplit(){
+  isStageSplit=false; activeStage=null;
+  expandedFns.clear(); subFnStack={}; subSplitRatio={};
+  const app=document.getElementById('app');
+  app.classList.remove('s-split');
+  document.getElementById('left-wrap').style.width='';
+  document.getElementById('mid-inner').innerHTML='';
+  document.querySelectorAll('.stage-card').forEach(c=>c.classList.remove('active'));
+}
+
+/* ══════════ RENDER STAGE FLOW ══════════ */
+function renderStageFlow(id, resetScroll=true){
+  const s=STAGES[id-1], k=KEYS[id-1], fl=FLOWS[id];
+  const nodesHtml=fl.nodes.map(n=>{
+    if(n.type==='arrow') return `
+      <div class="flow-arr">
+        <div class="fa-ln"></div>
+        <span class="fa-lbl">${n.label}</span>
+        <div class="fa-hd"></div>
+      </div>`;
+    const curSub=(subFnStack[n.fn]||[]).slice(-1)[0];
+    const uses=n.uses.length?`<div class="fn-uses">${n.uses.map(u=>`
+      <div class="use-row">
+        <span class="use-arr">↳ 呼び出し</span>
+        <span class="use-fn${curSub===u.fn?' uf-active':''}" onclick="event.stopPropagation();openSubFn('${n.fn}','${u.fn}')">${u.fn}</span>
+        <span class="use-nt">— ${u.note}</span>
+      </div>`).join('')}</div>`:'';
+    const isOpen=expandedFns.has(n.fn);
+    const inlineDetail=isOpen?buildInlineDetailHtml(n.fn):'';
+    return `<div class="fn-box${isOpen?' fx-active':''}" onclick="toggleInline('${n.fn}')">
+      <div class="fn-bh">
+        <span class="fn-nm">${n.fn}</span>
+        <span class="fn-badge ${n.pub?'fb-pub':'fb-prv'}">${n.pub?'Public':'Private'}</span>
+      </div>
+      <div class="fn-desc">${n.desc}</div>
+      ${uses}
+      <div class="fn-ret"><span class="fn-ret-lbl">→ return</span><span class="fn-ret-val">${n.ret}</span></div>
+      ${inlineDetail}
+    </div>`;
+  }).join('');
+
+  const midEl=document.getElementById('mid-inner');
+  if(!midEl) return;
+  midEl.innerHTML=`
+    <div style="${sv(k)}">
+      <div class="rf-top">
+        <div>
+          <div class="sf-tag">${s.emoji} Stage ${id}</div>
+          <div class="sf-title">${s.name}</div>
+        </div>
+        <button class="rf-close" onclick="closeSplit()" title="全体に戻る (←)">✕</button>
+      </div>
+      <div class="sf-overview">${fl.overview}</div>
+      <div class="sec-label">関数フロー（カードをクリックで詳細展開）</div>
+      <div id="fn-flow-area">${nodesHtml}</div>
+    </div>`;
+  if(resetScroll) document.getElementById('mid-wrap').scrollTop=0;
+}
+
+/* ══════════ TOGGLE INLINE FUNCTION DETAIL (below the card) ══════════ */
+function toggleInline(fn){
+  if(expandedFns.has(fn)) expandedFns.delete(fn); else expandedFns.add(fn);
+  rerenderMid();
+}
+
+/* ══════════ NESTED-FUNCTION INSPECTOR (right side of the card) ══════════ */
+function openSubFn(cardFn, targetFn){
+  expandedFns.add(cardFn);
+  const stack=subFnStack[cardFn]||(subFnStack[cardFn]=[]);
+  if(stack[stack.length-1]!==targetFn) stack.push(targetFn);
+  rerenderMid();
+}
+function jumpSubFn(cardFn, idx){
+  const stack=subFnStack[cardFn];
+  if(!stack) return;
+  stack.length=idx+1;
+  rerenderMid();
+}
+function closeSubFn(cardFn){
+  delete subFnStack[cardFn];
+  delete subSplitRatio[cardFn];
+  rerenderMid();
+}
+function rerenderMid(){
+  const mw=document.getElementById('mid-wrap');
+  const st=mw.scrollTop;
+  renderStageFlow(activeStage, false);
+  mw.scrollTop=st;
+}
+
+function buildInlineDetailHtml(fnName){
+  const fn=FN[fnName];
+  if(!fn) return '';
+  const stack=subFnStack[fnName]||[];
+  const stepsHtml=`<div class="steps">${buildStepsHtml(fn,fnName)}</div>`;
+  let bodyHtml;
+  if(stack.length){
+    const ratio=subSplitRatio[fnName] ?? 0.5; // 既定は親関数のちょうど中心
+    bodyHtml=`
+      <div class="fid-body" data-card="${fnName}">
+        <div class="fid-steps" style="flex:0 0 calc(${(ratio*100).toFixed(2)}% - 3px)">${stepsHtml}</div>
+        <div class="fid-dvd" data-card="${fnName}" title="ドラッグで幅調整"></div>
+        <div class="fid-sub">${renderSubFnPanel(fnName,stack)}</div>
+      </div>`;
+  } else {
+    bodyHtml=`<div class="fid-body"><div class="fid-steps">${stepsHtml}</div></div>`;
+  }
+  return `
+    <div class="fn-inline-detail" onclick="event.stopPropagation()">
+      <div class="fd-io">
+        <div class="io-cell" style="--sc:var(--s2)"><div class="io-lbl">入力</div><div class="io-val">${fn.io.i}</div></div>
+        <div class="io-cell" style="--sc:var(--s4)"><div class="io-lbl">出力</div><div class="io-val">${fn.io.o}</div></div>
+      </div>
+      <div class="sec-label">処理ステップ</div>
+      ${bodyHtml}
+    </div>`;
+}
+
+function renderSubFnPanel(cardFn, stack){
+  const cur=stack[stack.length-1];
+  const sf=FN[cur];
+  if(!sf) return '';
+  const ancestors=stack.slice(0,-1);
+  const crumbHtml=ancestors.length?`<div class="fid-crumb">${ancestors.map((name,i)=>
+    `<span class="cr-lnk" onclick="event.stopPropagation();jumpSubFn('${cardFn}',${i})">${name}</span><span class="cr-sep">›</span>`
+  ).join('')}</div>`:'';
+  return `
+    <div class="fid-sub-hd">
+      ${crumbHtml}
+      <div class="fn-bh" onclick="event.stopPropagation();closeSubFn('${cardFn}')" title="クリックで閉じる">
+        <span class="fn-nm">${cur}</span>
+        <span class="fn-badge ${sf.pub?'fb-pub':'fb-prv'}">${sf.pub?'Public':'Private'}</span>
+        <span class="fid-sub-close-hint">▲ 閉じる</span>
+      </div>
+    </div>
+    <div class="fd-desc">${sf.desc}</div>
+    <div class="fd-io">
+      <div class="io-cell" style="--sc:var(--s2)"><div class="io-lbl">入力</div><div class="io-val">${sf.io.i}</div></div>
+      <div class="io-cell" style="--sc:var(--s4)"><div class="io-lbl">出力</div><div class="io-val">${sf.io.o}</div></div>
+    </div>
+    <div class="steps">${buildStepsHtml(sf,cardFn)}</div>`;
+}
+
+function buildStepsHtml(fn, cardFn){
+  return fn.steps.map((st,i)=>{
+    const num=i+1, icon=st.t==='c'?'if':st.t==='r'?'↩':num;
+    const br=(st.yes||st.no)?`<div class="sbr">
+      ${st.yes?`<div class="br"><span class="by">YES</span><span class="bt">${st.yes}</span></div>`:''}
+      ${st.no ?`<div class="br"><span class="bn">NO</span><span class="bt">${st.no}</span></div>`:''}
+    </div>`:'';
+    const curSub=(subFnStack[cardFn]||[]).slice(-1)[0];
+    const calls=(st.calls&&st.calls.length)?`<div class="fn-uses step-calls">${st.calls.map(c=>`
+      <div class="use-row">
+        <span class="use-arr">↳ 呼び出し</span>
+        <span class="use-fn${curSub===c?' uf-active':''}" onclick="event.stopPropagation();openSubFn('${cardFn}','${c}')">${c}</span>
+      </div>`).join('')}</div>`:'';
+    return `<div class="step-row">
+      <div class="si si-${st.t}">${icon}</div>
+      <div class="sb">
+        <div class="st">${st.tx}</div>
+        ${st.nt?`<div class="sn">${st.nt}</div>`:''}
+        ${br}
+        ${calls}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ══════════ DRAG RESIZE ══════════ */
+(function(){
+  function makeDrag(dvdId, getEl, getW, setW){
+    const dvd=document.getElementById(dvdId);
+    let drag=false, dsx=0, dsw=0;
+    dvd.addEventListener('mousedown',e=>{
+      drag=true; dsx=e.clientX;
+      dsw=getEl().getBoundingClientRect().width;
+      dvd.classList.add('drag');
+      document.body.style.userSelect='none';
+      document.body.style.cursor='col-resize';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove',e=>{
+      if(!drag) return;
+      const app=document.getElementById('app');
+      const nw=Math.max(240,Math.min(dsw+(e.clientX-dsx),app.clientWidth-240));
+      setW(nw); getEl().style.width=nw+'px';
+    });
+    document.addEventListener('mouseup',()=>{
+      if(!drag) return;
+      drag=false; dvd.classList.remove('drag');
+      document.body.style.userSelect=''; document.body.style.cursor='';
+    });
+  }
+  makeDrag('dvd1',()=>document.getElementById('left-wrap'), ()=>leftW, v=>{leftW=v});
+})();
+
+/* ══════════ NESTED-PANEL DRAG RESIZE (per-card, elements are re-created on every render → event delegation) ══════════ */
+(function(){
+  let dragCard=null, startX=0, startRatio=0.5, containerW=0;
+  document.addEventListener('mousedown', e=>{
+    const dvd=e.target.closest('.fid-dvd');
+    if(!dvd) return;
+    dragCard=dvd.dataset.card;
+    startX=e.clientX;
+    containerW=dvd.closest('.fid-body').getBoundingClientRect().width;
+    startRatio=subSplitRatio[dragCard] ?? 0.5;
+    dvd.classList.add('drag');
+    document.body.style.userSelect='none';
+    document.body.style.cursor='col-resize';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e=>{
+    if(!dragCard || !containerW) return;
+    let ratio=startRatio + (e.clientX-startX)/containerW;
+    ratio=Math.max(.2,Math.min(.8,ratio));
+    subSplitRatio[dragCard]=ratio;
+    document.querySelectorAll(`.fid-body[data-card="${dragCard}"] .fid-steps`).forEach(el=>{
+      el.style.flex=`0 0 calc(${(ratio*100).toFixed(2)}% - 3px)`;
+    });
+  });
+  document.addEventListener('mouseup', ()=>{
+    if(!dragCard) return;
+    document.querySelectorAll('.fid-dvd.drag').forEach(el=>el.classList.remove('drag'));
+    document.body.style.userSelect=''; document.body.style.cursor='';
+    dragCard=null; containerW=0;
+  });
+})();
+
+/* ══════════ INIT ══════════ */
+buildOverview();
+</script>

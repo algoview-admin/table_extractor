@@ -1,10 +1,11 @@
 from typing import Dict, List, Optional
 
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from steps.shared import _go_to, _inject_splitter_js, _splitter_marker, _build_and_go_step6
-from steps.step4_analyze import (
+from streamlit_ui.shared import _go_to, _inject_splitter_js, _splitter_marker, _build_and_go_step6
+from streamlit_ui.step4_analyze import (
     _build_final_tables,
     _dlt_virtual_table,
     _clip_ai_irs_by_latent_groups,
@@ -14,7 +15,7 @@ from steps.step4_analyze import (
     _collect_unique_master_specs,
     _group_irs_by_similarity,
 )
-from src.step5_generate import find_latent_tables, derive_latent_tables, group_latent_proposals
+from src.step5_suggest import find_latent_tables, derive_latent_tables, group_latent_proposals
 from src.models import AIAnalysisResult, DetectedTable, DerivedLatentTable
 
 def step4():

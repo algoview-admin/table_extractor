@@ -14,10 +14,9 @@ import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 from src.step4_analyze import analyze_tables
-from src.step1_upload import parse_csv, parse_excel
 from src.models import AIAnalysisResult, DetectedTable
-from src.step3_format import UNIT_VOCAB, _is_agg_label
-from src.step5_generate import (
+from src.step3_normalize import UNIT_VOCAB, _is_agg_label
+from src.step5_suggest import (
     find_latent_tables,
     derive_latent_tables,
     LatentTableGroup,
@@ -291,17 +290,17 @@ st.markdown(
 # Steps インポート
 # ---------------------------------------------------------------------------
 
-from steps.shared import (
+from streamlit_ui.shared import (
     STEP_LABELS, _SCROLL_TO_TOP_JS,
     _init, _go_to, _render_header, _inject_splitter_js,
 )
-from steps.step1_upload import step1
-from steps.step2_detect import step2
-from steps.step3_format import step_format
-from steps.step4_analyze import step3
-from steps.step5_generate import step4
-from steps.step6_select import step5
-from steps.step7_export import step6
+from streamlit_ui.step1_upload import step1
+from streamlit_ui.step2_detect import step2
+from streamlit_ui.step3_normalize import step_format
+from streamlit_ui.step4_analyze import step3
+from streamlit_ui.step5_suggest import step4
+from streamlit_ui.step6_select import step5
+from streamlit_ui.step7_export import step6
 
 
 # ---------------------------------------------------------------------------

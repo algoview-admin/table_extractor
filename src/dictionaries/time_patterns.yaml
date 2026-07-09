@@ -1,0 +1,47 @@
+# 時系列列名パターン
+# detect_cross_table / _classify_col_time (step3 ) で使用する。
+# pattern: Python 正規表現文字列（^〜$ で完全一致）
+# flags: 省略可。"IGNORECASE" のみサポート。
+# kind: 種別識別子（内部キー）
+# var_name: 縦持ち変換後の時系列軸列名
+
+# 評価順は記載順のまま適用される。より限定的なパターンを先に書くこと。
+patterns:
+  - pattern: '^\d{4}年\d{1,2}月$'
+    kind: year_month
+    var_name: 年月
+    description: '2011年1月'
+
+  - pattern: '^\d{1,2}月$'
+    kind: month
+    var_name: 月
+    description: '1月, 12月'
+
+  - pattern: '^Q[1-4]$'
+    flags: IGNORECASE
+    kind: quarter
+    var_name: 四半期
+    description: 'Q1, Q2, Q3, Q4'
+
+  - pattern: '^第[1-4一二三四]四半期$'
+    kind: quarter_ja
+    var_name: 四半期
+    description: '第1四半期'
+
+  - pattern: '^\d{4}年度$'
+    kind: fiscal_year
+    var_name: 年度
+    description: '2020年度'
+
+  - pattern: '^\d{4}年$'
+    kind: year
+    var_name: 年
+    description: '2020年'
+
+  - pattern: '^(19|20)\d{2}$'
+    kind: year_num
+    var_name: 年
+    description: '2020（4桁年数字）'
+
+# var_name が未定義の kind に対するフォールバック
+fallback_var_name: 期間

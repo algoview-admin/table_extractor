@@ -1,0 +1,353 @@
+<title>Table Extractor — 全体処理フロー</title>
+<style>
+/* ── ライトパレット（常時） ─────────────────────────────────────────── */
+:root {
+  --bg:       #F5F7FF;
+  --surface:  #FFFFFF;
+  --sur2:     #F8FAFF;
+
+  --tx1: #1A1D3C;
+  --tx2: #4F5578;
+  --tx3: #9BA3C0;
+
+  --bd:  #DDE3F5;
+  --bd2: #C9D2EE;
+
+  --sh-sm: 0 1px 4px rgba(30,40,100,.07);
+  --sh:    0 2px 10px rgba(30,40,100,.09), 0 1px 3px rgba(30,40,100,.05);
+
+  /* Pipeline accent — step1〜7 */
+  --p1:#0284C7; --p1-bg:#EFF9FF;
+  --p2:#4F46E5; --p2-bg:#F1F0FE;
+  --p3:#7C3AED; --p3-bg:#F5F3FF;
+  --p4:#C026D3; --p4-bg:#FDF2FC;
+  --p5:#D97706; --p5-bg:#FFF9EE;
+  --p6:#059669; --p6-bg:#ECFDF5;
+  --p7:#E11D48; --p7-bg:#FFF1F3;
+
+  --fc-ln: #CBD5E1;
+
+  --mono: 'Cascadia Code','SF Mono','Fira Code',Consolas,monospace;
+  --r: 10px; --rsm: 5px;
+}
+
+/* optional dark override via viewer toggle only */
+:root[data-theme="dark"] {
+  --bg:#0F172A; --surface:#1E293B; --sur2:#162032;
+  --tx1:#F1F5F9; --tx2:#94A3B8; --tx3:#475569;
+  --bd:#2E4060; --bd2:#3E5272;
+  --sh-sm:0 1px 4px rgba(0,0,0,.25); --sh:0 2px 10px rgba(0,0,0,.3);
+  --p1:#38BDF8; --p1-bg:#042F2E;
+  --p2:#818CF8; --p2-bg:#161233;
+  --p3:#A78BFA; --p3-bg:#1A0F3A;
+  --p4:#E879F9; --p4-bg:#2B0A29;
+  --p5:#FBBF24; --p5-bg:#241705;
+  --p6:#34D399; --p6-bg:#042F2E;
+  --p7:#FB7185; --p7-bg:#2A0A10;
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%}
+body{
+  background:var(--bg);color:var(--tx1);
+  font-family:system-ui,-apple-system,'Segoe UI',Helvetica,sans-serif;
+  font-size:13px;line-height:1.6;
+}
+
+/* ── Topbar ── */
+.topbar{
+  display:flex;align-items:center;gap:.6rem;
+  padding:.5rem 1.25rem;background:var(--surface);
+  border-bottom:1.5px solid var(--bd);box-shadow:var(--sh-sm);
+  position:sticky;top:0;z-index:5;
+}
+.tb-mod{font-family:var(--mono);font-size:11px;color:var(--tx3)}
+.tb-sep{color:var(--bd2);font-size:12px}
+.tb-title{font-size:13.5px;font-weight:700;color:var(--tx1)}
+.tb-hint{margin-left:auto;font-size:11px;color:var(--tx3);font-style:italic}
+
+/* ── Page body ── */
+#page{max-width:760px;margin:0 auto;padding:1.75rem 2rem 3rem}
+
+/* ── IO Banner ── */
+.io-bar{
+  display:flex;border:1.5px solid var(--bd);border-radius:var(--r);
+  overflow:hidden;background:var(--surface);margin-bottom:1.5rem;
+  box-shadow:var(--sh-sm);
+}
+.io-cell{flex:1;padding:.65rem 1rem}
+.io-cell+.io-cell{border-left:1.5px solid var(--bd)}
+.io-lbl{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--sc,var(--p1));margin-bottom:.2rem;
+}
+.io-val{font-family:var(--mono);font-size:11.5px;color:var(--tx1);font-weight:600}
+.io-sub{font-size:11px;color:var(--tx3);margin-top:.1rem}
+
+/* ── Step card ── */
+.step-card{
+  display:block;background:var(--surface);border:2px solid var(--bd);
+  border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm);
+  text-decoration:none;color:inherit;
+  transition:border-color .15s,box-shadow .15s,transform .12s;
+}
+a.step-card{cursor:pointer}
+a.step-card:hover{
+  border-color:var(--sc);transform:translateY(-1px);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 10%,transparent),var(--sh);
+}
+.step-hd{
+  display:flex;align-items:center;gap:.55rem;
+  padding:.5rem .9rem;background:var(--sc-bg);border-bottom:1.5px solid var(--bd);
+}
+.step-chip{
+  font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--sc);background:var(--surface);border:1.5px solid var(--sc);
+  border-radius:4px;padding:2px 7px;flex-shrink:0;
+}
+.step-name{font-size:12.5px;font-weight:700;color:var(--sc)}
+.step-link-hint{
+  margin-left:auto;font-size:10px;font-weight:700;color:var(--sc);
+  display:flex;align-items:center;gap:.25rem;flex-shrink:0;
+}
+.step-soon{
+  margin-left:auto;font-size:10px;font-weight:600;color:var(--tx3);flex-shrink:0;
+}
+.step-body{padding:.7rem 1rem .9rem}
+.step-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.65rem}
+.step-io{
+  display:flex;border:1.5px solid var(--bd);border-radius:var(--rsm);
+  overflow:hidden;background:var(--sur2);
+}
+.step-io .io-cell{padding:.5rem .75rem}
+.step-io .io-lbl{font-size:8.5px}
+.step-io .io-val{font-size:11px}
+
+/* ── Arrow between cards ── */
+.arr{display:flex;flex-direction:column;align-items:center;padding:.35rem 0;gap:.1rem}
+.arr-line{width:1.5px;height:14px;background:var(--bd2)}
+.arr-lbl{
+  font-family:var(--mono);font-size:10.5px;color:var(--tx2);
+  background:var(--sur2);border:1px solid var(--bd);border-radius:4px;
+  padding:.15rem .5rem;text-align:center;max-width:520px;
+}
+.arr-note{font-size:10px;color:var(--tx3);text-align:center;max-width:520px}
+.arr-head{
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-top:7px solid var(--bd2);
+}
+
+.foot-note{margin-top:1.5rem;text-align:center;font-size:11.5px;color:var(--tx3);line-height:1.6}
+</style>
+
+<div class="topbar">
+  <span class="tb-mod">table_extractor</span>
+  <span class="tb-sep">›</span>
+  <span class="tb-title">全体処理フロー（Step 1〜7）</span>
+  <span class="tb-hint">各ステップの入出力のつながりのみを示す俯瞰図です / カードをクリックすると各ステップの詳細フローへ遷移できます</span>
+</div>
+
+<div id="page">
+  <div class="io-bar">
+    <div class="io-cell" style="--sc:var(--p1)">
+      <div class="io-lbl">入力</div>
+      <div class="io-val">アップロードされた Excel / CSV ファイル</div>
+      <div class="io-sub">bytes（ファイル内容）、ファイル名</div>
+    </div>
+    <div class="io-cell" style="--sc:var(--p7)">
+      <div class="io-lbl">出力</div>
+      <div class="io-val">エクスポート用 ZIP（CSV 一式）</div>
+      <div class="io-sub">選択済みテーブルの CSV + 監査用メタデータ JSON</div>
+    </div>
+  </div>
+
+  <!-- STEP 1 -->
+  <a class="step-card" style="--sc:var(--p1);--sc-bg:var(--p1-bg)" href="step1_flow.html">
+    <div class="step-hd">
+      <span class="step-chip">STEP 1</span>
+      <span style="font-size:15px">📄</span>
+      <span class="step-name">ファイル読み込みモジュール</span>
+      <span class="step-link-hint">詳細フローを見る →</span>
+    </div>
+    <div class="step-body">
+      <div class="step-desc">
+        ファイルのバイト列を受け取り、セル値を保持した生グリッド（1-indexed 2次元配列）を構築する。
+        数式評価・結合セル伝播を行う。テーブル検出・整形・分析は行わない。
+      </div>
+      <div class="step-io">
+        <div class="io-cell"><div class="io-lbl">入力</div><div class="io-val">bytes（Excel / CSV）、ファイル名</div></div>
+        <div class="io-cell"><div class="io-lbl">出力</div><div class="io-val">List[SheetGrid] / pd.DataFrame（CSV）</div></div>
+      </div>
+    </div>
+  </a>
+
+  <div class="arr">
+    <div class="arr-line"></div>
+    <div class="arr-lbl">List[SheetGrid]（シートごとの生グリッド）／ pd.DataFrame</div>
+    <div class="arr-line"></div>
+    <div class="arr-head"></div>
+  </div>
+
+  <!-- STEP 2 -->
+  <a class="step-card" style="--sc:var(--p2);--sc-bg:var(--p2-bg)" href="step2_flow.html">
+    <div class="step-hd">
+      <span class="step-chip">STEP 2</span>
+      <span style="font-size:15px">🔍</span>
+      <span class="step-name">テーブル検出モジュール</span>
+      <span class="step-link-hint">詳細フローを見る →</span>
+    </div>
+    <div class="step-body">
+      <div class="step-desc">
+        生グリッドまたは DataFrame を受け取り、行分類ステートマシンでテーブル領域を特定する。
+        ファイル読み込み・整形・分析は行わない。
+      </div>
+      <div class="step-io">
+        <div class="io-cell"><div class="io-lbl">入力</div><div class="io-val">List[SheetGrid] / pd.DataFrame、ファイル名</div></div>
+        <div class="io-cell"><div class="io-lbl">出力</div><div class="io-val">List[DetectedTable]（位置・DataFrame・タイトル・注記）</div></div>
+      </div>
+    </div>
+  </a>
+
+  <div class="arr">
+    <div class="arr-line"></div>
+    <div class="arr-lbl">List[DetectedTable]（各テーブルの生 DataFrame を内包）</div>
+    <div class="arr-line"></div>
+    <div class="arr-head"></div>
+  </div>
+
+  <!-- STEP 3 (has detail flow) -->
+  <a class="step-card" style="--sc:var(--p3);--sc-bg:var(--p3-bg)" href="step3_flow.html">
+    <div class="step-hd">
+      <span class="step-chip">STEP 3</span>
+      <span style="font-size:15px">🧹</span>
+      <span class="step-name">テーブル構造正規化モジュール</span>
+      <span class="step-link-hint">詳細フローを見る →</span>
+    </div>
+    <div class="step-body">
+      <div class="step-desc">
+        検出された生 DataFrame を分析に適した形式に正規化する。多段ヘッダーの統合・集計行列の除去・
+        グルーピング列の補完・クロス集計の縦持ち変換を行う。
+      </div>
+      <div class="step-io">
+        <div class="io-cell"><div class="io-lbl">入力</div><div class="io-val">DetectedTable.df（step2 が構築した生 DataFrame）</div></div>
+        <div class="io-cell"><div class="io-lbl">出力</div><div class="io-val">正規化済み DataFrame + 整形メタ情報（DetectedTable に付与）</div></div>
+      </div>
+    </div>
+  </a>
+
+  <div class="arr">
+    <div class="arr-line"></div>
+    <div class="arr-lbl">List[DetectedTable]（正規化済み）</div>
+    <div class="arr-line"></div>
+    <div class="arr-head"></div>
+  </div>
+
+  <!-- STEP 4 -->
+  <a class="step-card" style="--sc:var(--p4);--sc-bg:var(--p4-bg)" href="step4_flow.html">
+    <div class="step-hd">
+      <span class="step-chip">STEP 4</span>
+      <span style="font-size:15px">🤖</span>
+      <span class="step-name">テーブル分析モジュール</span>
+      <span class="step-link-hint">詳細フローを見る →</span>
+    </div>
+    <div class="step-body">
+      <div class="step-desc">
+        正規化済みテーブルリストを OpenAI API に送信し、テーブルの意味・関係を分析する。API 呼び出し前に
+        ルールベースで合計関係・シート階層を事前計算してプロンプトに付加する。統合推奨も同一 API 呼び出しで
+        生成し結果に含める（提示は step5 が担う）。
+      </div>
+      <div class="step-io">
+        <div class="io-cell"><div class="io-lbl">入力</div><div class="io-val">List[DetectedTable]（正規化済み）、ファイル名</div></div>
+        <div class="io-cell"><div class="io-lbl">出力</div><div class="io-val">AIAnalysisResult（分類・分析・統合推奨・マスタ情報・要約）</div></div>
+      </div>
+    </div>
+  </a>
+
+  <div class="arr">
+    <div class="arr-line"></div>
+    <div class="arr-lbl">AIAnalysisResult</div>
+    <div class="arr-line"></div>
+    <div class="arr-head"></div>
+  </div>
+
+  <!-- STEP 5 -->
+  <a class="step-card" style="--sc:var(--p5);--sc-bg:var(--p5-bg)" href="step5_flow.html">
+    <div class="step-hd">
+      <span class="step-chip">STEP 5</span>
+      <span style="font-size:15px">💡</span>
+      <span class="step-name">新規テーブル提案モジュール</span>
+      <span class="step-link-hint">詳細フローを見る →</span>
+    </div>
+    <div class="step-body">
+      <div class="step-desc">
+        テーブル関係分析（step4）の結果を受けて、統合・潜在・導出の3種類の新規テーブル提案を集約する出口。
+        潜在テーブル提案は注記・注釈からルールベースで示唆し、導出テーブル提案は親−子の数値差分から算出する
+        （いずれも API 呼び出しなし）。
+      </div>
+      <div class="step-io">
+        <div class="io-cell"><div class="io-lbl">入力</div><div class="io-val">AIAnalysisResult、List[DetectedTable]（正規化済み）</div></div>
+        <div class="io-cell"><div class="io-lbl">出力</div><div class="io-val">List[LatentTableProposal] / List[DerivedLatentTable]</div></div>
+      </div>
+    </div>
+  </a>
+
+  <div class="arr">
+    <div class="arr-line"></div>
+    <div class="arr-lbl">AIAnalysisResult ＋ 潜在／導出テーブル提案</div>
+    <div class="arr-note">（UI 層のユーザー決定を経て final_tables 統合済みテーブル辞書を生成）</div>
+    <div class="arr-line"></div>
+    <div class="arr-head"></div>
+  </div>
+
+  <!-- STEP 6 -->
+  <a class="step-card" style="--sc:var(--p6);--sc-bg:var(--p6-bg)" href="step6_flow.html">
+    <div class="step-hd">
+      <span class="step-chip">STEP 6</span>
+      <span style="font-size:15px">✅</span>
+      <span class="step-name">テーブル選択モジュール</span>
+      <span class="step-link-hint">詳細フローを見る →</span>
+    </div>
+    <div class="step-body">
+      <div class="step-desc">
+        AI 分析結果と統合推奨をもとに、エクスポート対象テーブルのグルーピング・粒度バッジ生成・
+        ファイル名変換を行う。
+      </div>
+      <div class="step-io">
+        <div class="io-cell"><div class="io-lbl">入力</div><div class="io-val">AIAnalysisResult、final_tables（統合済みテーブル辞書）</div></div>
+        <div class="io-cell"><div class="io-lbl">出力</div><div class="io-val">グループ分類辞書、バッジ HTML、安全なファイル名</div></div>
+      </div>
+    </div>
+  </a>
+
+  <div class="arr">
+    <div class="arr-line"></div>
+    <div class="arr-lbl">選択済みテーブル Dict[str, dict]（df・display_name 等）</div>
+    <div class="arr-line"></div>
+    <div class="arr-head"></div>
+  </div>
+
+  <!-- STEP 7 -->
+  <a class="step-card" style="--sc:var(--p7);--sc-bg:var(--p7-bg)" href="step7_flow.html">
+    <div class="step-hd">
+      <span class="step-chip">STEP 7</span>
+      <span style="font-size:15px">📦</span>
+      <span class="step-name">エクスポートモジュール</span>
+      <span class="step-link-hint">詳細フローを見る →</span>
+    </div>
+    <div class="step-body">
+      <div class="step-desc">
+        選択済みテーブルを CSV に変換し、ZIP アーカイブとして梱包する。集計除去の監査用メタデータが
+        付与されたテーブルは同名の _metadata.json も同梱する。
+      </div>
+      <div class="step-io">
+        <div class="io-cell"><div class="io-lbl">入力</div><div class="io-val">Dict[str, dict]（選択済みテーブル）</div></div>
+        <div class="io-cell"><div class="io-lbl">出力</div><div class="io-val">ZIP バイト列、Dict[str, bytes]（ファイル名→バイト列）</div></div>
+      </div>
+    </div>
+  </a>
+
+  <div class="foot-note">
+    ▲ 各カードは対応するモジュール（src/step1_upload.py 〜 step7_export.py）の docstring に基づく入出力の要約です。<br>
+    各カードをクリックすると、そのステップの関数単位の詳細フローに遷移します。
+  </div>
+</div>

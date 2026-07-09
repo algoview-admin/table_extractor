@@ -1,6 +1,15 @@
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 import pandas as pd
+
+
+@dataclass
+class SheetGrid:
+    """step1_upload が構築した生グリッド。step2_detect に渡す受け渡しデータ。"""
+    sheet_name: str
+    grid: List[List[Any]]
+    max_row: int
+    max_col: int
 
 
 @dataclass
@@ -19,6 +28,8 @@ class DetectedTable:
     agg_rows_removed: List[dict] = field(default_factory=list)          # 除去した行のラベル値 [{col: val, ...}, ...]
     agg_cols_removed: List[str] = field(default_factory=list)           # 除去した列名
     agg_rows_removed_positions: List[int] = field(default_factory=list) # 除去した行の元 DataFrame 上の整数インデックス
+    agg_removed_row_metadata: List[Dict[str, Any]] = field(default_factory=list)  # 除去行の監査用メタデータ [{key, value, context, sum_column, reported_value}, ...]
+    agg_removed_col_metadata: List[Dict[str, Any]] = field(default_factory=list)  # 除去列の監査用メタデータ [{removed_column, context, reported_value}, ...]
     filled_cols: List[str] = field(default_factory=list)                # ffill を適用したグルーピング列名
     pre_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 前 DataFrame（ffill 適用時のみ）
     stack_info: Optional[Dict[str, Any]] = field(default=None)          # クロス集計検出情報

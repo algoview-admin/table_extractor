@@ -1,0 +1,906 @@
+<title>step3_normalize — 処理フロー</title>
+<style>
+/* ── ライトパレット（常時） ─────────────────────────────────────────── */
+:root {
+  --bg:       #F5F7FF;
+  --surface:  #FFFFFF;
+  --sur2:     #F8FAFF;
+  --sur3:     #EEF2FF;
+
+  --tx1: #1A1D3C;
+  --tx2: #4F5578;
+  --tx3: #9BA3C0;
+
+  --bd:  #DDE3F5;
+  --bd2: #C9D2EE;
+
+  --sh-sm: 0 1px 4px rgba(30,40,100,.07);
+  --sh:    0 2px 10px rgba(30,40,100,.09), 0 1px 3px rgba(30,40,100,.05);
+
+  /* Stage accent — S1 sky, S2 violet, S3 emerald, S4 amber */
+  --s1:#0284C7; --s1-bg:#EFF9FF; --s1-lt:#BAE6FD;
+  --s2:#6D28D9; --s2-bg:#F5F3FF; --s2-lt:#DDD6FE;
+  --s3:#059669; --s3-bg:#ECFDF5; --s3-lt:#A7F3D0;
+  --s4:#C2410C; --s4-bg:#FFF7ED; --s4-lt:#FED7AA;
+
+  --fc-p: #475569; --fc-c: #B45309; --fc-r: #059669;
+  --fc-ln: #CBD5E1;
+
+  --mono: 'Cascadia Code','SF Mono','Fira Code',Consolas,monospace;
+  --r: 10px; --rsm: 5px;
+}
+
+/* optional dark override via viewer toggle only */
+:root[data-theme="dark"] {
+  --bg:#0F172A; --surface:#1E293B; --sur2:#162032; --sur3:#0C1F40;
+  --tx1:#F1F5F9; --tx2:#94A3B8; --tx3:#475569;
+  --bd:#2E4060; --bd2:#3E5272;
+  --sh-sm:0 1px 4px rgba(0,0,0,.25); --sh:0 2px 10px rgba(0,0,0,.3);
+  --s1:#38BDF8; --s1-bg:#042F2E; --s1-lt:#0C4A6E;
+  --s2:#A78BFA; --s2-bg:#1A0F3A; --s2-lt:#2E1B5E;
+  --s3:#34D399; --s3-bg:#042F2E; --s3-lt:#064E3B;
+  --s4:#FB923C; --s4-bg:#1C0A00; --s4-lt:#431407;
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--bg);color:var(--tx1);
+  font-family:system-ui,-apple-system,'Segoe UI',Helvetica,sans-serif;
+  font-size:13px;line-height:1.6;display:flex;flex-direction:column;
+}
+
+/* ── Topbar ── */
+.topbar{
+  flex-shrink:0;display:flex;align-items:center;gap:.6rem;
+  padding:.5rem 1.25rem;background:var(--surface);
+  border-bottom:1.5px solid var(--bd);box-shadow:var(--sh-sm);
+}
+.tb-mod{font-family:var(--mono);font-size:11px;color:var(--tx3)}
+.tb-sep{color:var(--bd2);font-size:12px}
+.tb-title{font-size:13.5px;font-weight:700;color:var(--tx1)}
+.tb-hint{margin-left:auto;font-size:11px;color:var(--tx3);font-style:italic}
+
+/* ── Root layout ── */
+#app{flex:1;display:flex;min-height:0;overflow:hidden}
+
+/* ── Left wrap (stage overview) ── */
+#left-wrap{flex:1;overflow-y:auto}
+#left-wrap::-webkit-scrollbar{width:4px}
+#left-wrap::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+#left-inner{max-width:680px;margin:0 auto;padding:1.5rem 2rem 2.5rem}
+#app.s-split #left-wrap{flex:none}
+#app.s-split #left-inner{max-width:none;margin:0;padding:1rem 1.1rem 2rem}
+
+/* ── Mid wrap (stage function flow) ── */
+#mid-wrap{
+  display:none;overflow:auto;
+  background:var(--sur2);border-left:1.5px solid var(--bd);
+}
+#mid-wrap::-webkit-scrollbar{width:4px}
+#mid-wrap::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+#app.s-split #mid-wrap{display:block;flex:1;min-width:260px}
+#mid-inner{padding:1.25rem 1.25rem 2rem}
+
+/* ── Drag handles ── */
+.dvd{
+  display:none;width:5px;flex-shrink:0;cursor:col-resize;
+  background:var(--bd);position:relative;transition:background .15s;
+}
+.dvd::after{
+  content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:32px;border-radius:2px;background:var(--bd2);
+}
+.dvd:hover,.dvd.drag{background:var(--sc,var(--s1))}
+.dvd:hover::after,.dvd.drag::after{background:var(--sc,var(--s1))}
+#app.s-split #dvd1{display:block}
+
+/* ── IO Banner ── */
+.io-bar{
+  display:flex;border:1.5px solid var(--bd);border-radius:var(--r);
+  overflow:hidden;background:var(--surface);margin-bottom:1.25rem;
+  box-shadow:var(--sh-sm);
+}
+.io-cell{flex:1;padding:.65rem 1rem}
+.io-cell+.io-cell{border-left:1.5px solid var(--bd)}
+.io-lbl{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--sc,var(--s1));margin-bottom:.2rem;
+}
+.io-val{font-family:var(--mono);font-size:11.5px;color:var(--tx1);font-weight:600}
+.io-sub{font-size:11px;color:var(--tx3);margin-top:.1rem}
+
+/* ── Stage card ── */
+.stage-card{
+  background:var(--surface);border:2px solid var(--bd);
+  border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm);
+  cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .12s;
+}
+.stage-card:hover{
+  border-color:var(--sc);transform:translateY(-1px);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 10%,transparent),var(--sh);
+}
+.stage-card.active{
+  border-color:var(--sc);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 14%,transparent),var(--sh);
+  background:color-mix(in srgb,var(--sc) 3%,var(--surface));
+}
+.stage-hd{
+  display:flex;align-items:center;gap:.55rem;
+  padding:.5rem .9rem;background:var(--sc-bg);border-bottom:1.5px solid var(--bd);
+}
+.stage-chip{
+  font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--sc);background:var(--surface);border:1.5px solid var(--sc);
+  border-radius:4px;padding:2px 7px;flex-shrink:0;
+}
+.stage-name{font-size:12.5px;font-weight:700;color:var(--sc)}
+.stage-body{padding:.7rem 1rem .9rem}
+.stage-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.55rem}
+.fn-pills{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.6rem}
+.pill{
+  font-family:var(--mono);font-size:11px;padding:.18rem .5rem;
+  border-radius:4px;border:1.5px solid var(--bd);
+  background:var(--sur2);color:var(--tx2);white-space:nowrap;
+}
+.pill.pub{
+  border-color:color-mix(in srgb,var(--sc) 35%,transparent);
+  background:color-mix(in srgb,var(--sc) 8%,transparent);
+  color:var(--sc);
+}
+.detail-rows{
+  border-top:1px solid var(--bd);padding:.5rem 0 .2rem;
+  display:flex;flex-direction:column;gap:.3rem;
+}
+.dr{display:grid;grid-template-columns:auto 1fr;gap:.4rem .8rem;align-items:baseline}
+.dk{font-size:10.5px;font-weight:700;color:var(--tx3);white-space:nowrap}
+.dv{font-size:12px;color:var(--tx2);line-height:1.45}
+
+/* toggle hint on active card */
+.stage-card.active .stage-hd::after{
+  content:'クリックで戻る';margin-left:auto;font-size:10px;
+  color:var(--sc);opacity:.7;
+}
+
+/* ── Arrow between cards ── */
+.arr{display:flex;flex-direction:column;align-items:center;padding:.3rem 0}
+.arr-line{width:1.5px;height:14px;background:var(--bd2)}
+.arr-head{
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-top:7px solid var(--bd2);
+}
+
+/* ── Click hint ── */
+.click-hint{margin-top:1rem;text-align:center;font-size:11.5px;color:var(--tx3)}
+
+/* ── Right: stage flow ── */
+.rf-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:.8rem}
+.rf-close{
+  width:28px;height:28px;border-radius:6px;border:1.5px solid var(--bd);
+  background:var(--surface);color:var(--tx3);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+  transition:background .13s,color .13s,border-color .13s;flex-shrink:0;
+}
+.rf-close:hover{background:var(--bd);color:var(--tx1);border-color:var(--bd2)}
+.sf-tag{font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--sc);margin-bottom:.3rem}
+.sf-title{font-size:15.5px;font-weight:800;color:var(--tx1);letter-spacing:-.015em;margin-bottom:.3rem}
+.sf-overview{font-size:12.5px;color:var(--tx2);line-height:1.65;margin-bottom:1rem}
+
+.sec-label{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--tx3);margin-bottom:.65rem;display:flex;align-items:center;gap:.5rem;
+}
+.sec-label::after{content:'';flex:1;height:1px;background:var(--bd)}
+
+/* ── Function flow box ── */
+.fn-box{
+  background:var(--surface);border:1.5px solid var(--bd);border-radius:var(--rsm);
+  padding:.65rem .9rem;cursor:pointer;margin-bottom:.5rem;
+  transition:border-color .13s,box-shadow .13s;
+}
+.fn-box:hover{
+  border-color:var(--sc);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 10%,transparent);
+}
+.fn-box.fx-active{
+  border-color:var(--sc);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 15%,transparent);
+  background:color-mix(in srgb,var(--sc) 4%,var(--surface));
+}
+.fn-box.fx-active > .fn-bh::after{
+  content:'▲ 閉じる';margin-left:auto;font-size:9.5px;font-weight:700;
+  color:var(--sc);opacity:.75;
+}
+.fn-bh{display:flex;align-items:center;gap:.45rem;margin-bottom:.3rem}
+.fn-nm{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--tx1)}
+.fn-box:hover .fn-nm,.fn-box.fx-active .fn-nm{color:var(--sc)}
+.fn-badge{
+  font-size:9px;font-weight:700;letter-spacing:.03em;
+  padding:1px 6px;border-radius:3px;flex-shrink:0;
+}
+.fb-pub{background:var(--sc);color:#fff}
+.fb-prv{background:var(--sur2);color:var(--tx3);border:1px solid var(--bd)}
+.fn-desc{font-size:11.5px;color:var(--tx2);margin-bottom:.4rem;line-height:1.45}
+.fn-uses{display:flex;flex-direction:column;gap:.2rem;margin-bottom:.35rem}
+.use-row{display:flex;align-items:baseline;gap:.35rem;font-size:11.5px}
+.use-arr{color:var(--tx3);font-size:10px;flex-shrink:0}
+.use-fn{
+  font-family:var(--mono);font-size:11px;color:var(--sc);cursor:pointer;
+  text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;
+}
+.use-fn:hover{text-decoration-style:solid}
+.use-fn.uf-active{color:var(--sc);font-weight:700;text-decoration-style:solid}
+.use-nt{color:var(--tx3);font-size:11px}
+.fn-ret{
+  display:flex;align-items:baseline;gap:.4rem;font-size:11px;
+  border-top:1px dashed var(--bd);padding-top:.3rem;color:var(--tx3);
+}
+.fn-ret-lbl{font-weight:700;flex-shrink:0}
+.fn-ret-val{font-family:var(--mono);color:var(--tx2)}
+
+/* ── Inline function detail (expands below the card, within stage flow) ── */
+.fn-inline-detail{
+  margin-top:.65rem;padding-top:.65rem;border-top:1.5px dashed var(--bd);
+}
+.fn-inline-detail .fd-io{margin-bottom:.75rem}
+.fn-inline-detail .sec-label{margin-top:0}
+
+/* two-column body inside an expanded card: steps (left) + nested-fn inspector (right).
+   Split starts at the card's center (50/50) and is drag-resizable via .fid-dvd. */
+.fid-body{display:flex;align-items:stretch}
+.fid-steps{flex:1 1 auto;min-width:160px}
+.fid-steps .steps{max-width:none}
+
+/* drag handle between a card's own steps and its nested-fn inspector */
+.fid-dvd{
+  width:6px;flex-shrink:0;align-self:stretch;cursor:col-resize;
+  background:var(--bd);position:relative;transition:background .15s;
+  margin:0 .55rem;
+}
+.fid-dvd::after{
+  content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:28px;border-radius:2px;background:var(--bd2);
+}
+.fid-dvd:hover,.fid-dvd.drag{background:var(--sc)}
+.fid-dvd:hover::after,.fid-dvd.drag::after{background:var(--sc)}
+
+/* ── Nested-function inspector (shown to the right of a step's own steps, inside the same card) ── */
+.fid-sub{
+  flex:1 1 auto;min-width:160px;
+}
+.fid-sub-hd{margin-bottom:.5rem}
+.fid-crumb{font-size:10.5px;color:var(--tx3);display:flex;flex-wrap:wrap;gap:.3rem;align-items:center;margin-bottom:.2rem}
+.cr-lnk{color:var(--sc);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px}
+.cr-lnk:hover{text-decoration-style:solid}
+.cr-sep{color:var(--tx3)}
+/* 子関数ヘッダー: 親カードの「▲ 閉じる」と同じ配置・挙動（右上・クリックで閉じる） */
+.fid-sub .fn-bh{margin-bottom:.4rem;cursor:pointer}
+.fid-sub .fn-bh:hover .fn-nm{color:var(--sc)}
+.fid-sub-close-hint{
+  margin-left:auto;font-size:9.5px;font-weight:700;color:var(--sc);opacity:.75;
+}
+.fid-sub .fd-desc{font-size:11.5px;color:var(--tx2);line-height:1.55;margin-bottom:.6rem}
+.fid-sub .fd-io{margin-bottom:.65rem}
+.fid-sub .steps{max-width:none}
+
+/* step-level "calls" links (inline, inside a step's body) */
+.step-calls{margin-top:.3rem}
+
+/* flow arrow */
+.flow-arr{display:flex;flex-direction:column;align-items:center;padding:.15rem 0;margin:.1rem 0}
+.fa-ln{width:1.5px;height:16px;background:var(--fc-ln)}
+.fa-lbl{font-size:10px;color:var(--tx3);margin:.05rem 0;text-align:center}
+.fa-hd{border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid var(--fc-ln)}
+
+.fd-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.75rem}
+.fd-io{display:flex;border:1.5px solid var(--bd);border-radius:var(--rsm);overflow:hidden;margin-bottom:1rem;background:var(--sur2)}
+.fd-io .io-cell{padding:.5rem .8rem}
+
+/* steps */
+.steps{display:flex;flex-direction:column;max-width:520px}
+.step-row{display:flex;gap:.6rem;position:relative}
+.step-row:not(:last-child)::before{
+  content:'';position:absolute;left:12px;top:26px;bottom:-2px;
+  width:1.5px;background:var(--fc-ln);z-index:0;
+}
+.si{
+  flex-shrink:0;width:25px;height:25px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;margin-top:.1rem;position:relative;z-index:1;
+}
+.si-p{background:color-mix(in srgb,#64748B 12%,transparent);color:#64748B;border:1.5px solid #64748B}
+/* 菱形: ::before=外枠(amber), ::after=内塗り(cream), テキストは最前面 */
+.si-c{
+  border-radius:0;background:transparent;
+  color:#92400E;font-size:9px;font-family:var(--mono);
+  isolation:isolate;
+}
+.si-c::before{
+  content:'';position:absolute;inset:0;
+  background:#D97706;
+  clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%);
+  z-index:-1;
+}
+.si-c::after{
+  content:'';position:absolute;inset:2.5px;
+  background:#FEF3C7;
+  clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%);
+  z-index:-1;
+}
+.si-r{background:color-mix(in srgb,#059669 15%,transparent);color:#059669;border:1.5px solid #059669}
+.sb{flex:1;padding:.2rem 0 .85rem;min-width:0}
+.st{font-size:12.5px;color:var(--tx1);font-weight:500;line-height:1.45}
+.sn{font-size:11.5px;color:var(--tx2);margin-top:.2rem;line-height:1.45}
+.sbr{margin-top:.3rem;display:flex;flex-direction:column;gap:.2rem}
+.br{display:flex;align-items:baseline;gap:.35rem;font-size:11.5px}
+.by{font-size:9px;font-weight:700;background:#D1FAE5;color:#065F46;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bn{font-size:9px;font-weight:700;background:#FEF3C7;color:#92400E;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bt{color:var(--tx2)}
+.step-lg{
+  display:flex;gap:.75rem;flex-wrap:wrap;font-size:11px;color:var(--tx3);
+  margin-top:.75rem;padding-top:.6rem;border-top:1px solid var(--bd);
+}
+.lg-i{display:flex;align-items:center;gap:.3rem}
+.lg-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0}
+</style>
+
+<div class="topbar">
+  <a href="flow.html" style="font-size:11px;color:var(--tx3);text-decoration:none;flex-shrink:0" title="全体処理フローに戻る">← 全体フロー</a>
+  <span class="tb-sep">›</span>
+  <span class="tb-mod">src / step3_normalize.py</span>
+  <span class="tb-sep">›</span>
+  <span class="tb-title">テーブル構造正規化_処理フロー</span>
+</div>
+
+<div id="app">
+  <div id="left-wrap"><div id="left-inner"></div></div>
+  <div id="dvd1" class="dvd"></div>
+  <div id="mid-wrap"><div id="mid-inner"></div></div>
+</div>
+
+<script>
+/* ══════════ DATA ══════════ */
+const STAGES = [
+  { id:1, k:'s1',
+    name:'多段ヘッダーの検出と解決機能',
+    emoji:'🔗',
+    desc:'生グリッドからヘッダー行を特定し、name / unit の役割を分類して1行の列名に統合する。',
+    fns:[{n:'detect_header_roles',pub:true},{n:'_is_unit_row',pub:false},{n:'merge_header_rows',pub:true},{n:'_detect_row_language',pub:false}],
+    rows:[
+      {k:'タイトル行',v:'先頭の単一文字列行をスキップ（例: シート名・ファイルタイトル）'},
+      {k:'ヘッダー行',v:'文字列比率 ≥ 50% の連続行を最大12行検出'},
+      {k:'マージ形式',v:'name のみ → "_" 連結 / name+unit → "名称 [単位]"'},
+    ]},
+  { id:2, k:'s2',
+    name:'集計行の検出・削除・メタデータ保存機能',
+    emoji:'🗑️',
+    desc:'「計」「合計」等を持つ行・列を除去し、除去情報を監査用メタデータとして保存する。同一コンテキストに個別データがある場合のみ除去（冗長性チェック）。',
+    fns:[{n:'remove_aggregates',pub:true},{n:'_is_agg_label',pub:false},{n:'_is_redundant_agg_row',pub:false},{n:'_detect_covariates',pub:false},{n:'_is_grouping_col',pub:false},{n:'_normalize_label',pub:false},{n:'_to_jsonable',pub:false}],
+    rows:[
+      {k:'集計列',v:'列名がキーワード一致 → 無条件除去'},
+      {k:'集計行',v:'冗長性チェック付き（同コンテキストに個別行がある場合のみ除去）'},
+      {k:'共変ペア',v:'コード↔ラベル列を検出してコンテキスト比較から除外'},
+      {k:'行メタデータ',v:'除去行 × 数値列ごとに {key, context, sum_column, reported_value} を記録'},
+      {k:'列メタデータ',v:'列ごと削除される集計列は元の行ごとに {removed_column, context, reported_value} を記録'},
+    ]},
+  { id:3, k:'s3',
+    name:'グルーピング列の前方補完機能',
+    emoji:'↕️',
+    desc:'Excel の視覚的セル結合で先頭セルにしか値がない列を ffill で補完する。集計ラベルへの過伝播を防止する。',
+    fns:[{n:'fill_grouping_cols',pub:true}],
+    rows:[
+      {k:'対象条件',v:'文字列型 かつ 内部 None あり かつ ffill後ユニーク率 < 50%'},
+      {k:'過伝播防止',v:'集計ラベルになったセルは None に戻す（_is_agg_label を再利用）'},
+    ]},
+  { id:4, k:'s4',
+    name:'クロス集計形式の検出と縦持ち変換機能',
+    emoji:'📐',
+    desc:'月・四半期・年度等を列に持つ横持ち形式を検出し、pd.melt で long format に変換する。',
+    fns:[{n:'detect_cross_table',pub:true},{n:'stack_cross_table',pub:true},{n:'_classify_col_time',pub:false},{n:'_extract_year_context',pub:false}],
+    rows:[
+      {k:'検出条件',v:'時系列パターン列が2列以上 かつ 候補列の80%以上'},
+      {k:'年補完',v:'月のみ列の場合、タイトル/ファイル名から西暦を抽出して付加'},
+    ]},
+];
+
+const FLOWS = {
+  1:{ overview:'detect_header_roles でヘッダー行の役割（name/unit）を分類し、merge_header_rows で1行の列名に統合する。',
+      nodes:[
+        {fn:'detect_header_roles',pub:true,desc:'先頭タイトル行をスキップし、ヘッダー行を name / unit に分類',
+         uses:[{fn:'_is_unit_row',note:'各行の単位行判定'}],ret:'(n_title, roles)'},
+        {type:'arrow',label:'roles を渡す'},
+        {fn:'merge_header_rows',pub:true,desc:'複数ヘッダー行を1行の列名にマージ',
+         uses:[{fn:'_detect_row_language',note:'多言語混在時に主言語を特定'}],ret:'List[str]（列名リスト）'},
+      ]},
+  2:{ overview:'remove_aggregates が全処理を統括し、複数のヘルパーを呼び出して集計行・列を除去し、監査用メタデータ（行・列それぞれ）に保存する。',
+      nodes:[
+        {fn:'remove_aggregates',pub:true,desc:'集計行・集計列を検出して除去し、監査用メタデータを生成する統括関数',
+         uses:[
+           {fn:'_is_grouping_col',note:'コンテキスト列の絞り込み'},
+           {fn:'_detect_covariates',note:'共変ペアの検出'},
+           {fn:'_normalize_label',note:'_is_agg_label 内で使用する空白正規化'},
+           {fn:'_is_agg_label',note:'集計ラベルの判定'},
+           {fn:'_is_redundant_agg_row',note:'部分一致行の冗長性チェック'},
+           {fn:'_to_jsonable',note:'メタデータの値を JSON 変換可能な型に整形'},
+         ],ret:'(cleaned_df, removed_rows_info, removed_cols, removed_row_indices, agg_removed_row_metadata, agg_removed_col_metadata)'},
+      ]},
+  3:{ overview:'fill_grouping_cols が単独で処理を担う。集計ラベルの過伝播防止に _is_agg_label（stage2 と共有）を再利用する。',
+      nodes:[
+        {fn:'fill_grouping_cols',pub:true,desc:'グルーピング列の内部 None を ffill で補完する',
+         uses:[{fn:'_is_agg_label',note:'集計ラベルへの過伝播を防ぐ（stage2 と共有）'}],
+         ret:'(filled_df, filled_col_names)'},
+      ]},
+  4:{ overview:'detect_cross_table で横持ち形式を検出し、stack_info を stack_cross_table に渡して縦持ちに変換する。',
+      nodes:[
+        {fn:'detect_cross_table',pub:true,desc:'時系列パターン列を検出してクロス集計形式かを判定',
+         uses:[{fn:'_classify_col_time',note:'各列名のパターン分類'},{fn:'_extract_year_context',note:'月のみ列の場合に年を補完'}],
+         ret:'stack_info dict（変換情報）'},
+        {type:'arrow',label:'stack_info を渡す'},
+        {fn:'stack_cross_table',pub:true,desc:'変換情報に基づき pd.melt で横持ち → 縦持ちに変換',
+         uses:[],ret:'縦持ち DataFrame'},
+      ]},
+};
+
+const FN = {
+  detect_header_roles:{s:1,pub:true,io:{i:'List[List[Any]]（行リスト）',o:'(n_title, roles)'},
+    desc:'先頭タイトル行をスキップし、連続するヘッダー行を最大12行検出して name / unit に分類する。',
+    steps:[
+      {t:'c',tx:'行リストが空？',yes:'return (0, [])'},
+      {t:'p',tx:'先頭タイトル行をカウント (n_title)',nt:'単一文字列行 かつ 下に幅広行が続く場合にインクリメント'},
+      {t:'c',tx:'残り行の1行目が文字列比率 ≥ 50%？',no:'return (n_title, [])'},
+      {t:'p',tx:'先頭行の重複値チェック (first_has_dups)',nt:'結合セルスパン型の多段ヘッダー判定に使用'},
+      {t:'p',tx:'連続行を最大12行走査して name / unit に分類',nt:'数値比率 ≥ 40% でスキャン終了 / _is_unit_row で各行を判定',calls:['_is_unit_row']},
+      {t:'c',tx:'2行目以降の name 行を受け入れる？',yes:'直前が unit または first_has_dups の場合のみ',no:'スキャン終了'},
+      {t:'c',tx:'roles[0] が "name" でない？',yes:'return (n_title, [])'},
+      {t:'r',tx:'return (n_title, roles)'},
+    ]},
+  _is_unit_row:{s:1,pub:false,io:{i:'List[Any]（1行分の値リスト）',o:'bool'},
+    desc:'行が単位ラベルのみで構成されているかを判定する。UNIT_VOCAB への一致率と繰り返し率で判断する。',
+    steps:[
+      {t:'p',tx:'非空セルを抽出・文字列化'},
+      {t:'c',tx:'非空セルなし？',yes:'return False'},
+      {t:'c',tx:'25文字超のセルが1つでもある？',yes:'return False'},
+      {t:'p',tx:'UNIT_VOCAB との一致率を計算'},
+      {t:'c',tx:'一致率 ≥ 50%？',yes:'return True'},
+      {t:'c',tx:'語彙ヒット > 0 かつ ユニーク率 ≤ 40% かつ 全セル15文字以内？',yes:'return True（繰り返し型）',no:'return False'},
+    ]},
+  merge_header_rows:{s:1,pub:true,io:{i:'header_data, roles, n_cols',o:'List[str]（列名リスト）'},
+    desc:'複数のヘッダー行を1つの列名リストにマージする。',
+    steps:[
+      {t:'c',tx:'全ロールが "name"？',yes:'"_" で列ごとにパーツを連結 → return'},
+      {t:'p',tx:'name + unit ペアリング（隣接する name, unit を対にする）'},
+      {t:'c',tx:'ペアが複数存在する？',yes:'_detect_row_language で各ペアの言語を検出',calls:['_detect_row_language']},
+      {t:'c',tx:'複数言語が混在する？',yes:'最初の明確な言語のペアのみ選択'},
+      {t:'p',tx:'列ごとに "名称 [単位]" 形式で列名を生成',nt:'名前のないセルの単位は後続パーツへ繰り越す'},
+      {t:'r',tx:'return columns（列名リスト）'},
+    ]},
+  _detect_row_language:{s:1,pub:false,io:{i:'List[Any], n_cols',o:"'ja'|'en'|'other'"},
+    desc:'ヘッダー行の主言語を検出する。CJK 文字か ASCII 英字の占有率で判定する。',
+    steps:[
+      {t:'p',tx:'非空セルのテキストを収集'},
+      {t:'c',tx:'テキストなし？',yes:"return 'other'"},
+      {t:'p',tx:'CJK文字含有セル数 と ASCII英字含有セル数を計算'},
+      {t:'c',tx:'CJK率 ≥ 50%？',yes:"return 'ja'"},
+      {t:'c',tx:'ASCII率 ≥ 50%？',yes:"return 'en'"},
+      {t:'r',tx:"return 'other'"},
+    ]},
+  remove_aggregates:{s:2,pub:true,io:{i:'pd.DataFrame',o:'(cleaned_df, removed_rows_info, removed_col_names, removed_row_indices, agg_removed_row_metadata, agg_removed_col_metadata)'},
+    desc:'集計行・集計列を検出して除去し、除去情報と監査用メタデータ（行・列それぞれ）を返す統括関数。',
+    steps:[
+      {t:'p',tx:'集計列を検出（列名が AGG_KEYWORDS に一致）'},
+      {t:'p',tx:'ラベル列を特定',nt:'文字列型 かつ 実質数値でない'},
+      {t:'p',tx:'数値（集計対象）列を特定',nt:'ラベル列でも除去済み集計列でもない列。ユニーク率による絞り込みは行わない'},
+      {t:'p',tx:'_is_grouping_col でコンテキスト列を絞り込み',nt:'ユニーク率 < 50% のラベル列のみ',calls:['_is_grouping_col']},
+      {t:'p',tx:'_detect_covariates で共変ペアを検出',nt:'コード列↔ラベル列など一意対応するペア',calls:['_detect_covariates']},
+      {t:'p',tx:'各ラベル列の「非集計値の存在」をキャッシュ',calls:['_is_agg_label']},
+      {t:'c',tx:'集計ラベル検出 かつ 列に非集計値あり？',no:'次の列へ',calls:['_normalize_label','_is_agg_label']},
+      {t:'c',tx:'完全一致キーワード または コンテキスト列なし？',yes:'除去確定',no:'_is_redundant_agg_row で冗長性チェック',calls:['_is_redundant_agg_row']},
+      {t:'p',tx:'除去確定した行の監査用メタデータを記録',nt:'trigger 列と共変する列を除いた context を構築し、数値列ごとに {key, context, sum_column, reported_value} を1件記録',calls:['_to_jsonable']},
+      {t:'p',tx:'除去列（列名一致）の監査用メタデータを記録',nt:'列ごと削除される集計列は、元の行ごとに {removed_column, context, reported_value} を記録',calls:['_to_jsonable']},
+      {t:'p',tx:'除去行・列を drop してインデックスリセット'},
+      {t:'r',tx:'return (cleaned_df, removed_rows_info, removed_cols, removed_row_indices, agg_removed_row_metadata, agg_removed_col_metadata)'},
+    ]},
+  _is_agg_label:{s:2,pub:false,io:{i:'str',o:'bool'},
+    desc:'値が集計ラベルか判定する。完全一致 or キーワードで末尾一致する場合に True。',
+    steps:[
+      {t:'p',tx:'_normalize_label で空白類・制御文字を除去',calls:['_normalize_label']},
+      {t:'c',tx:'空文字？',yes:'return False'},
+      {t:'c',tx:'AGG_KEYWORDS と完全一致？',yes:'return True'},
+      {t:'c',tx:'AGG_KEYWORDS のいずれかで末尾一致？',yes:'return True（例: "前年累計"）'},
+      {t:'p',tx:'末尾の括弧注記を除去',nt:'例: "合計（参考）" → "合計"'},
+      {t:'c',tx:'除去後の文字列で再チェック',yes:'return True',no:'return False'},
+    ]},
+  _is_redundant_agg_row:{s:2,pub:false,io:{i:'df, idx, col, ctx_cols, covar',o:'bool'},
+    desc:'集計値を持つ行が冗長かを判定。同一コンテキストに個別データが存在する場合のみ True。',
+    steps:[
+      {t:'p',tx:'col 自身と共変列をコンテキストから除外'},
+      {t:'c',tx:'コンテキスト列なし？',yes:'列全体に非集計値があれば True'},
+      {t:'p',tx:'自行を除く「同一コンテキスト値」の行を検索'},
+      {t:'c',tx:'一致行に非集計値あり？',yes:'return True（冗長）'},
+      {t:'c',tx:'一致行なし かつ コンテキスト列に NULL あり？',yes:'列全体で判定',no:'return False'},
+    ]},
+  _detect_covariates:{s:2,pub:false,io:{i:'df, cols',o:'Dict[str, set]'},
+    desc:'一方が他方を一意に決定する列ペア（コード↔ラベルなど）を検出する。',
+    steps:[
+      {t:'p',tx:'ctx_cols の全ペアを列挙'},
+      {t:'p',tx:'各ペア (c1, c2) について groupby で一意性を確認'},
+      {t:'c',tx:'一意対応あり？',yes:'共変ペアとして両方向に記録'},
+      {t:'r',tx:'return {col: {共変列のセット}} 辞書'},
+    ]},
+  _is_grouping_col:{s:2,pub:false,io:{i:'series, df_len',o:'bool'},
+    desc:'列がグルーピング変数（カテゴリ・コード列）かを判定する。ユニーク率が低い列のみコンテキストに使用する。',
+    steps:[
+      {t:'p',tx:'series.nunique() でユニーク値数を取得'},
+      {t:'p',tx:'ユニーク率 = n_unique / max(1, df_len) を計算'},
+      {t:'c',tx:'ユニーク率 < 50%？',yes:'return True（グルーピング列）',no:'return False'},
+    ]},
+  _normalize_label:{s:2,pub:false,io:{i:'str',o:'str'},
+    desc:'ラベル比較用に Unicode 空白類・全角スペース・制御文字を除去して正規化する。',
+    steps:[
+      {t:'p',tx:'_WS_RE.sub("", s) で全角スペース・ゼロ幅文字を除去'},
+      {t:'p',tx:'.strip() でトリム'},
+      {t:'r',tx:'return 正規化済み文字列'},
+    ]},
+  _to_jsonable:{s:2,pub:false,io:{i:'Any（値）',o:'Any（JSON 変換可能な値）'},
+    desc:'numpy スカラー（int64/float64 等）を JSON 変換可能な Python 組み込み型に変換する。監査用メタデータの値整形に使用する。',
+    steps:[
+      {t:'c',tx:'.item() メソッドを持つ？',no:'return v（そのまま）'},
+      {t:'c',tx:'.item() の呼び出しに成功？',yes:'return v.item()（組み込み型）',no:'return v（そのまま）'},
+    ]},
+  fill_grouping_cols:{s:3,pub:true,io:{i:'pd.DataFrame',o:'Tuple[pd.DataFrame, List[str]]'},
+    desc:'視覚的セル結合によるグルーピング列の内部 None を前方補完する。集計ラベルの過伝播を防止する。',
+    steps:[
+      {t:'c',tx:'df が None または空？',yes:'return (df, [])'},
+      {t:'p',tx:'各列を走査'},
+      {t:'c',tx:'数値型・bool型・日時型？',yes:'スキップ'},
+      {t:'c',tx:'内部 NULL なし？',yes:'スキップ（末尾 NULL のみの列）'},
+      {t:'p',tx:'ffill を実行'},
+      {t:'p',tx:'集計ラベルの過伝播を防ぐ',nt:'ffill 後に集計ラベルになったセルは NULL に戻す',calls:['_is_agg_label']},
+      {t:'c',tx:'ffill 後のユニーク率 ≥ 50%？',yes:'スキップ（カテゴリ列でない）'},
+      {t:'p',tx:'列を更新 → filled_cols に追加'},
+      {t:'r',tx:'return (filled_df, filled_col_names)'},
+    ]},
+  detect_cross_table:{s:4,pub:true,io:{i:'pd.DataFrame, title?, filename?',o:'Dict | None'},
+    desc:'DataFrame がクロス集計形式（月・四半期・年度等を列に持つ横持ち）かを検出する。',
+    steps:[
+      {t:'c',tx:'列数 < 3 または DataFrame が空？',yes:'return None'},
+      {t:'p',tx:'各列名を _classify_col_time で時系列パターンに分類',calls:['_classify_col_time']},
+      {t:'c',tx:'時系列列が1列もない？',yes:'return None'},
+      {t:'p',tx:'候補範囲の時系列比率を計算'},
+      {t:'c',tx:'時系列列 < 2列 または 比率 < 80%？',yes:'return None'},
+      {t:'p',tx:'ラベル列と時系列列を分離'},
+      {t:'c',tx:'月のみ列？',yes:'_extract_year_context でタイトル/ファイル名から年を補完',calls:['_extract_year_context']},
+      {t:'r',tx:'return {label_cols, time_cols, time_kind, var_name, value_name, year_context}'},
+    ]},
+  stack_cross_table:{s:4,pub:true,io:{i:'pd.DataFrame, stack_info',o:'pd.DataFrame（縦持ち）'},
+    desc:'クロス集計形式（横持ち）を縦持ち（long format）に変換する。',
+    steps:[
+      {t:'p',tx:'stack_info から各パラメータを取得',nt:'label_cols, time_cols, var_name, value_name, year_context'},
+      {t:'p',tx:'pd.melt() で縦持ち変換',nt:'id_vars=label_cols, value_vars=time_cols'},
+      {t:'c',tx:'月のみ列 かつ year_context あり？',yes:'label_cols の直後に 年 列を挿入'},
+      {t:'p',tx:'インデックスをリセット'},
+      {t:'r',tx:'return 縦持ち DataFrame'},
+    ]},
+  _classify_col_time:{s:4,pub:false,io:{i:'str（列名）',o:'str | None'},
+    desc:'列名が時系列パターンにマッチするかを判定し、種別文字列を返す。',
+    steps:[
+      {t:'p',tx:'列名を文字列化・trim'},
+      {t:'p',tx:'TIME_PATTERNS の各パターンと順番に照合',nt:'year_month / month / quarter / fiscal_year / year / year_num'},
+      {t:'c',tx:'パターンに一致？',yes:'return 種別文字列',no:'次のパターンへ'},
+      {t:'r',tx:'return None（いずれにも一致しない）'},
+    ]},
+  _extract_year_context:{s:4,pub:false,io:{i:'title?, filename?',o:'int | None'},
+    desc:'テーブルタイトルまたはファイル名から西暦年（1900〜2099）を抽出する。',
+    steps:[
+      {t:'p',tx:'タイトル文字列を正規表現でスキャン（1900〜2099）'},
+      {t:'c',tx:'一致あり？',yes:'return 整数（西暦年）'},
+      {t:'p',tx:'ファイル名を正規表現でスキャン'},
+      {t:'c',tx:'一致あり？',yes:'return 整数（西暦年）'},
+      {t:'r',tx:'return None'},
+    ]},
+};
+
+/* ══════════ COLOR VARS ══════════ */
+const SV = {
+  s1:{c:'var(--s1)',bg:'var(--s1-bg)'},
+  s2:{c:'var(--s2)',bg:'var(--s2-bg)'},
+  s3:{c:'var(--s3)',bg:'var(--s3-bg)'},
+  s4:{c:'var(--s4)',bg:'var(--s4-bg)'},
+};
+const KEYS = ['s1','s2','s3','s4'];
+function sv(k){const v=SV[k];return `--sc:${v.c};--sc-bg:${v.bg}`}
+
+/* ══════════ STATE ══════════ */
+let activeStage=null, isStageSplit=false, leftW=460;
+let expandedFns=new Set(); // 中央パネルでカード下に詳細展開中の関数名
+let subFnStack={}; // カード内右側インスペクタのナビゲーションスタック: { [トップ関数名]: [子関数名, 孫関数名, ...] }
+let subSplitRatio={}; // カード内の 処理ステップ/子関数インスペクタ 分割比率: { [トップ関数名]: 0〜1（既定 0.5 = 中央） }
+
+/* ══════════ BUILD OVERVIEW ══════════ */
+function buildOverview(){
+  let h=`
+    <div class="io-bar">
+      <div class="io-cell" style="--sc:var(--s1)">
+        <div class="io-lbl">入力</div>
+        <div class="io-val">DetectedTable.df</div>
+        <div class="io-sub">step2_detect が構築した生 DataFrame</div>
+      </div>
+      <div class="io-cell" style="--sc:var(--s4)">
+        <div class="io-lbl">出力</div>
+        <div class="io-val">正規化済み DataFrame + メタ情報</div>
+        <div class="io-sub">filled_cols, stack_info, agg_removed_row/col_metadata…</div>
+      </div>
+    </div>`;
+
+  STAGES.forEach((s,i)=>{
+    const k=KEYS[i];
+    const pills=s.fns.map(f=>`<span class="pill${f.pub?' pub':''}">${f.n}</span>`).join('');
+    const rows=s.rows.map(r=>`<div class="dr"><span class="dk">${r.k}</span><span class="dv">${r.v}</span></div>`).join('');
+    const isActive=activeStage===s.id;
+    h+=`
+      <div class="stage-card${isActive?' active':''}" id="sc${s.id}" style="${sv(k)}" onclick="selectStage(${s.id})">
+        <div class="stage-hd">
+          <span class="stage-chip">S${s.id}</span>
+          <span style="font-size:15px">${s.emoji}</span>
+          <span class="stage-name">${s.name}</span>
+        </div>
+        <div class="stage-body">
+          <div class="stage-desc">${s.desc}</div>
+          <div class="fn-pills">${pills}</div>
+          <div class="detail-rows">${rows}</div>
+        </div>
+      </div>`;
+    if(i<3) h+=`<div class="arr"><div class="arr-line"></div><div class="arr-head"></div></div>`;
+  });
+  h+=`<div class="click-hint">▲ カードをクリックして関数フローを表示 / 再クリックで全体に戻る</div>`;
+  document.getElementById('left-inner').innerHTML=h;
+}
+
+/* ══════════ SELECT / TOGGLE STAGE ══════════ */
+function selectStage(id){
+  if(activeStage===id && isStageSplit){ closeSplit(); return; }
+  if(activeStage!==id){ expandedFns.clear(); subFnStack={}; subSplitRatio={}; }
+  activeStage=id;
+  document.querySelectorAll('.stage-card').forEach(c=>c.classList.remove('active'));
+  const card=document.getElementById('sc'+id);
+  if(card) card.classList.add('active');
+  if(!isStageSplit){
+    isStageSplit=true;
+    document.getElementById('app').classList.add('s-split');
+    document.getElementById('left-wrap').style.width=leftW+'px';
+  }
+  renderStageFlow(id);
+}
+
+/* ══════════ CLOSE SPLIT ══════════ */
+function closeSplit(){
+  isStageSplit=false; activeStage=null;
+  expandedFns.clear(); subFnStack={}; subSplitRatio={};
+  const app=document.getElementById('app');
+  app.classList.remove('s-split');
+  document.getElementById('left-wrap').style.width='';
+  document.getElementById('mid-inner').innerHTML='';
+  document.querySelectorAll('.stage-card').forEach(c=>c.classList.remove('active'));
+}
+
+/* ══════════ RENDER STAGE FLOW ══════════ */
+function renderStageFlow(id, resetScroll=true){
+  const s=STAGES[id-1], k=KEYS[id-1], fl=FLOWS[id];
+  const nodesHtml=fl.nodes.map(n=>{
+    if(n.type==='arrow') return `
+      <div class="flow-arr">
+        <div class="fa-ln"></div>
+        <span class="fa-lbl">${n.label}</span>
+        <div class="fa-hd"></div>
+      </div>`;
+    const curSub=(subFnStack[n.fn]||[]).slice(-1)[0];
+    const uses=n.uses.length?`<div class="fn-uses">${n.uses.map(u=>`
+      <div class="use-row">
+        <span class="use-arr">↳ 呼び出し</span>
+        <span class="use-fn${curSub===u.fn?' uf-active':''}" onclick="event.stopPropagation();openSubFn('${n.fn}','${u.fn}')">${u.fn}</span>
+        <span class="use-nt">— ${u.note}</span>
+      </div>`).join('')}</div>`:'';
+    const isOpen=expandedFns.has(n.fn);
+    const inlineDetail=isOpen?buildInlineDetailHtml(n.fn):'';
+    return `<div class="fn-box${isOpen?' fx-active':''}" onclick="toggleInline('${n.fn}')">
+      <div class="fn-bh">
+        <span class="fn-nm">${n.fn}</span>
+        <span class="fn-badge ${n.pub?'fb-pub':'fb-prv'}">${n.pub?'Public':'Private'}</span>
+      </div>
+      <div class="fn-desc">${n.desc}</div>
+      ${uses}
+      <div class="fn-ret"><span class="fn-ret-lbl">→ return</span><span class="fn-ret-val">${n.ret}</span></div>
+      ${inlineDetail}
+    </div>`;
+  }).join('');
+
+  const midEl=document.getElementById('mid-inner');
+  if(!midEl) return;
+  midEl.innerHTML=`
+    <div style="${sv(k)}">
+      <div class="rf-top">
+        <div>
+          <div class="sf-tag">${s.emoji} Stage ${id}</div>
+          <div class="sf-title">${s.name}</div>
+        </div>
+        <button class="rf-close" onclick="closeSplit()" title="全体に戻る (←)">✕</button>
+      </div>
+      <div class="sf-overview">${fl.overview}</div>
+      <div class="sec-label">関数フロー（カードをクリックで詳細展開）</div>
+      <div id="fn-flow-area">${nodesHtml}</div>
+    </div>`;
+  if(resetScroll) document.getElementById('mid-wrap').scrollTop=0;
+}
+
+/* ══════════ TOGGLE INLINE FUNCTION DETAIL (below the card) ══════════ */
+function toggleInline(fn){
+  if(expandedFns.has(fn)) expandedFns.delete(fn); else expandedFns.add(fn);
+  rerenderMid();
+}
+
+/* ══════════ NESTED-FUNCTION INSPECTOR (right side of the card) ══════════ */
+function openSubFn(cardFn, targetFn){
+  expandedFns.add(cardFn);
+  const stack=subFnStack[cardFn]||(subFnStack[cardFn]=[]);
+  if(stack[stack.length-1]!==targetFn) stack.push(targetFn);
+  rerenderMid();
+}
+function jumpSubFn(cardFn, idx){
+  const stack=subFnStack[cardFn];
+  if(!stack) return;
+  stack.length=idx+1;
+  rerenderMid();
+}
+function closeSubFn(cardFn){
+  delete subFnStack[cardFn];
+  delete subSplitRatio[cardFn];
+  rerenderMid();
+}
+function rerenderMid(){
+  const mw=document.getElementById('mid-wrap');
+  const st=mw.scrollTop;
+  renderStageFlow(activeStage, false);
+  mw.scrollTop=st;
+}
+
+function buildInlineDetailHtml(fnName){
+  const fn=FN[fnName];
+  if(!fn) return '';
+  const stack=subFnStack[fnName]||[];
+  const stepsHtml=`<div class="steps">${buildStepsHtml(fn,fnName)}</div>`;
+  let bodyHtml;
+  if(stack.length){
+    const ratio=subSplitRatio[fnName] ?? 0.5; // 既定は親関数のちょうど中心
+    bodyHtml=`
+      <div class="fid-body" data-card="${fnName}">
+        <div class="fid-steps" style="flex:0 0 calc(${(ratio*100).toFixed(2)}% - 3px)">${stepsHtml}</div>
+        <div class="fid-dvd" data-card="${fnName}" title="ドラッグで幅調整"></div>
+        <div class="fid-sub">${renderSubFnPanel(fnName,stack)}</div>
+      </div>`;
+  } else {
+    bodyHtml=`<div class="fid-body"><div class="fid-steps">${stepsHtml}</div></div>`;
+  }
+  return `
+    <div class="fn-inline-detail" onclick="event.stopPropagation()">
+      <div class="fd-io">
+        <div class="io-cell" style="--sc:var(--s2)"><div class="io-lbl">入力</div><div class="io-val">${fn.io.i}</div></div>
+        <div class="io-cell" style="--sc:var(--s4)"><div class="io-lbl">出力</div><div class="io-val">${fn.io.o}</div></div>
+      </div>
+      <div class="sec-label">処理ステップ</div>
+      ${bodyHtml}
+    </div>`;
+}
+
+function renderSubFnPanel(cardFn, stack){
+  const cur=stack[stack.length-1];
+  const sf=FN[cur];
+  if(!sf) return '';
+  const ancestors=stack.slice(0,-1);
+  const crumbHtml=ancestors.length?`<div class="fid-crumb">${ancestors.map((name,i)=>
+    `<span class="cr-lnk" onclick="event.stopPropagation();jumpSubFn('${cardFn}',${i})">${name}</span><span class="cr-sep">›</span>`
+  ).join('')}</div>`:'';
+  return `
+    <div class="fid-sub-hd">
+      ${crumbHtml}
+      <div class="fn-bh" onclick="event.stopPropagation();closeSubFn('${cardFn}')" title="クリックで閉じる">
+        <span class="fn-nm">${cur}</span>
+        <span class="fn-badge ${sf.pub?'fb-pub':'fb-prv'}">${sf.pub?'Public':'Private'}</span>
+        <span class="fid-sub-close-hint">▲ 閉じる</span>
+      </div>
+    </div>
+    <div class="fd-desc">${sf.desc}</div>
+    <div class="fd-io">
+      <div class="io-cell" style="--sc:var(--s2)"><div class="io-lbl">入力</div><div class="io-val">${sf.io.i}</div></div>
+      <div class="io-cell" style="--sc:var(--s4)"><div class="io-lbl">出力</div><div class="io-val">${sf.io.o}</div></div>
+    </div>
+    <div class="steps">${buildStepsHtml(sf,cardFn)}</div>`;
+}
+
+function buildStepsHtml(fn, cardFn){
+  return fn.steps.map((st,i)=>{
+    const num=i+1, icon=st.t==='c'?'if':st.t==='r'?'↩':num;
+    const br=(st.yes||st.no)?`<div class="sbr">
+      ${st.yes?`<div class="br"><span class="by">YES</span><span class="bt">${st.yes}</span></div>`:''}
+      ${st.no ?`<div class="br"><span class="bn">NO</span><span class="bt">${st.no}</span></div>`:''}
+    </div>`:'';
+    const curSub=(subFnStack[cardFn]||[]).slice(-1)[0];
+    const calls=(st.calls&&st.calls.length)?`<div class="fn-uses step-calls">${st.calls.map(c=>`
+      <div class="use-row">
+        <span class="use-arr">↳ 呼び出し</span>
+        <span class="use-fn${curSub===c?' uf-active':''}" onclick="event.stopPropagation();openSubFn('${cardFn}','${c}')">${c}</span>
+      </div>`).join('')}</div>`:'';
+    return `<div class="step-row">
+      <div class="si si-${st.t}">${icon}</div>
+      <div class="sb">
+        <div class="st">${st.tx}</div>
+        ${st.nt?`<div class="sn">${st.nt}</div>`:''}
+        ${br}
+        ${calls}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ══════════ DRAG RESIZE ══════════ */
+(function(){
+  function makeDrag(dvdId, getEl, getW, setW){
+    const dvd=document.getElementById(dvdId);
+    let drag=false, dsx=0, dsw=0;
+    dvd.addEventListener('mousedown',e=>{
+      drag=true; dsx=e.clientX;
+      dsw=getEl().getBoundingClientRect().width;
+      dvd.classList.add('drag');
+      document.body.style.userSelect='none';
+      document.body.style.cursor='col-resize';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove',e=>{
+      if(!drag) return;
+      const app=document.getElementById('app');
+      const nw=Math.max(240,Math.min(dsw+(e.clientX-dsx),app.clientWidth-240));
+      setW(nw); getEl().style.width=nw+'px';
+    });
+    document.addEventListener('mouseup',()=>{
+      if(!drag) return;
+      drag=false; dvd.classList.remove('drag');
+      document.body.style.userSelect=''; document.body.style.cursor='';
+    });
+  }
+  makeDrag('dvd1',()=>document.getElementById('left-wrap'), ()=>leftW, v=>{leftW=v});
+})();
+
+/* ══════════ NESTED-PANEL DRAG RESIZE (per-card, elements are re-created on every render → event delegation) ══════════ */
+(function(){
+  let dragCard=null, startX=0, startRatio=0.5, containerW=0;
+  document.addEventListener('mousedown', e=>{
+    const dvd=e.target.closest('.fid-dvd');
+    if(!dvd) return;
+    dragCard=dvd.dataset.card;
+    startX=e.clientX;
+    containerW=dvd.closest('.fid-body').getBoundingClientRect().width;
+    startRatio=subSplitRatio[dragCard] ?? 0.5;
+    dvd.classList.add('drag');
+    document.body.style.userSelect='none';
+    document.body.style.cursor='col-resize';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e=>{
+    if(!dragCard || !containerW) return;
+    let ratio=startRatio + (e.clientX-startX)/containerW;
+    ratio=Math.max(.2,Math.min(.8,ratio));
+    subSplitRatio[dragCard]=ratio;
+    document.querySelectorAll(`.fid-body[data-card="${dragCard}"] .fid-steps`).forEach(el=>{
+      el.style.flex=`0 0 calc(${(ratio*100).toFixed(2)}% - 3px)`;
+    });
+  });
+  document.addEventListener('mouseup', ()=>{
+    if(!dragCard) return;
+    document.querySelectorAll('.fid-dvd.drag').forEach(el=>el.classList.remove('drag'));
+    document.body.style.userSelect=''; document.body.style.cursor='';
+    dragCard=null; containerW=0;
+  });
+})();
+
+/* ══════════ INIT ══════════ */
+buildOverview();
+</script>

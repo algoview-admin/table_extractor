@@ -1,8 +1,11 @@
 """
-ステップ6 テーブル選択ロジック。
+ステップ6 テーブル選択モジュール。
 
-Streamlit に依存しない純粋な処理関数を提供する。
-UI 層 (steps/step6_select.py) はこのモジュールの関数を呼び出す。
+処理概要: AI 分析結果と統合推奨をもとに、エクスポート対象テーブルの
+          グルーピング・粒度バッジ生成・ファイル名変換を行う。
+入力    : AIAnalysisResult、final_tables（統合済みテーブル辞書 Dict[str, dict]）
+出力    : グループ分類辞書（統合・最小粒度・マスタ・推奨・非推奨の5区分）、
+          バッジ HTML 文字列、安全なファイル名文字列
 """
 
 from typing import Dict, List, Optional, Tuple

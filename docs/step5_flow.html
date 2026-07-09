@@ -1,0 +1,828 @@
+<title>step5_suggest — 処理フロー</title>
+<style>
+/* ── ライトパレット（常時） ─────────────────────────────────────────── */
+:root {
+  --bg:       #F5F7FF;
+  --surface:  #FFFFFF;
+  --sur2:     #F8FAFF;
+  --sur3:     #EEF2FF;
+
+  --tx1: #1A1D3C;
+  --tx2: #4F5578;
+  --tx3: #9BA3C0;
+
+  --bd:  #DDE3F5;
+  --bd2: #C9D2EE;
+
+  --sh-sm: 0 1px 4px rgba(30,40,100,.07);
+  --sh:    0 2px 10px rgba(30,40,100,.09), 0 1px 3px rgba(30,40,100,.05);
+
+  /* Stage accent — S1 sky, S2 violet, S3 emerald, S4 amber */
+  --s1:#0284C7; --s1-bg:#EFF9FF; --s1-lt:#BAE6FD;
+  --s2:#6D28D9; --s2-bg:#F5F3FF; --s2-lt:#DDD6FE;
+  --s3:#059669; --s3-bg:#ECFDF5; --s3-lt:#A7F3D0;
+  --s4:#C2410C; --s4-bg:#FFF7ED; --s4-lt:#FED7AA;
+
+  --fc-p: #475569; --fc-c: #B45309; --fc-r: #059669;
+  --fc-ln: #CBD5E1;
+
+  --mono: 'Cascadia Code','SF Mono','Fira Code',Consolas,monospace;
+  --r: 10px; --rsm: 5px;
+}
+
+/* optional dark override via viewer toggle only */
+:root[data-theme="dark"] {
+  --bg:#0F172A; --surface:#1E293B; --sur2:#162032; --sur3:#0C1F40;
+  --tx1:#F1F5F9; --tx2:#94A3B8; --tx3:#475569;
+  --bd:#2E4060; --bd2:#3E5272;
+  --sh-sm:0 1px 4px rgba(0,0,0,.25); --sh:0 2px 10px rgba(0,0,0,.3);
+  --s1:#38BDF8; --s1-bg:#042F2E; --s1-lt:#0C4A6E;
+  --s2:#A78BFA; --s2-bg:#1A0F3A; --s2-lt:#2E1B5E;
+  --s3:#34D399; --s3-bg:#042F2E; --s3-lt:#064E3B;
+  --s4:#FB923C; --s4-bg:#1C0A00; --s4-lt:#431407;
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--bg);color:var(--tx1);
+  font-family:system-ui,-apple-system,'Segoe UI',Helvetica,sans-serif;
+  font-size:13px;line-height:1.6;display:flex;flex-direction:column;
+}
+
+/* ── Topbar ── */
+.topbar{
+  flex-shrink:0;display:flex;align-items:center;gap:.6rem;
+  padding:.5rem 1.25rem;background:var(--surface);
+  border-bottom:1.5px solid var(--bd);box-shadow:var(--sh-sm);
+}
+.tb-mod{font-family:var(--mono);font-size:11px;color:var(--tx3)}
+.tb-sep{color:var(--bd2);font-size:12px}
+.tb-title{font-size:13.5px;font-weight:700;color:var(--tx1)}
+.tb-hint{margin-left:auto;font-size:11px;color:var(--tx3);font-style:italic}
+
+/* ── Root layout ── */
+#app{flex:1;display:flex;min-height:0;overflow:hidden}
+
+/* ── Left wrap (stage overview) ── */
+#left-wrap{flex:1;overflow-y:auto}
+#left-wrap::-webkit-scrollbar{width:4px}
+#left-wrap::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+#left-inner{max-width:680px;margin:0 auto;padding:1.5rem 2rem 2.5rem}
+#app.s-split #left-wrap{flex:none}
+#app.s-split #left-inner{max-width:none;margin:0;padding:1rem 1.1rem 2rem}
+
+/* ── Mid wrap (stage function flow) ── */
+#mid-wrap{
+  display:none;overflow:auto;
+  background:var(--sur2);border-left:1.5px solid var(--bd);
+}
+#mid-wrap::-webkit-scrollbar{width:4px}
+#mid-wrap::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+#app.s-split #mid-wrap{display:block;flex:1;min-width:260px}
+#mid-inner{padding:1.25rem 1.25rem 2rem}
+
+/* ── Drag handles ── */
+.dvd{
+  display:none;width:5px;flex-shrink:0;cursor:col-resize;
+  background:var(--bd);position:relative;transition:background .15s;
+}
+.dvd::after{
+  content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:32px;border-radius:2px;background:var(--bd2);
+}
+.dvd:hover,.dvd.drag{background:var(--sc,var(--s1))}
+.dvd:hover::after,.dvd.drag::after{background:var(--sc,var(--s1))}
+#app.s-split #dvd1{display:block}
+
+/* ── IO Banner ── */
+.io-bar{
+  display:flex;border:1.5px solid var(--bd);border-radius:var(--r);
+  overflow:hidden;background:var(--surface);margin-bottom:1.25rem;
+  box-shadow:var(--sh-sm);
+}
+.io-cell{flex:1;padding:.65rem 1rem}
+.io-cell+.io-cell{border-left:1.5px solid var(--bd)}
+.io-lbl{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--sc,var(--s1));margin-bottom:.2rem;
+}
+.io-val{font-family:var(--mono);font-size:11.5px;color:var(--tx1);font-weight:600}
+.io-sub{font-size:11px;color:var(--tx3);margin-top:.1rem}
+
+/* ── Stage card ── */
+.stage-card{
+  background:var(--surface);border:2px solid var(--bd);
+  border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm);
+  cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .12s;
+}
+.stage-card:hover{
+  border-color:var(--sc);transform:translateY(-1px);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 10%,transparent),var(--sh);
+}
+.stage-card.active{
+  border-color:var(--sc);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--sc) 14%,transparent),var(--sh);
+  background:color-mix(in srgb,var(--sc) 3%,var(--surface));
+}
+.stage-hd{
+  display:flex;align-items:center;gap:.55rem;
+  padding:.5rem .9rem;background:var(--sc-bg);border-bottom:1.5px solid var(--bd);
+}
+.stage-chip{
+  font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--sc);background:var(--surface);border:1.5px solid var(--sc);
+  border-radius:4px;padding:2px 7px;flex-shrink:0;
+}
+.stage-name{font-size:12.5px;font-weight:700;color:var(--sc)}
+.stage-body{padding:.7rem 1rem .9rem}
+.stage-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.55rem}
+.fn-pills{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.6rem}
+.pill{
+  font-family:var(--mono);font-size:11px;padding:.18rem .5rem;
+  border-radius:4px;border:1.5px solid var(--bd);
+  background:var(--sur2);color:var(--tx2);white-space:nowrap;
+}
+.pill.pub{
+  border-color:color-mix(in srgb,var(--sc) 35%,transparent);
+  background:color-mix(in srgb,var(--sc) 8%,transparent);
+  color:var(--sc);
+}
+.detail-rows{
+  border-top:1px solid var(--bd);padding:.5rem 0 .2rem;
+  display:flex;flex-direction:column;gap:.3rem;
+}
+.dr{display:grid;grid-template-columns:auto 1fr;gap:.4rem .8rem;align-items:baseline}
+.dk{font-size:10.5px;font-weight:700;color:var(--tx3);white-space:nowrap}
+.dv{font-size:12px;color:var(--tx2);line-height:1.45}
+
+/* toggle hint on active card */
+.stage-card.active .stage-hd::after{
+  content:'クリックで戻る';margin-left:auto;font-size:10px;
+  color:var(--sc);opacity:.7;
+}
+
+/* ── Arrow between cards ── */
+.arr{display:flex;flex-direction:column;align-items:center;padding:.3rem 0}
+.arr-line{width:1.5px;height:14px;background:var(--bd2)}
+.arr-head{
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-top:7px solid var(--bd2);
+}
+
+/* ── Click hint ── */
+.click-hint{margin-top:1rem;text-align:center;font-size:11.5px;color:var(--tx3)}
+
+/* ── Right: stage flow ── */
+.rf-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:.8rem}
+.rf-close{
+  width:28px;height:28px;border-radius:6px;border:1.5px solid var(--bd);
+  background:var(--surface);color:var(--tx3);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+  transition:background .13s,color .13s,border-color .13s;flex-shrink:0;
+}
+.rf-close:hover{background:var(--bd);color:var(--tx1);border-color:var(--bd2)}
+.sf-tag{font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--sc);margin-bottom:.3rem}
+.sf-title{font-size:15.5px;font-weight:800;color:var(--tx1);letter-spacing:-.015em;margin-bottom:.3rem}
+.sf-overview{font-size:12.5px;color:var(--tx2);line-height:1.65;margin-bottom:1rem}
+
+.sec-label{
+  font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--tx3);margin-bottom:.65rem;display:flex;align-items:center;gap:.5rem;
+}
+.sec-label::after{content:'';flex:1;height:1px;background:var(--bd)}
+
+/* ── Function flow box ── */
+.fn-box{
+  background:var(--surface);border:1.5px solid var(--bd);border-radius:var(--rsm);
+  padding:.65rem .9rem;cursor:pointer;margin-bottom:.5rem;
+  transition:border-color .13s,box-shadow .13s;
+}
+.fn-box:hover{
+  border-color:var(--sc);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 10%,transparent);
+}
+.fn-box.fx-active{
+  border-color:var(--sc);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 15%,transparent);
+  background:color-mix(in srgb,var(--sc) 4%,var(--surface));
+}
+.fn-box.fx-active > .fn-bh::after{
+  content:'▲ 閉じる';margin-left:auto;font-size:9.5px;font-weight:700;
+  color:var(--sc);opacity:.75;
+}
+.fn-bh{display:flex;align-items:center;gap:.45rem;margin-bottom:.3rem}
+.fn-nm{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--tx1)}
+.fn-box:hover .fn-nm,.fn-box.fx-active .fn-nm{color:var(--sc)}
+.fn-badge{
+  font-size:9px;font-weight:700;letter-spacing:.03em;
+  padding:1px 6px;border-radius:3px;flex-shrink:0;
+}
+.fb-pub{background:var(--sc);color:#fff}
+.fb-prv{background:var(--sur2);color:var(--tx3);border:1px solid var(--bd)}
+.fn-desc{font-size:11.5px;color:var(--tx2);margin-bottom:.4rem;line-height:1.45}
+.fn-uses{display:flex;flex-direction:column;gap:.2rem;margin-bottom:.35rem}
+.use-row{display:flex;align-items:baseline;gap:.35rem;font-size:11.5px}
+.use-arr{color:var(--tx3);font-size:10px;flex-shrink:0}
+.use-fn{
+  font-family:var(--mono);font-size:11px;color:var(--sc);cursor:pointer;
+  text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;
+}
+.use-fn:hover{text-decoration-style:solid}
+.use-fn.uf-active{color:var(--sc);font-weight:700;text-decoration-style:solid}
+.use-nt{color:var(--tx3);font-size:11px}
+.fn-ret{
+  display:flex;align-items:baseline;gap:.4rem;font-size:11px;
+  border-top:1px dashed var(--bd);padding-top:.3rem;color:var(--tx3);
+}
+.fn-ret-lbl{font-weight:700;flex-shrink:0}
+.fn-ret-val{font-family:var(--mono);color:var(--tx2)}
+
+/* ── Inline function detail (expands below the card, within stage flow) ── */
+.fn-inline-detail{
+  margin-top:.65rem;padding-top:.65rem;border-top:1.5px dashed var(--bd);
+}
+.fn-inline-detail .fd-io{margin-bottom:.75rem}
+.fn-inline-detail .sec-label{margin-top:0}
+
+/* two-column body inside an expanded card: steps (left) + nested-fn inspector (right).
+   Split starts at the card's center (50/50) and is drag-resizable via .fid-dvd. */
+.fid-body{display:flex;align-items:stretch}
+.fid-steps{flex:1 1 auto;min-width:160px}
+.fid-steps .steps{max-width:none}
+
+/* drag handle between a card's own steps and its nested-fn inspector */
+.fid-dvd{
+  width:6px;flex-shrink:0;align-self:stretch;cursor:col-resize;
+  background:var(--bd);position:relative;transition:background .15s;
+  margin:0 .55rem;
+}
+.fid-dvd::after{
+  content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:28px;border-radius:2px;background:var(--bd2);
+}
+.fid-dvd:hover,.fid-dvd.drag{background:var(--sc)}
+.fid-dvd:hover::after,.fid-dvd.drag::after{background:var(--sc)}
+
+/* ── Nested-function inspector (shown to the right of a step's own steps, inside the same card) ── */
+.fid-sub{
+  flex:1 1 auto;min-width:160px;
+}
+.fid-sub-hd{margin-bottom:.5rem}
+.fid-crumb{font-size:10.5px;color:var(--tx3);display:flex;flex-wrap:wrap;gap:.3rem;align-items:center;margin-bottom:.2rem}
+.cr-lnk{color:var(--sc);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px}
+.cr-lnk:hover{text-decoration-style:solid}
+.cr-sep{color:var(--tx3)}
+/* 子関数ヘッダー: 親カードの「▲ 閉じる」と同じ配置・挙動（右上・クリックで閉じる） */
+.fid-sub .fn-bh{margin-bottom:.4rem;cursor:pointer}
+.fid-sub .fn-bh:hover .fn-nm{color:var(--sc)}
+.fid-sub-close-hint{
+  margin-left:auto;font-size:9.5px;font-weight:700;color:var(--sc);opacity:.75;
+}
+.fid-sub .fd-desc{font-size:11.5px;color:var(--tx2);line-height:1.55;margin-bottom:.6rem}
+.fid-sub .fd-io{margin-bottom:.65rem}
+.fid-sub .steps{max-width:none}
+
+/* step-level "calls" links (inline, inside a step's body) */
+.step-calls{margin-top:.3rem}
+
+/* flow arrow */
+.flow-arr{display:flex;flex-direction:column;align-items:center;padding:.15rem 0;margin:.1rem 0}
+.fa-ln{width:1.5px;height:16px;background:var(--fc-ln)}
+.fa-lbl{font-size:10px;color:var(--tx3);margin:.05rem 0;text-align:center}
+.fa-hd{border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid var(--fc-ln)}
+
+.fd-desc{font-size:12.5px;color:var(--tx2);line-height:1.6;margin-bottom:.75rem}
+.fd-io{display:flex;border:1.5px solid var(--bd);border-radius:var(--rsm);overflow:hidden;margin-bottom:1rem;background:var(--sur2)}
+.fd-io .io-cell{padding:.5rem .8rem}
+
+/* steps */
+.steps{display:flex;flex-direction:column;max-width:520px}
+.step-row{display:flex;gap:.6rem;position:relative}
+.step-row:not(:last-child)::before{
+  content:'';position:absolute;left:12px;top:26px;bottom:-2px;
+  width:1.5px;background:var(--fc-ln);z-index:0;
+}
+.si{
+  flex-shrink:0;width:25px;height:25px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;margin-top:.1rem;position:relative;z-index:1;
+}
+.si-p{background:color-mix(in srgb,#64748B 12%,transparent);color:#64748B;border:1.5px solid #64748B}
+/* 菱形: ::before=外枠(amber), ::after=内塗り(cream), テキストは最前面 */
+.si-c{
+  border-radius:0;background:transparent;
+  color:#92400E;font-size:9px;font-family:var(--mono);
+  isolation:isolate;
+}
+.si-c::before{
+  content:'';position:absolute;inset:0;
+  background:#D97706;
+  clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%);
+  z-index:-1;
+}
+.si-c::after{
+  content:'';position:absolute;inset:2.5px;
+  background:#FEF3C7;
+  clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%);
+  z-index:-1;
+}
+.si-r{background:color-mix(in srgb,#059669 15%,transparent);color:#059669;border:1.5px solid #059669}
+.sb{flex:1;padding:.2rem 0 .85rem;min-width:0}
+.st{font-size:12.5px;color:var(--tx1);font-weight:500;line-height:1.45}
+.sn{font-size:11.5px;color:var(--tx2);margin-top:.2rem;line-height:1.45}
+.sbr{margin-top:.3rem;display:flex;flex-direction:column;gap:.2rem}
+.br{display:flex;align-items:baseline;gap:.35rem;font-size:11.5px}
+.by{font-size:9px;font-weight:700;background:#D1FAE5;color:#065F46;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bn{font-size:9px;font-weight:700;background:#FEF3C7;color:#92400E;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bt{color:var(--tx2)}
+.step-lg{
+  display:flex;gap:.75rem;flex-wrap:wrap;font-size:11px;color:var(--tx3);
+  margin-top:.75rem;padding-top:.6rem;border-top:1px solid var(--bd);
+}
+.lg-i{display:flex;align-items:center;gap:.3rem}
+.lg-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0}
+</style>
+
+<div class="topbar">
+  <a href="flow.html" style="font-size:11px;color:var(--tx3);text-decoration:none;flex-shrink:0" title="全体処理フローに戻る">← 全体フロー</a>
+  <span class="tb-sep">›</span>
+  <span class="tb-mod">src / step5_suggest.py</span>
+  <span class="tb-sep">›</span>
+  <span class="tb-title">新規テーブル提案_処理フロー</span>
+</div>
+
+<div id="app">
+  <div id="left-wrap"><div id="left-inner"></div></div>
+  <div id="dvd1" class="dvd"></div>
+  <div id="mid-wrap"><div id="mid-inner"></div></div>
+</div>
+
+<script>
+/* ══════════ DATA ══════════ */
+const STAGES = [
+  { id:1, k:'s1',
+    name:'注記テキスト解析機能',
+    emoji:'🔍',
+    desc:'注記・注釈テキストの意味タイプを分類し、そこから候補となるテーブル名（エンティティ）を抽出。さらに検出済みテーブルへの完全一致→ファジー一致の2段階照合を行う。',
+    fns:[{n:'_detect_note_type',pub:false},{n:'_extract_entities',pub:false},{n:'_exact_match',pub:false},{n:'_fuzzy_match',pub:false}],
+    rows:[
+      {k:'注記タイプ',v:'NOTE_AGG_KEYWORDS → aggregation / NOTE_EXCL_KEYWORDS → exclusion / NOTE_REF_KEYWORDS → reference / 該当なし → general'},
+      {k:'エンティティ抽出',v:'「引用符」・（括弧）・区切り文字列挙の3パターンから候補名を収集しノイズ語を除外'},
+      {k:'2段階照合',v:'_exact_match（完全一致→部分文字列一致）→ _fuzzy_match（difflib.SequenceMatcher、閾値0.92）'},
+    ]},
+  { id:2, k:'s2',
+    name:'潜在テーブル提案機能',
+    emoji:'🕵️',
+    desc:'検出済みの全テーブルの末尾注記・タイトルを走査し、注記中で言及されているが実際には検出されていないテーブルを LatentTableProposal として提案する。ルールベースで API 呼び出しは行わない。',
+    fns:[{n:'find_latent_tables',pub:true}],
+    rows:[
+      {k:'走査対象',v:'各テーブルの末尾注記（notes）が第一パス、集計・列挙パターンに一致するタイトルがフォールバック'},
+      {k:'提案条件',v:'エンティティ2件以上 かつ 検出済み1件以上 かつ 未検出1件以上'},
+      {k:'2パスマッチング',v:'パス1: 同一シート優先で完全一致 → 一致先を予約 / パス2: 予約外テーブルのみファジー照合（シリーズ兄弟ガード付き）'},
+    ]},
+  { id:3, k:'s3',
+    name:'導出テーブル提案とグルーピング機能',
+    emoji:'🧮',
+    desc:'親（集計）テーブルの注記が列挙する子テーブルのうち未検出のものを、数値の引き算（親 − 検出済み子の合計）で導出し、さらに複数シートにまたがる類似提案をグルーピングして提示する。',
+    fns:[{n:'derive_latent_tables',pub:true},{n:'_try_derive_one',pub:false},{n:'group_latent_proposals',pub:true}],
+    rows:[
+      {k:'導出条件',v:'全候補に共通する数値列があり、行数が一致し、親の絶対値合計が子の合計の80%以上'},
+      {k:'導出式',v:'欠損 ≈ 親テーブル − Σ(検出済み子テーブル)（要素ごとの数値差分）'},
+      {k:'グルーピング',v:'missing_names の集合（ソート済み結合キー）が同じ提案をまとめ、対応する DerivedLatentTable を紐付け'},
+    ]},
+];
+
+const FLOWS = {
+  1:{ overview:'_detect_note_type で注記タイプを分類し、_extract_entities で候補エンティティを抽出したうえで、_exact_match → _fuzzy_match の順にテーブル照合を行う。4関数はいずれも find_latent_tables から利用される独立したユーティリティ。',
+      nodes:[
+        {fn:'_detect_note_type',pub:false,desc:'注記文字列の意味タイプ（aggregation/exclusion/reference/general）を分類',
+         uses:[],ret:"str（'aggregation'|'exclusion'|'reference'|'general'）"},
+        {fn:'_extract_entities',pub:false,desc:'注記文字列から候補テーブル名（エンティティ）のリストを抽出',
+         uses:[],ret:'List[str]（候補エンティティ名）'},
+        {type:'arrow',label:'entities（候補名リスト）を渡す'},
+        {fn:'_exact_match',pub:false,desc:'候補名をテーブルのタイトル/table_idと完全一致→部分文字列一致で照合（パス1）',
+         uses:[],ret:'Optional[str]（table_id）'},
+        {type:'arrow',label:'パス1で未一致の entity のみを渡す'},
+        {fn:'_fuzzy_match',pub:false,desc:'difflib.SequenceMatcher で類似度を計算し、閾値0.92以上のテーブルのみ照合（パス2）',
+         uses:[],ret:'Optional[str]（table_id）'},
+      ]},
+  2:{ overview:'find_latent_tables が全テーブルの注記・タイトルを走査し、内部ヘルパー _scan_text（ネスト関数）が _extract_entities → _exact_match/_fuzzy_match でエンティティ照合を行い、_detect_note_type で注記タイプを分類して LatentTableProposal を構築する。',
+      nodes:[
+        {fn:'find_latent_tables',pub:true,desc:'検出済みテーブルの末尾注記とタイトルをスキャンし、未検出テーブルへの言及を LatentTableProposal として提案する統括関数',
+         uses:[
+           {fn:'_extract_entities',note:'注記/タイトルテキストから候補エンティティを抽出'},
+           {fn:'_exact_match',note:'パス1: 完全一致・部分文字列一致でテーブルを予約'},
+           {fn:'_fuzzy_match',note:'パス2: 予約外テーブルのみファジー照合'},
+           {fn:'_detect_note_type',note:'提案の注記タイプを分類（reasoning 文の生成に使用）'},
+         ],ret:'List[LatentTableProposal]'},
+      ]},
+  3:{ overview:'derive_latent_tables が find_latent_tables の提案ごとに _try_derive_one で数値差分による導出を試み、group_latent_proposals が stage2/stage3 双方の出力（提案と導出結果）をまとめて missing_names 単位にグルーピングする。',
+      nodes:[
+        {fn:'derive_latent_tables',pub:true,desc:'潜在テーブル提案ごとに数値差分（親 − 検出済み子）での導出を試行する統括関数',
+         uses:[
+           {fn:'find_latent_tables',note:'潜在テーブル提案一覧を取得（stage2 と共有）'},
+           {fn:'_try_derive_one',note:'1件ずつ導出処理を実行。例外はスキップして継続'},
+         ],ret:'List[DerivedLatentTable]'},
+        {type:'arrow',label:'derived（導出結果）と proposals（stage2の出力）を渡す'},
+        {fn:'group_latent_proposals',pub:true,desc:'LatentTableProposal と DerivedLatentTable を missing_names の集合ごとにグルーピングする',
+         uses:[],ret:'List[LatentTableGroup]'},
+      ]},
+};
+
+const FN = {
+  _detect_note_type:{s:1,pub:false,io:{i:'text: str',o:"str（'aggregation'|'exclusion'|'reference'|'general'）"},
+    desc:'注記の意味タイプを分類する（表示・フィルタリング用）。NOTE_AGG/EXCL/REF_KEYWORDS への部分一致を優先順に判定する。',
+    steps:[
+      {t:'c',tx:'NOTE_AGG_KEYWORDS のいずれかを含む？',yes:"return 'aggregation'"},
+      {t:'c',tx:'NOTE_EXCL_KEYWORDS のいずれかを含む？',yes:"return 'exclusion'"},
+      {t:'c',tx:'NOTE_REF_KEYWORDS のいずれかを含む？',yes:"return 'reference'"},
+      {t:'r',tx:"return 'general'"},
+    ]},
+  _extract_entities:{s:1,pub:false,io:{i:'note_text: str',o:'List[str]（候補エンティティ名）'},
+    desc:'注記文字列から候補テーブル名を抽出する。「引用符」・（括弧）・区切り文字列挙の3パターンを収集し、ノイズ語を除いて返す。',
+    steps:[
+      {t:'p',tx:'_NOTE_PREFIX_RE で先頭の記号（※＊注 等）を除去'},
+      {t:'p',tx:'「日本語引用符」内の文字列を候補に追加',nt:'re.findall(r"「([^」]{2,40})」")'},
+      {t:'p',tx:'（括弧内）の文字列を候補に追加',nt:'全角・半角どちらの括弧にも対応'},
+      {t:'p',tx:'_AGG_SUFFIX_RE で集計系の末尾表現（"の合計"等）を除去',nt:'例: "AとBの合計" → "AとB"'},
+      {t:'p',tx:'除外・参照系の末尾表現（"を除く"等）も正規表現で除去'},
+      {t:'p',tx:'_SPLIT_RE（読点・"及び"等の区切り文字）で残りを分割し、2〜60文字の断片を候補に追加'},
+      {t:'p',tx:'順序を保持しつつ重複を除去し、_NOISE_RE（「その」「以下」「合計」等）に一致する短いノイズ語を除外'},
+      {t:'r',tx:'return result（候補エンティティ名リスト）'},
+    ]},
+  _exact_match:{s:1,pub:false,io:{i:'name: str, tables: List[DetectedTable]',o:'Optional[str]（table_id）'},
+    desc:'候補名と検出済みテーブルのタイトル/table_idを完全一致→部分文字列一致の順で照合する。',
+    steps:[
+      {t:'p',tx:'全テーブルを走査し、name がタイトルまたは table_id と完全一致するか確認'},
+      {t:'c',tx:'完全一致するテーブルが見つかった？',yes:'return そのtable_id'},
+      {t:'p',tx:'再度全テーブルを走査し、name がタイトルに含まれる／タイトルが name に含まれるか確認（部分文字列一致）'},
+      {t:'c',tx:'部分文字列一致するテーブルが見つかった？',yes:'return そのtable_id'},
+      {t:'r',tx:'return None'},
+    ]},
+  _fuzzy_match:{s:1,pub:false,io:{i:'name: str, tables: List[DetectedTable]',o:'Optional[str]（table_id）'},
+    desc:'difflib.SequenceMatcher で name と各テーブルの title/table_id との類似度を計算し、最良スコアが閾値0.92以上の場合のみ table_id を返す。準同形名称（"X-3" と "X合計" 等）の誤検知を防ぐため閾値を意図的に高く設定。',
+    steps:[
+      {t:'p',tx:'best_ratio=0.0, best_id=None を初期化'},
+      {t:'p',tx:'全テーブル × (title, table_id) の組み合わせについて SequenceMatcher.ratio() を計算'},
+      {t:'p',tx:'最も高い ratio を best_ratio / best_id として保持'},
+      {t:'c',tx:'best_ratio ≥ 0.92？',yes:'return best_id',no:'return None'},
+    ]},
+  find_latent_tables:{s:2,pub:true,io:{i:'tables: List[DetectedTable]',o:'List[LatentTableProposal]'},
+    desc:'検出済みテーブルの末尾注記とタイトルをスキャンして、注記中で言及されているが未検出のテーブルへの提案を生成する。',
+    steps:[
+      {t:'p',tx:'proposals=[]、重複防止用の _seen=set() を初期化。集計・列挙パターン _title_note_re を準備'},
+      {t:'p',tx:'全テーブル × notes（末尾注記）を走査し、内部ヘルパー _scan_text を呼び出す',nt:'メインパス：excel_parser 修正後の注記データ'},
+      {t:'c',tx:'テーブルタイトルが集計・列挙パターン（_title_note_re）に一致？',yes:'_scan_text をタイトルに対しても呼び出す（is_title=True）',no:'スキップ（旧パーサーのフォールバック用条件）'},
+      {t:'p',tx:'（_scan_text）_extract_entities で対象テキストから候補エンティティを抽出',calls:['_extract_entities']},
+      {t:'c',tx:'（_scan_text）entities が2件未満、または (table_id, entities) の組が処理済み？',yes:'処理を打ち切り次のテキストへ'},
+      {t:'p',tx:'（_scan_text）パス1: 同一シートのテーブルを優先し _exact_match で完全一致・部分文字列一致を判定、一致した table_id を予約',calls:['_exact_match']},
+      {t:'p',tx:'（_scan_text）パス2: 予約されていないテーブルのみを対象に、未一致のエンティティを _fuzzy_match でファジー照合',nt:'完全一致済みテーブルとタイトル接頭辞10文字を共有する候補は「シリーズ兄弟ガード」により拒否し missing 側に回す',calls:['_fuzzy_match']},
+      {t:'c',tx:'（_scan_text）detected_names・missing_names が両方とも1件以上ある？',no:'処理を打ち切り次のテキストへ（提案は生成しない）'},
+      {t:'p',tx:'（_scan_text）_detect_note_type で注記タイプを分類し、reasoning 文字列を組み立て',calls:['_detect_note_type']},
+      {t:'p',tx:'（_scan_text）LatentTableProposal を構築して proposals に追加'},
+      {t:'r',tx:'return proposals（List[LatentTableProposal]）'},
+    ]},
+  derive_latent_tables:{s:3,pub:true,io:{i:'tables: List[DetectedTable]',o:'List[DerivedLatentTable]'},
+    desc:'find_latent_tables の提案ごとに _try_derive_one を試行し、数値差分（親 − 検出済み子）で導出可能な潜在テーブルのリストを構築する。',
+    steps:[
+      {t:'p',tx:'find_latent_tables を呼び出して潜在テーブル提案一覧を取得',calls:['find_latent_tables']},
+      {t:'p',tx:'id_to_table 辞書（table_id → DetectedTable）を構築し、derived=[] を初期化'},
+      {t:'p',tx:'各提案について _try_derive_one を呼び出す',nt:'derived にインプレースで追記される',calls:['_try_derive_one']},
+      {t:'c',tx:'_try_derive_one が例外を送出？',yes:'その提案はスキップして次へ（except Exception: pass）'},
+      {t:'r',tx:'return derived（List[DerivedLatentTable]）'},
+    ]},
+  _try_derive_one:{s:3,pub:false,io:{i:'lp: LatentTableProposal, id_to_table: dict, derived: List[DerivedLatentTable]',o:'None（derived にインプレースで追記、成功しなければ何もしない）'},
+    desc:'1件の LatentTableProposal から、親テーブル − 子テーブル群の数値差分で欠損テーブルの導出を試みる。',
+    steps:[
+      {t:'c',tx:'lp.missing_names が空？',yes:'return（導出しない）'},
+      {t:'p',tx:'関係テーブルを収集',nt:'source_table_id + detected_table_ids を重複除去して candidate_ids とする'},
+      {t:'c',tx:'いずれかの候補テーブルが None、df が None、または空？',yes:'return'},
+      {t:'p',tx:'全候補に共通する数値列（common_num_cols）を検索'},
+      {t:'c',tx:'いずれかの候補に数値列が1つもない、または共通数値列が空？',yes:'return'},
+      {t:'c',tx:'候補テーブル間で行数が一致しない？',yes:'return'},
+      {t:'p',tx:'各候補の共通数値列を NaN→0 で ndarray 化し、絶対値合計（totals）を算出'},
+      {t:'c',tx:'全候補の totals が実質ゼロ（< 1e-9）？',yes:'return（導出するものがない）'},
+      {t:'p',tx:'totals が最大の候補を親（parent）、残りを子（children）として分離'},
+      {t:'c',tx:'子テーブルが1件もない？',yes:'return'},
+      {t:'c',tx:'親の合計が子の合計の80%未満？',yes:'return（親として誤ったテーブルが識別されている疑い）'},
+      {t:'p',tx:'導出値 = 親の配列 − Σ(子の配列) を計算し、親の DataFrame をコピーして数値列を置換'},
+      {t:'p',tx:'人間が読める名称・導出式（formula）・reasoning 文字列を組み立て'},
+      {t:'p',tx:'シート名から proposal_id を生成',nt:'例: "Sheet1_DLT1"（シート名がなければ "DLT_1"）'},
+      {t:'r',tx:'DerivedLatentTable を構築して derived に append（戻り値はなし）'},
+    ]},
+  group_latent_proposals:{s:3,pub:true,io:{i:'proposals: List[LatentTableProposal], derived_latent: List[DerivedLatentTable]',o:'List[LatentTableGroup]'},
+    desc:'LatentTableProposal を missing_names の集合（ソート済み結合キー）でグルーピングし、対応する DerivedLatentTable を各グループに紐付ける。',
+    steps:[
+      {t:'p',tx:'dlt_by_source = {parent_table_id: DerivedLatentTable} 辞書を構築'},
+      {t:'p',tx:'各提案について key = "|".join(sorted(missing_names)) を計算'},
+      {t:'c',tx:'key が groups に未登録？',yes:'新規 LatentTableGroup を作成して登録（missing_names/detected_names/note_type/note_text は代表メンバーから設定）'},
+      {t:'p',tx:'(lp, dlt_by_source.get(lp.source_table_id)) のタプルを groups[key].members に追加'},
+      {t:'r',tx:'return list(groups.values())（List[LatentTableGroup]）'},
+    ]},
+};
+
+/* ══════════ COLOR VARS ══════════ */
+const SV = {
+  s1:{c:'var(--s1)',bg:'var(--s1-bg)'},
+  s2:{c:'var(--s2)',bg:'var(--s2-bg)'},
+  s3:{c:'var(--s3)',bg:'var(--s3-bg)'},
+  s4:{c:'var(--s4)',bg:'var(--s4-bg)'},
+};
+const KEYS = ['s1','s2','s3'];
+function sv(k){const v=SV[k];return `--sc:${v.c};--sc-bg:${v.bg}`}
+
+/* ══════════ STATE ══════════ */
+let activeStage=null, isStageSplit=false, leftW=460;
+let expandedFns=new Set(); // 中央パネルでカード下に詳細展開中の関数名
+let subFnStack={}; // カード内右側インスペクタのナビゲーションスタック: { [トップ関数名]: [子関数名, 孫関数名, ...] }
+let subSplitRatio={}; // カード内の 処理ステップ/子関数インスペクタ 分割比率: { [トップ関数名]: 0〜1（既定 0.5 = 中央） }
+
+/* ══════════ BUILD OVERVIEW ══════════ */
+function buildOverview(){
+  let h=`
+    <div class="io-bar">
+      <div class="io-cell" style="--sc:var(--s1)">
+        <div class="io-lbl">入力</div>
+        <div class="io-val">AIAnalysisResult、List[DetectedTable]（正規化済み）</div>
+        <div class="io-sub">AIAnalysisResult は step4_analyze の出力</div>
+      </div>
+      <div class="io-cell" style="--sc:var(--s3)">
+        <div class="io-lbl">出力</div>
+        <div class="io-val">List[LatentTableProposal] / List[DerivedLatentTable]</div>
+        <div class="io-sub">注記から示唆される潜在テーブル候補 / 数値差分で導出した潜在テーブル</div>
+      </div>
+    </div>`;
+
+  STAGES.forEach((s,i)=>{
+    const k=KEYS[i];
+    const pills=s.fns.map(f=>`<span class="pill${f.pub?' pub':''}">${f.n}</span>`).join('');
+    const rows=s.rows.map(r=>`<div class="dr"><span class="dk">${r.k}</span><span class="dv">${r.v}</span></div>`).join('');
+    const isActive=activeStage===s.id;
+    h+=`
+      <div class="stage-card${isActive?' active':''}" id="sc${s.id}" style="${sv(k)}" onclick="selectStage(${s.id})">
+        <div class="stage-hd">
+          <span class="stage-chip">S${s.id}</span>
+          <span style="font-size:15px">${s.emoji}</span>
+          <span class="stage-name">${s.name}</span>
+        </div>
+        <div class="stage-body">
+          <div class="stage-desc">${s.desc}</div>
+          <div class="fn-pills">${pills}</div>
+          <div class="detail-rows">${rows}</div>
+        </div>
+      </div>`;
+    if(i<3) h+=`<div class="arr"><div class="arr-line"></div><div class="arr-head"></div></div>`;
+  });
+  h+=`<div class="click-hint">▲ カードをクリックして関数フローを表示 / 再クリックで全体に戻る</div>`;
+  document.getElementById('left-inner').innerHTML=h;
+}
+
+/* ══════════ SELECT / TOGGLE STAGE ══════════ */
+function selectStage(id){
+  if(activeStage===id && isStageSplit){ closeSplit(); return; }
+  if(activeStage!==id){ expandedFns.clear(); subFnStack={}; subSplitRatio={}; }
+  activeStage=id;
+  document.querySelectorAll('.stage-card').forEach(c=>c.classList.remove('active'));
+  const card=document.getElementById('sc'+id);
+  if(card) card.classList.add('active');
+  if(!isStageSplit){
+    isStageSplit=true;
+    document.getElementById('app').classList.add('s-split');
+    document.getElementById('left-wrap').style.width=leftW+'px';
+  }
+  renderStageFlow(id);
+}
+
+/* ══════════ CLOSE SPLIT ══════════ */
+function closeSplit(){
+  isStageSplit=false; activeStage=null;
+  expandedFns.clear(); subFnStack={}; subSplitRatio={};
+  const app=document.getElementById('app');
+  app.classList.remove('s-split');
+  document.getElementById('left-wrap').style.width='';
+  document.getElementById('mid-inner').innerHTML='';
+  document.querySelectorAll('.stage-card').forEach(c=>c.classList.remove('active'));
+}
+
+/* ══════════ RENDER STAGE FLOW ══════════ */
+function renderStageFlow(id, resetScroll=true){
+  const s=STAGES[id-1], k=KEYS[id-1], fl=FLOWS[id];
+  const nodesHtml=fl.nodes.map(n=>{
+    if(n.type==='arrow') return `
+      <div class="flow-arr">
+        <div class="fa-ln"></div>
+        <span class="fa-lbl">${n.label}</span>
+        <div class="fa-hd"></div>
+      </div>`;
+    const curSub=(subFnStack[n.fn]||[]).slice(-1)[0];
+    const uses=n.uses.length?`<div class="fn-uses">${n.uses.map(u=>`
+      <div class="use-row">
+        <span class="use-arr">↳ 呼び出し</span>
+        <span class="use-fn${curSub===u.fn?' uf-active':''}" onclick="event.stopPropagation();openSubFn('${n.fn}','${u.fn}')">${u.fn}</span>
+        <span class="use-nt">— ${u.note}</span>
+      </div>`).join('')}</div>`:'';
+    const isOpen=expandedFns.has(n.fn);
+    const inlineDetail=isOpen?buildInlineDetailHtml(n.fn):'';
+    return `<div class="fn-box${isOpen?' fx-active':''}" onclick="toggleInline('${n.fn}')">
+      <div class="fn-bh">
+        <span class="fn-nm">${n.fn}</span>
+        <span class="fn-badge ${n.pub?'fb-pub':'fb-prv'}">${n.pub?'Public':'Private'}</span>
+      </div>
+      <div class="fn-desc">${n.desc}</div>
+      ${uses}
+      <div class="fn-ret"><span class="fn-ret-lbl">→ return</span><span class="fn-ret-val">${n.ret}</span></div>
+      ${inlineDetail}
+    </div>`;
+  }).join('');
+
+  const midEl=document.getElementById('mid-inner');
+  if(!midEl) return;
+  midEl.innerHTML=`
+    <div style="${sv(k)}">
+      <div class="rf-top">
+        <div>
+          <div class="sf-tag">${s.emoji} Stage ${id}</div>
+          <div class="sf-title">${s.name}</div>
+        </div>
+        <button class="rf-close" onclick="closeSplit()" title="全体に戻る (←)">✕</button>
+      </div>
+      <div class="sf-overview">${fl.overview}</div>
+      <div class="sec-label">関数フロー（カードをクリックで詳細展開）</div>
+      <div id="fn-flow-area">${nodesHtml}</div>
+    </div>`;
+  if(resetScroll) document.getElementById('mid-wrap').scrollTop=0;
+}
+
+/* ══════════ TOGGLE INLINE FUNCTION DETAIL (below the card) ══════════ */
+function toggleInline(fn){
+  if(expandedFns.has(fn)) expandedFns.delete(fn); else expandedFns.add(fn);
+  rerenderMid();
+}
+
+/* ══════════ NESTED-FUNCTION INSPECTOR (right side of the card) ══════════ */
+function openSubFn(cardFn, targetFn){
+  expandedFns.add(cardFn);
+  const stack=subFnStack[cardFn]||(subFnStack[cardFn]=[]);
+  if(stack[stack.length-1]!==targetFn) stack.push(targetFn);
+  rerenderMid();
+}
+function jumpSubFn(cardFn, idx){
+  const stack=subFnStack[cardFn];
+  if(!stack) return;
+  stack.length=idx+1;
+  rerenderMid();
+}
+function closeSubFn(cardFn){
+  delete subFnStack[cardFn];
+  delete subSplitRatio[cardFn];
+  rerenderMid();
+}
+function rerenderMid(){
+  const mw=document.getElementById('mid-wrap');
+  const st=mw.scrollTop;
+  renderStageFlow(activeStage, false);
+  mw.scrollTop=st;
+}
+
+function buildInlineDetailHtml(fnName){
+  const fn=FN[fnName];
+  if(!fn) return '';
+  const stack=subFnStack[fnName]||[];
+  const stepsHtml=`<div class="steps">${buildStepsHtml(fn,fnName)}</div>`;
+  let bodyHtml;
+  if(stack.length){
+    const ratio=subSplitRatio[fnName] ?? 0.5; // 既定は親関数のちょうど中心
+    bodyHtml=`
+      <div class="fid-body" data-card="${fnName}">
+        <div class="fid-steps" style="flex:0 0 calc(${(ratio*100).toFixed(2)}% - 3px)">${stepsHtml}</div>
+        <div class="fid-dvd" data-card="${fnName}" title="ドラッグで幅調整"></div>
+        <div class="fid-sub">${renderSubFnPanel(fnName,stack)}</div>
+      </div>`;
+  } else {
+    bodyHtml=`<div class="fid-body"><div class="fid-steps">${stepsHtml}</div></div>`;
+  }
+  return `
+    <div class="fn-inline-detail" onclick="event.stopPropagation()">
+      <div class="fd-io">
+        <div class="io-cell" style="--sc:var(--s2)"><div class="io-lbl">入力</div><div class="io-val">${fn.io.i}</div></div>
+        <div class="io-cell" style="--sc:var(--s4)"><div class="io-lbl">出力</div><div class="io-val">${fn.io.o}</div></div>
+      </div>
+      <div class="sec-label">処理ステップ</div>
+      ${bodyHtml}
+    </div>`;
+}
+
+function renderSubFnPanel(cardFn, stack){
+  const cur=stack[stack.length-1];
+  const sf=FN[cur];
+  if(!sf) return '';
+  const ancestors=stack.slice(0,-1);
+  const crumbHtml=ancestors.length?`<div class="fid-crumb">${ancestors.map((name,i)=>
+    `<span class="cr-lnk" onclick="event.stopPropagation();jumpSubFn('${cardFn}',${i})">${name}</span><span class="cr-sep">›</span>`
+  ).join('')}</div>`:'';
+  return `
+    <div class="fid-sub-hd">
+      ${crumbHtml}
+      <div class="fn-bh" onclick="event.stopPropagation();closeSubFn('${cardFn}')" title="クリックで閉じる">
+        <span class="fn-nm">${cur}</span>
+        <span class="fn-badge ${sf.pub?'fb-pub':'fb-prv'}">${sf.pub?'Public':'Private'}</span>
+        <span class="fid-sub-close-hint">▲ 閉じる</span>
+      </div>
+    </div>
+    <div class="fd-desc">${sf.desc}</div>
+    <div class="fd-io">
+      <div class="io-cell" style="--sc:var(--s2)"><div class="io-lbl">入力</div><div class="io-val">${sf.io.i}</div></div>
+      <div class="io-cell" style="--sc:var(--s4)"><div class="io-lbl">出力</div><div class="io-val">${sf.io.o}</div></div>
+    </div>
+    <div class="steps">${buildStepsHtml(sf,cardFn)}</div>`;
+}
+
+function buildStepsHtml(fn, cardFn){
+  return fn.steps.map((st,i)=>{
+    const num=i+1, icon=st.t==='c'?'if':st.t==='r'?'↩':num;
+    const br=(st.yes||st.no)?`<div class="sbr">
+      ${st.yes?`<div class="br"><span class="by">YES</span><span class="bt">${st.yes}</span></div>`:''}
+      ${st.no ?`<div class="br"><span class="bn">NO</span><span class="bt">${st.no}</span></div>`:''}
+    </div>`:'';
+    const curSub=(subFnStack[cardFn]||[]).slice(-1)[0];
+    const calls=(st.calls&&st.calls.length)?`<div class="fn-uses step-calls">${st.calls.map(c=>`
+      <div class="use-row">
+        <span class="use-arr">↳ 呼び出し</span>
+        <span class="use-fn${curSub===c?' uf-active':''}" onclick="event.stopPropagation();openSubFn('${cardFn}','${c}')">${c}</span>
+      </div>`).join('')}</div>`:'';
+    return `<div class="step-row">
+      <div class="si si-${st.t}">${icon}</div>
+      <div class="sb">
+        <div class="st">${st.tx}</div>
+        ${st.nt?`<div class="sn">${st.nt}</div>`:''}
+        ${br}
+        ${calls}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ══════════ DRAG RESIZE ══════════ */
+(function(){
+  function makeDrag(dvdId, getEl, getW, setW){
+    const dvd=document.getElementById(dvdId);
+    let drag=false, dsx=0, dsw=0;
+    dvd.addEventListener('mousedown',e=>{
+      drag=true; dsx=e.clientX;
+      dsw=getEl().getBoundingClientRect().width;
+      dvd.classList.add('drag');
+      document.body.style.userSelect='none';
+      document.body.style.cursor='col-resize';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove',e=>{
+      if(!drag) return;
+      const app=document.getElementById('app');
+      const nw=Math.max(240,Math.min(dsw+(e.clientX-dsx),app.clientWidth-240));
+      setW(nw); getEl().style.width=nw+'px';
+    });
+    document.addEventListener('mouseup',()=>{
+      if(!drag) return;
+      drag=false; dvd.classList.remove('drag');
+      document.body.style.userSelect=''; document.body.style.cursor='';
+    });
+  }
+  makeDrag('dvd1',()=>document.getElementById('left-wrap'), ()=>leftW, v=>{leftW=v});
+})();
+
+/* ══════════ NESTED-PANEL DRAG RESIZE (per-card, elements are re-created on every render → event delegation) ══════════ */
+(function(){
+  let dragCard=null, startX=0, startRatio=0.5, containerW=0;
+  document.addEventListener('mousedown', e=>{
+    const dvd=e.target.closest('.fid-dvd');
+    if(!dvd) return;
+    dragCard=dvd.dataset.card;
+    startX=e.clientX;
+    containerW=dvd.closest('.fid-body').getBoundingClientRect().width;
+    startRatio=subSplitRatio[dragCard] ?? 0.5;
+    dvd.classList.add('drag');
+    document.body.style.userSelect='none';
+    document.body.style.cursor='col-resize';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e=>{
+    if(!dragCard || !containerW) return;
+    let ratio=startRatio + (e.clientX-startX)/containerW;
+    ratio=Math.max(.2,Math.min(.8,ratio));
+    subSplitRatio[dragCard]=ratio;
+    document.querySelectorAll(`.fid-body[data-card="${dragCard}"] .fid-steps`).forEach(el=>{
+      el.style.flex=`0 0 calc(${(ratio*100).toFixed(2)}% - 3px)`;
+    });
+  });
+  document.addEventListener('mouseup', ()=>{
+    if(!dragCard) return;
+    document.querySelectorAll('.fid-dvd.drag').forEach(el=>el.classList.remove('drag'));
+    document.body.style.userSelect=''; document.body.style.cursor='';
+    dragCard=null; containerW=0;
+  });
+})();
+
+/* ══════════ INIT ══════════ */
+buildOverview();
+</script>

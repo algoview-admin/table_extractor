@@ -1,47 +1,29 @@
 """
-テーブル整形モジュール。
+ステップ3 テーブル構造正規化モジュール。
 
-検出テーブルのデータをテーブル関係分析に適した形式に整形する。
-現在実装されている整形機能:
-  - 多段ヘッダーの統合: 名前行・単位行が複数行にわたる場合に 1 行へマージする
-  - 集計行・集計列の除去: 計、合計、累計 等のラベルを持つ行・列を除去する
-
-今後追加が想定される整形機能の例:
-  - 欠損値・秘匿値マーカーの数値変換
-  - データ型の推定と変換
-  - 行ヘッダー列の正規化
+処理概要: 検出された生 DataFrame を分析に適した形式に正規化する。
+          多段ヘッダーの統合・集計行列の除去・グルーピング列の補完・
+          クロス集計の縦持ち変換を行う。
+入力    : DetectedTable.df（step2_detect が構築した生 DataFrame）
+出力    : 正規化済み DataFrame、整形メタ情報
+          （filled_cols, stack_info, agg_rows_removed 等を DetectedTable に付与）
 """
 
 import re as _re
 from typing import Any, Dict, List, Optional, Tuple
 
-
-# --- 既知単位語彙（小文字比較用） ---
-UNIT_VOCAB: frozenset = frozenset({
-    # 日本語単位
-    "人", "名", "千人", "万人",
-    "円", "千円", "万円", "百万円", "億円", "兆円",
-    "%", "％",
-    "ha", "㎡", "m²", "km²", "m³",
-    "m", "km", "cm", "mm",
-    "t", "kg", "g", "トン",
-    "kl", "l",
-    "戸", "棟", "件", "社", "箇所", "か所", "ヶ所", "店", "台", "基",
-    "千", "百万", "億", "万",
-    "kw", "kwh", "mw",
-    # 英語単位（小文字）
-    "persons", "person",
-    "yen", "mil. yen", "thou. yen", "billion yen", "million yen", "1,000 yen",
-    "percent", "ratio", "rate", "index",
-    "ha", "t", "ton", "tons", "kg", "g",
-    "kl", "number", "numbers",
-    "cases", "units", "households", "establishments", "workers",
-    "mil.", "thou.", "million", "billion", "thousand",
-    "kw", "kwh", "mw",
-})
+from .keywords import (
+    AGG_KEYWORDS,
+    STAT_NA_MARKERS as _STAT_NA_MARKERS,
+    TIME_PATTERNS as _TIME_PATTERNS,
+    UNIT_VOCAB,
+    VALUE_KEYWORDS as _VALUE_KEYWORDS,
+    VAR_NAME_MAP as _VAR_NAME_MAP,
+    VAR_NAME_FALLBACK as _VAR_NAME_FALLBACK,
+)
 
 
-def is_unit_row(row: List[Any]) -> bool:
+def _is_unit_row(row: List[Any]) -> bool:
     """行が単位ラベルのみで構成されているかを判定する。
 
     以下の条件をすべて満たす場合に True を返す:
@@ -50,7 +32,8 @@ def is_unit_row(row: List[Any]) -> bool:
         または全セルが 15 文字以内かつ繰り返し率が高い（同一単位が複数列に並ぶ）
     """
     vals = [
-        str(v).strip() for v in row
+        str(v).strip()
+        for v in row
         if v is not None and str(v).strip() and str(v).strip().lower() != "nan"
     ]
     if not vals:
@@ -145,7 +128,7 @@ def detect_header_roles(rows: List[List[Any]]) -> Tuple[int, List[str]]:
         num_cnt = _num_count(nn)
         if num_cnt / len(nn) >= 0.40:
             break
-        role = "unit" if is_unit_row(row) else "name"
+        role = "unit" if _is_unit_row(row) else "name"
         if i > 0 and role == "name":
             # 2 番目以降の name 行: 直前が unit か、または結合セルスパン型のみ受け入れる
             if roles[-1] != "unit" and not first_has_dups:
@@ -165,6 +148,7 @@ def _detect_row_language(row: List[Any], n_cols: int) -> str:
     ASCII アルファベットのみで構成されるセルが過半数の場合は 'en'、
     それ以外は 'other' を返す。
     """
+
     def _v(ci: int) -> str:
         if ci < len(row) and row[ci] is not None:
             s = str(row[ci]).strip()
@@ -179,7 +163,11 @@ def _detect_row_language(row: List[Any], n_cols: int) -> str:
         return any("぀" <= c <= "鿿" or "豈" <= c <= "﫿" for c in s)
 
     cjk_cells = sum(1 for t in texts if _has_cjk(t))
-    ascii_cells = sum(1 for t in texts if not _has_cjk(t) and any(c.isalpha() and c.isascii() for c in t))
+    ascii_cells = sum(
+        1
+        for t in texts
+        if not _has_cjk(t) and any(c.isalpha() and c.isascii() for c in t)
+    )
 
     if cjk_cells / len(texts) >= 0.5:
         return "ja"
@@ -240,7 +228,9 @@ def merge_header_rows(
             # 複数言語が混在 → 最初の明確な言語を主言語とする
             dominant = next((l for l in pair_langs if l != "other"), None)
             if dominant is not None:
-                filtered = [p for p, l in zip(pairs, pair_langs) if l in (dominant, "other")]
+                filtered = [
+                    p for p, l in zip(pairs, pair_langs) if l in (dominant, "other")
+                ]
                 if filtered:
                     pairs = filtered
 
@@ -279,26 +269,19 @@ def merge_header_rows(
 # 集計行・集計列の除去
 # ---------------------------------------------------------------------------
 
-# 集計を示すキーワード（小文字で比較）
-AGG_KEYWORDS: frozenset = frozenset({
-    "計", "合計", "小計", "集計", "累計", "総計", "総合計", "合計額",
-    "total", "subtotal", "grand total", "sum", "cumulative", "aggregate",
-    "year-to-date", "ytd",
-})
-
 # 全角スペース・ゼロ幅文字など ASCII strip で取れない空白類の正規化
-_WS_RE = _re.compile(r'[\s　\xa0​‌‍﻿]+')
+_WS_RE = _re.compile(r"[\s　\xa0​‌‍﻿]+")
 
 # 末尾の括弧注記パターン: 「（参考）」「[除く海外]」「(注1)」など
 # 1つ以上の括弧グループ（各種括弧の対）が末尾に続く場合にマッチ
 _TRAILING_BRACKET_RE = _re.compile(
-    r'[\s　]*(?:[（(【〔「\[]\s*[^)）】〕」\]]*\s*[)）】〕」\]])+\s*$'
+    r"[\s　]*(?:[（(【〔「\[]\s*[^)）】〕」\]]*\s*[)）】〕」\]])+\s*$"
 )
 
 
 def _normalize_label(s: str) -> str:
     """ラベル比較用に Unicode 空白類・制御文字を除去して正規化する。"""
-    return _WS_RE.sub('', s).strip()
+    return _WS_RE.sub("", s).strip()
 
 
 def _is_agg_label(s: str) -> bool:
@@ -318,7 +301,7 @@ def _is_agg_label(s: str) -> bool:
         if sl == kw_l or sl.endswith(kw_l):
             return True
     # 末尾の括弧注記を除いて再判定
-    stripped = _TRAILING_BRACKET_RE.sub('', s).strip()
+    stripped = _TRAILING_BRACKET_RE.sub("", s).strip()
     if stripped and stripped != s:
         sl2 = _normalize_label(stripped).lower()
         for kw in AGG_KEYWORDS:
@@ -341,7 +324,7 @@ def _detect_covariates(df: Any, cols: List[str]) -> Dict[str, set]:
     if len(df) < 2:
         return covar
     for i, c1 in enumerate(valid):
-        for c2 in valid[i + 1:]:
+        for c2 in valid[i + 1 :]:
             try:
                 # c1 が c2 を一意に決定するか、または c2 が c1 を一意に決定するか
                 g1 = df.groupby(c1, dropna=False)[c2].nunique()
@@ -385,10 +368,7 @@ def _is_redundant_agg_row(
     """
     import pandas as pd
 
-    context_cols = [
-        c for c in ctx_cols
-        if c != col and c not in covar.get(col, set())
-    ]
+    context_cols = [c for c in ctx_cols if c != col and c not in covar.get(col, set())]
 
     if not context_cols:
         """
@@ -422,11 +402,7 @@ def _is_redundant_agg_row(
     # コンテキスト一致行に非集計値を持つ行が存在するか
     matching_vals = df.loc[mask, col]
     if not matching_vals.empty:
-        return any(
-            not _is_agg_label(str(v))
-            for v in matching_vals
-            if not _isnull(v)
-        )
+        return any(not _is_agg_label(str(v)) for v in matching_vals if not _isnull(v))
 
     # コンテキスト一致行が見つからない場合。
     # 2通りの状況がある:
@@ -442,35 +418,63 @@ def _is_redundant_agg_row(
     has_null_ctx = any(_isnull(df.at[idx, cc]) for cc in context_cols)
     if not has_null_ctx:
         return False
-    return any(
-        not _is_agg_label(str(v))
-        for v in df[col]
-        if not _isnull(v)
-    )
+    return any(not _is_agg_label(str(v)) for v in df[col] if not _isnull(v))
+
+
+def _to_jsonable(v: Any) -> Any:
+    """numpy スカラー（int64/float64 等）を JSON 変換可能な Python 組み込み型に変換する。"""
+    if hasattr(v, "item"):
+        try:
+            return v.item()
+        except Exception:
+            return v
+    return v
 
 
 def remove_aggregates(
     df: Any,  # pd.DataFrame
-) -> Tuple[Any, List[Dict[str, Any]], List[str], List[int]]:
-    """集計行・集計列を除去した DataFrame と除去情報を返す。
+) -> Tuple[
+    Any,
+    List[Dict[str, Any]],
+    List[str],
+    List[int],
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+]:
+    """
+    集計行・集計列を除去した DataFrame と除去情報を返す。
 
     集計列: 列名がキーワードに一致するもの。
     集計行: dtype==object の列（ラベル列）に集計ラベルを持ち、かつその集計が「冗長」
             （同じ文脈で個別データが存在する）場合のみ除去する。
-            個別データが存在しない場合（例: 全行が '全国計' のみの年次）は除去しない。
+            個別データが存在しない場合（例: 全行が同一の集計ラベルのみの区分）は除去しない。
 
     Returns:
-        cleaned_df          — 集計行・集計列を除去した DataFrame（index リセット済み）
-        removed_rows_info   — 除去した各行のラベル列値 [{col: val, ...}, ...]
-        removed_col_names   — 除去した列名リスト
-        removed_row_indices — 除去した行の元 DataFrame 上の整数インデックスリスト
+        cleaned_df               — 集計行・集計列を除去した DataFrame（index リセット済み）
+        removed_rows_info        — 除去した各行のラベル列値 [{col: val, ...}, ...]
+        removed_col_names        — 除去した列名リスト
+        removed_row_indices      — 除去した行の元 DataFrame 上の整数インデックスリスト
+        agg_removed_row_metadata — 除去した集計行の監査用メタデータ。除去行 × 数値列ごとに
+                                    1件、次の形式:
+                                    {"key": トリガー列名,
+                                     "context": {ラベル列名: 値, ...}（trigger 列自身を含む）,
+                                     "sum_column": 数値列名, "reported_value": 除去された数値}
+                                    context は trigger 列自身の値を含む全ラベル列値なので、
+                                    集計行を単独で説明できる。個別行から reported_value を
+                                    再現検証する際は、context から key の列だけを除いた
+                                    条件で最終テーブルを絞り込む。
+        agg_removed_col_metadata — 除去した集計列（列名自体がキーワード一致）の監査用
+                                    メタデータ。除去列 × 元の行ごとに1件、次の形式:
+                                    {"removed_column": 除去した列名,
+                                     "context": {ラベル列名: 値, ...},
+                                     "reported_value": 除去された値}
+                                    列ごと削除されるとその列の値が完全に失われるため、
+                                    後から参照できるよう全行分を記録する。
     """
     import pandas as pd
 
     # ── 集計列の検出 ──────────────────────────────────────────────
-    removed_cols: List[str] = [
-        col for col in df.columns if _is_agg_label(str(col))
-    ]
+    removed_cols: List[str] = [col for col in df.columns if _is_agg_label(str(col))]
 
     # ── ラベル列の特定（文字列型の列）────────────────────────────
     """
@@ -479,12 +483,14 @@ def remove_aggregates(
     int/float オブジェクトが過半数の列はデータ列として label_cols から除く。
     pd.NA（pandas 3.x nullable NA）も null として扱う。
     """
+
     def _is_text_dtype(series: Any) -> bool:
         """数値・bool・日時以外の列を文字列列と見なす（pandas 2.x/3.x 全バージョン対応）。
         pandas 2.x: dtype=object, pandas 3.0+: dtype=string / str など表記が変わるため
         deny-list 方式（数値・bool・日時を除外）で判定する。
         """
         import pandas.api.types as _pat
+
         return not (
             _pat.is_numeric_dtype(series)
             or _pat.is_bool_dtype(series)
@@ -500,11 +506,6 @@ def remove_aggregates(
             return bool(r)
         except (TypeError, ValueError):
             return False
-
-    # 日本の統計データでよく使われる秘匿・欠損マーカー（数値列判定時にnullと同等に扱う）
-    _STAT_NA_MARKERS: frozenset = frozenset({
-        'x', '***', '**', '*', '-', '…', '－', '–', '―', 'na', 'n/a', 'n.a.', '?',
-    })
 
     def _is_numeric_values_col(series: Any) -> bool:
         non_null = []
@@ -525,11 +526,26 @@ def remove_aggregates(
         return n_num / len(non_null) >= 0.5
 
     label_cols: List[str] = [
-        col for col in df.columns
+        col
+        for col in df.columns
         if col not in removed_cols
         and _is_text_dtype(df[col])
         and not _is_numeric_values_col(df[col])
     ]
+
+    # ── 数値（集計対象）列 — ラベル列でも除去済み集計列でもない列 ──
+    """
+    メタデータの context には文字列型のラベル列を使う。
+
+    数値列側にもユニーク率による絞り込みを追加すると、値の重複が多いだけの
+    正当な集計対象列まで誤って除外してしまうことを実データ検証で確認したため、
+    数値列は絞り込まずすべて集計対象候補として扱う。
+    """
+    value_cols: List[str] = [
+        col for col in df.columns if col not in removed_cols and col not in label_cols
+    ]
+
+    n_rows = len(df)
 
     # ── 冗長性チェック用コンテキスト列（カテゴリ・コード列のみ）────
     """
@@ -537,10 +553,8 @@ def remove_aggregates(
     コンテキストに含めると「完全一致行ゼロ」になり冗長性判定が誤る。
     ユニーク値の割合 < 50% の列（同じ値が繰り返し現れる列）のみ使用する。
     """
-    n_rows = len(df)
     ctx_cols: List[str] = [
-        col for col in label_cols
-        if _is_grouping_col(df[col], n_rows)
+        col for col in label_cols if _is_grouping_col(df[col], n_rows)
     ]
 
     # ── コード↔ラベルなど共変ペアを検出（ctx_cols ベース）──────────
@@ -550,14 +564,13 @@ def remove_aggregates(
     # ── 集計行の検出（冗長性チェック付き）────────────────────────
     removed_row_indices: List[int] = []
     removed_rows_info: List[Dict[str, Any]] = []
+    agg_removed_row_metadata: List[Dict[str, Any]] = []
 
     # 各ラベル列について「列全体に非集計値が存在するか」をキャッシュしておく
     col_has_nonag: Dict[str, bool] = {}
     for _lc in label_cols:
         col_has_nonag[_lc] = any(
-            not _is_agg_label(str(v))
-            for v in df[_lc]
-            if not _is_null_scalar(v)
+            not _is_agg_label(str(v)) for v in df[_lc] if not _is_null_scalar(v)
         )
 
     # 完全一致する集計キーワードのセット（正規化・小文字）
@@ -597,16 +610,86 @@ def remove_aggregates(
                     if v is not None and not (isinstance(v, float) and pd.isna(v)):
                         row_info[lc] = v
                 removed_rows_info.append(row_info)
+
+                """
+                監査用メタデータ: この集計行が持っていた数値列ごとに1件記録する。
+
+                context には trigger 列（key で示す列）自身の値も含め、全ラベル列値を
+                記録する。これにより:
+
+                  - context 単独で集計行を一意に説明できる（値を別フィールドに
+                    分離する必要がない）。
+                  - 複数のグルーピング列を持つ表では、同じラベル値を持つ集計行が
+                    他のグルーピング列の組み合わせごとに複数存在し得るが、
+                    context を見ればどの組み合わせに対応する集計値かを特定できる。
+
+                個別行から reported_value を再現検証する際は、context から key の
+                列だけを除いた条件で最終テーブルを絞り込む（trigger 列と共変する
+                列（コードと名称のように、一方の値がもう一方を一意に決定する列の
+                ペア）は最初から context に含めない。含めると集計行自身が持つ値が
+                そのまま残り、個別行はその値を持たないため絞り込みが0件になって
+                しまう。_is_redundant_agg_row と同じ考え方）。
+                """
+                trigger_covar = covar.get(col, set())
+                context = {
+                    lc: _to_jsonable(row_info[lc])
+                    for lc in label_cols
+                    if lc not in trigger_covar and lc in row_info
+                }
+                for vc in value_cols:
+                    rv = df.at[idx, vc]
+                    if _is_null_scalar(rv):
+                        continue
+                    agg_removed_row_metadata.append(
+                        {
+                            "key": str(col),
+                            "context": context,
+                            "sum_column": str(vc),
+                            "reported_value": _to_jsonable(rv),
+                        }
+                    )
                 break
+
+    """
+    集計列（列名自体がキーワードに一致する列）の監査用メタデータ。
+
+    列ごと削除されるとその列が持っていた値は最終出力テーブルのどこにも
+    残らないため、元の行ごとに値とラベル列コンテキストを記録しておく。
+    """
+    agg_removed_col_metadata: List[Dict[str, Any]] = []
+    for rc in removed_cols:
+        for idx in df.index:
+            rv = df.at[idx, rc]
+            if _is_null_scalar(rv):
+                continue
+            context = {
+                lc: _to_jsonable(df.at[idx, lc])
+                for lc in label_cols
+                if not _is_null_scalar(df.at[idx, lc])
+            }
+            agg_removed_col_metadata.append(
+                {
+                    "removed_column": str(rc),
+                    "context": context,
+                    "reported_value": _to_jsonable(rv),
+                }
+            )
 
     # ── 変更がなければ None を返してスキップを示す ────────────────
     if not removed_row_indices and not removed_cols:
-        return df, [], [], []
+        return df, [], [], [], [], []
 
     cleaned = df.drop(index=removed_row_indices, columns=removed_cols, errors="ignore")
     cleaned = cleaned.reset_index(drop=True)
 
-    return cleaned, removed_rows_info, removed_cols, removed_row_indices
+    return (
+        cleaned,
+        removed_rows_info,
+        removed_cols,
+        removed_row_indices,
+        agg_removed_row_metadata,
+        agg_removed_col_metadata,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +725,12 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
 
         # pandas 2.x: object, pandas 3.0+: string / str など表記が変わるため deny-list で判定
         import pandas.api.types as _pat
-        if _pat.is_numeric_dtype(series) or _pat.is_bool_dtype(series) or _pat.is_datetime64_any_dtype(series):
+
+        if (
+            _pat.is_numeric_dtype(series)
+            or _pat.is_bool_dtype(series)
+            or _pat.is_datetime64_any_dtype(series)
+        ):
             continue
 
         # None/NaN を持たない列はスキップ
@@ -659,7 +747,7 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
         pos = df.index.get_loc(first_valid_idx)
         if isinstance(pos, (slice, type(None))):
             pos = 0  # 重複インデックス対策（通常は発生しない）
-        if not null_mask.iloc[pos + 1:].any():
+        if not null_mask.iloc[pos + 1 :].any():
             continue  # 末尾以降の None のみ → スキップ
 
         # ffill を適用し、集計ラベルの過伝播を防ぐ。
@@ -670,10 +758,16 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
         if original_null.any():
             for _null_idx in df.index[original_null]:
                 _fv = filled.at[_null_idx]
-                _fv_null = _fv is None or (isinstance(_fv, float) and pd.isna(_fv)) or (pd.NA is not None and _fv is pd.NA)
+                _fv_null = (
+                    _fv is None
+                    or (isinstance(_fv, float) and pd.isna(_fv))
+                    or (pd.NA is not None and _fv is pd.NA)
+                )
                 if not _fv_null and _is_agg_label(str(_fv)):
                     try:
-                        filled.at[_null_idx] = pd.NA  # StringDtype では None より pd.NA が安全
+                        filled.at[_null_idx] = (
+                            pd.NA
+                        )  # StringDtype では None より pd.NA が安全
                     except Exception:
                         filled.at[_null_idx] = None
 
@@ -692,34 +786,8 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
 # クロス集計形式（横持ち時系列）の検出と縦持ち変換
 # ---------------------------------------------------------------------------
 
-# 列名が時系列を表すパターンとその種別
-_TIME_PATTERNS: List[Tuple[Any, str]] = [
-    (_re.compile(r'^\d{4}年\d{1,2}月$'), 'year_month'),   # 2011年1月
-    (_re.compile(r'^\d{1,2}月$'), 'month'),                 # 1月, 12月
-    (_re.compile(r'^Q[1-4]$', _re.I), 'quarter'),           # Q1, Q2, Q3, Q4
-    (_re.compile(r'^第[1-4一二三四]四半期$'), 'quarter_ja'), # 第1四半期
-    (_re.compile(r'^\d{4}年度$'), 'fiscal_year'),            # 2020年度
-    (_re.compile(r'^\d{4}年$'), 'year'),                    # 2020年
-    (_re.compile(r'^(19|20)\d{2}$'), 'year_num'),           # 2020（4桁年数字）
-]
-
 # タイトル・ファイル名から年を抽出する正規表現
-_YEAR_CTX_RE = _re.compile(r'(19|20)\d{2}')
-
-# 値列名の推定キーワード
-_VALUE_KEYWORDS: Dict[str, str] = {
-    "売上": "売上", "予算": "予算", "実績": "実績",
-    "件数": "件数", "人数": "人数", "金額": "金額",
-    "数量": "数量", "利益": "利益", "費用": "費用",
-    "コスト": "コスト",
-}
-
-# 種別→縦持ち後の時系列列名
-_VAR_NAME_MAP: Dict[str, str] = {
-    'year_month': '年月', 'month': '月', 'quarter': '四半期',
-    'quarter_ja': '四半期', 'fiscal_year': '年度',
-    'year': '年', 'year_num': '年',
-}
+_YEAR_CTX_RE = _re.compile(r"(19|20)\d{2}")
 
 
 def _classify_col_time(col_name: str) -> Optional[str]:
@@ -731,7 +799,9 @@ def _classify_col_time(col_name: str) -> Optional[str]:
     return None
 
 
-def _extract_year_context(title: Optional[str], filename: Optional[str]) -> Optional[int]:
+def _extract_year_context(
+    title: Optional[str], filename: Optional[str]
+) -> Optional[int]:
     """タイトルまたはファイル名から西暦年（1900〜2099）を抽出する。"""
     for source in [title, filename]:
         if source:
@@ -776,15 +846,15 @@ def detect_cross_table(
         return None
 
     label_cols = [col_names[i] for i, t in enumerate(time_types) if t is None]
-    time_cols  = [col_names[i] for i, t in enumerate(time_types) if t is not None]
-    time_kind  = next(t for t in time_types if t is not None)
+    time_cols = [col_names[i] for i, t in enumerate(time_types) if t is not None]
+    time_kind = next(t for t in time_types if t is not None)
 
     # 月のみ列の場合、title/filename から年を補完
     year_context: Optional[int] = None
-    if time_kind == 'month':
+    if time_kind == "month":
         year_context = _extract_year_context(title, filename)
 
-    var_name = _VAR_NAME_MAP.get(time_kind, '期間')
+    var_name = _VAR_NAME_MAP.get(time_kind, _VAR_NAME_FALLBACK)
 
     # 値列名の推定（タイトルキーワード優先、なければ "値"）
     value_name = "値"
@@ -795,12 +865,12 @@ def detect_cross_table(
                 break
 
     return {
-        'label_cols': label_cols,
-        'time_cols': time_cols,
-        'time_kind': time_kind,
-        'var_name': var_name,
-        'value_name': value_name,
-        'year_context': year_context,
+        "label_cols": label_cols,
+        "time_cols": time_cols,
+        "time_kind": time_kind,
+        "var_name": var_name,
+        "value_name": value_name,
+        "year_context": year_context,
     }
 
 
@@ -809,12 +879,12 @@ def stack_cross_table(df: Any, stack_info: Dict[str, Any]) -> Any:
 
     月のみ列で year_context が設定されている場合、年列を先頭ラベルの直後に挿入する。
     """
-    label_cols   = stack_info['label_cols']
-    time_cols    = stack_info['time_cols']
-    var_name     = stack_info['var_name']
-    value_name   = stack_info['value_name']
-    year_context = stack_info.get('year_context')
-    time_kind    = stack_info['time_kind']
+    label_cols = stack_info["label_cols"]
+    time_cols = stack_info["time_cols"]
+    var_name = stack_info["var_name"]
+    value_name = stack_info["value_name"]
+    year_context = stack_info.get("year_context")
+    time_kind = stack_info["time_kind"]
 
     melted = df.melt(
         id_vars=label_cols,
@@ -824,7 +894,7 @@ def stack_cross_table(df: Any, stack_info: Dict[str, Any]) -> Any:
     )
 
     # 月のみの場合、年列をラベル列の直後に挿入
-    if year_context is not None and time_kind == 'month':
-        melted.insert(len(label_cols), '年', year_context)
+    if year_context is not None and time_kind == "month":
+        melted.insert(len(label_cols), "年", year_context)
 
     return melted.reset_index(drop=True)
