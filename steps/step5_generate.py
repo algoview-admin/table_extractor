@@ -11,6 +11,7 @@ from steps.step4_analyze import (
     _build_auto_irs_from_latent,
     _render_latent_group_card,
     _render_unified_ir_card,
+    _collect_unique_master_specs,
 )
 from src.step5_latent_detector import find_latent_tables, derive_latent_tables, group_latent_proposals
 from src.models import AIAnalysisResult, DetectedTable, DerivedLatentTable
