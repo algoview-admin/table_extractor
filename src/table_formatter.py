@@ -501,11 +501,27 @@ def remove_aggregates(
         except (TypeError, ValueError):
             return False
 
+    # 日本の統計データでよく使われる秘匿・欠損マーカー（数値列判定時にnullと同等に扱う）
+    _STAT_NA_MARKERS: frozenset = frozenset({
+        'x', '***', '**', '*', '-', '…', '－', '–', '―', 'na', 'n/a', 'n.a.', '?',
+    })
+
     def _is_numeric_values_col(series: Any) -> bool:
-        non_null = [v for v in series if not _is_null_scalar(v)]
+        non_null = []
+        n_num = 0
+        for v in series:
+            if _is_null_scalar(v):
+                continue
+            if isinstance(v, (int, float)):
+                non_null.append(v)
+                n_num += 1
+            else:
+                # 秘匿マーカー（'X', '***' 等）はnullとして扱い、数値列判定を妨げない
+                if str(v).strip().lower() in _STAT_NA_MARKERS:
+                    continue
+                non_null.append(v)
         if not non_null:
             return False
-        n_num = sum(1 for v in non_null if isinstance(v, (int, float)))
         return n_num / len(non_null) >= 0.5
 
     label_cols: List[str] = [
