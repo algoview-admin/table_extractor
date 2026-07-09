@@ -476,8 +476,16 @@ def remove_aggregates(
     pd.NA（pandas 3.x nullable NA）も null として扱う。
     """
     def _is_text_dtype(series: Any) -> bool:
-        """pandas 2.x (object) と pandas 3.x (StringDtype) の両方を文字列列として認識する。"""
-        return str(series.dtype) in ('object', 'string')
+        """数値・bool・日時以外の列を文字列列と見なす（pandas 2.x/3.x 全バージョン対応）。
+        pandas 2.x: dtype=object, pandas 3.0+: dtype=string / str など表記が変わるため
+        deny-list 方式（数値・bool・日時を除外）で判定する。
+        """
+        import pandas.api.types as _pat
+        return not (
+            _pat.is_numeric_dtype(series)
+            or _pat.is_bool_dtype(series)
+            or _pat.is_datetime64_any_dtype(series)
+        )
 
     def _is_null_scalar(v: Any) -> bool:
         """None / np.nan / pd.NA など全ての null を安全に判定する。"""
@@ -612,8 +620,9 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
     for col in df.columns:
         series = df[col]
 
-        # pandas 2.x は object, pandas 3.x は string (StringDtype) として文字列列が来る
-        if str(series.dtype) not in ('object', 'string'):
+        # pandas 2.x: object, pandas 3.0+: string / str など表記が変わるため deny-list で判定
+        import pandas.api.types as _pat
+        if _pat.is_numeric_dtype(series) or _pat.is_bool_dtype(series) or _pat.is_datetime64_any_dtype(series):
             continue
 
         # None/NaN を持たない列はスキップ
