@@ -1,9 +1,13 @@
 import json
+import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
+from itertools import combinations, groupby
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+import numpy as np
 
 from .models import (
     AIAnalysisResult,
@@ -13,12 +17,274 @@ from .models import (
     SheetClassification,
     TableAnalysisResult,
 )
-from .step4_aggregation import (
-    detect_sheet_levels,
-    detect_sum_relations,
-    format_relation_facts,
-    format_sheet_level_hints,
-)
+
+
+# ---------------------------------------------------------------------------
+# テーブル間合計関係の事前計算（旧 step4_aggregation.py）
+# ---------------------------------------------------------------------------
+
+def detect_sum_relations(tables: List[DetectedTable]) -> List[Dict]:
+    """
+    検証済みの全合計関係を返す:
+      [{"parent_id": str, "child_ids": [str, ...], "match_ratio": float}, ...]
+
+    関係の意味: parent.numeric_values ≈ 子テーブルの要素ごとの合計。
+    同一の列スキーマを持つテーブルのみを比較する。
+    1つの親に対して複数の関係（異なる集計軸）が存在する場合もある。
+    """
+    groups = _group_by_columns(tables)
+    relations: List[Dict] = []
+    for group in groups:
+        if len(group) >= 3:
+            relations.extend(_find_relations_in_group(group))
+    return _drop_supersets(relations)
+
+
+def format_relation_facts(relations: List[Dict], tables: List[DetectedTable]) -> str:
+    """
+    事前計算済みの合計関係をAI向けのプロンプトセクションとしてフォーマットする。
+    関係が見つからない場合は空文字列を返す。
+    """
+    if not relations:
+        return ""
+
+    id_to_title = {t.table_id: (t.title or "") for t in tables}
+
+    lines = [
+        "=== 事前検証済み：数値合計関係 ===",
+        "以下の親子関係はシステムが数値計算で確認済みです（AIによる推測不要）。",
+        "この情報を最優先の根拠として granularity_level / parent_child_ids / is_minimum_granularity_candidate を決定してください。",
+        "",
+    ]
+    for r in relations:
+        pid = r["parent_id"]
+        cids = r["child_ids"]
+        pct = int(r["match_ratio"] * 100)
+        p_label = f"{pid}" + (f"（{id_to_title[pid]}）" if id_to_title.get(pid) else "")
+        c_parts = [f"{c}" + (f"（{id_to_title[c]}）" if id_to_title.get(c) else "") for c in cids]
+        lines.append(f"  {p_label}  ≈  " + " + ".join(c_parts) + f"   [数値一致率 {pct}%]")
+
+    lines += [
+        "",
+        "【この検証結果から導かれる判定基準】",
+        "- 上記で「左辺（親）」になっているテーブル → granularity_level=summary, is_minimum_granularity_candidate=false",
+        "- 上記で「右辺（子）」のみのテーブル（いずれの親にも属さない） → granularity_level=detail, is_minimum_granularity_candidate=true",
+        "- 上記で「右辺（子）」であり且つ別の関係では「左辺（親）」のテーブル → granularity_level=summary, is_minimum_granularity_candidate=false",
+    ]
+
+    return "\n".join(lines)
+
+
+def detect_sheet_levels(tables: List[DetectedTable]) -> List[Dict]:
+    """
+    同一スキーマのテーブルグループ内でsheet単位の数値合計を比較し、
+    集計sheetの候補を特定する。
+    """
+    groups = _group_by_columns(tables)
+
+    aggregate_votes: Dict[str, int] = {}
+    smaller_peers: Dict[str, Set[str]] = {}
+
+    for group in groups:
+        sheet_sums: Dict[str, float] = {}
+        for t in group:
+            arr = _numeric_array(t)
+            if arr is None:
+                continue
+            total = float(np.nansum(np.abs(arr)))
+            if total < 1.0:
+                continue
+            sheet_sums[t.sheet_name] = sheet_sums.get(t.sheet_name, 0.0) + total
+
+        if len(sheet_sums) < 3:
+            continue
+
+        sorted_items = sorted(sheet_sums.items(), key=lambda x: x[1], reverse=True)
+        top_sheet, top_total = sorted_items[0]
+        other_totals = [v for _, v in sorted_items[1:]]
+        avg_other = sum(other_totals) / len(other_totals)
+
+        if avg_other > 0 and top_total >= avg_other * 1.5 and len(other_totals) >= 2:
+            aggregate_votes[top_sheet] = aggregate_votes.get(top_sheet, 0) + 1
+            if top_sheet not in smaller_peers:
+                smaller_peers[top_sheet] = set()
+            for other_sheet, _ in sorted_items[1:]:
+                smaller_peers[top_sheet].add(other_sheet)
+
+    return [
+        {
+            "aggregate_sheet": sheet,
+            "source_sheets": sorted(smaller_peers.get(sheet, set())),
+        }
+        for sheet, votes in aggregate_votes.items()
+        if votes >= 1 and len(smaller_peers.get(sheet, set())) >= 2
+    ]
+
+
+def format_sheet_level_hints(hints: List[Dict]) -> str:
+    """集計sheetのヒントをAI向けのプロンプトセクションとしてフォーマットする。"""
+    if not hints:
+        return ""
+
+    lines = [
+        "=== シート間集計構造（数値比較による推定） ===",
+        "以下のシートは、同一構造を持つ複数の下位シートの数値合計シートと推定されます。",
+        "【絶対ルール】これらのシートの全テーブルは granularity_level=summary かつ",
+        "is_minimum_granularity_candidate=false と確定してください。",
+        "「事前検証済み：数値合計関係」で右辺のみ・左辺のいずれの状況であっても、",
+        "このシート判定を他の全ての推論・ルールより優先してください。",
+        "",
+    ]
+    for h in hints:
+        srcs = h["source_sheets"]
+        src_str = "、".join(srcs[:6]) + ("…" if len(srcs) > 6 else "")
+        lines.append(
+            f"  【集計シート候補】 {h['aggregate_sheet']}"
+            f" ← 集計元候補シート: {src_str}"
+        )
+
+    return "\n".join(lines) + "\n"
+
+
+def _group_by_columns(tables: List[DetectedTable]) -> List[List[DetectedTable]]:
+    """完全に同一の列名（同一スキーマ）を持つテーブルをグループ化する。"""
+    buckets: Dict[Tuple, List[DetectedTable]] = {}
+    for t in tables:
+        if t.df is None or t.df.empty:
+            continue
+        key = tuple(str(c).strip() for c in t.df.columns)
+        buckets.setdefault(key, []).append(t)
+    return [g for g in buckets.values() if len(g) >= 2]
+
+
+def _numeric_array(t: DetectedTable) -> Optional[np.ndarray]:
+    if t.df is None:
+        return None
+    num = t.df.select_dtypes(include=[np.number])
+    return num.values.astype(float) if not num.empty else None
+
+
+def _total(t: DetectedTable) -> float:
+    arr = _numeric_array(t)
+    return float(np.nansum(np.abs(arr))) if arr is not None else 0.0
+
+
+def _match_ratio(parent: DetectedTable, children: List[DetectedTable], tol: float = 0.03) -> float:
+    """
+    相対許容誤差 `tol` の範囲内で parent_value ≈ sum(child_values) を満たす、
+    意味のある数値セルの割合を返す。
+    形状が一致しない場合は -1.0 を返す。
+    """
+    p = _numeric_array(parent)
+    if p is None:
+        return -1.0
+
+    child_arrs = [_numeric_array(c) for c in children]
+    if any(a is None or a.shape != p.shape for a in child_arrs):
+        return -1.0
+
+    child_sum = np.zeros_like(p)
+    for a in child_arrs:
+        child_sum += np.nan_to_num(a, nan=0.0)
+
+    p_clean = np.nan_to_num(p, nan=0.0)
+    mask = np.abs(p_clean) > 0.5
+
+    if mask.sum() == 0:
+        return -1.0
+
+    rel_diff = np.abs(p_clean[mask] - child_sum[mask]) / (np.abs(p_clean[mask]) + 1e-9)
+    return float((rel_diff <= tol).mean())
+
+
+def _find_relations_in_group(group: List[DetectedTable]) -> List[Dict]:
+    """構造的に同一のテーブル集合内で全ての合計関係を検出する。"""
+    MAX_SMALLER = 14
+    MAX_K = 9
+    COMBO_CAP = 50_000
+
+    totals = {t.table_id: _total(t) for t in group}
+    sorted_group = sorted(group, key=lambda t: totals[t.table_id])
+    n = len(sorted_group)
+    relations: List[Dict] = []
+
+    for i in range(2, n):
+        parent = sorted_group[i]
+        p_total = totals[parent.table_id]
+        if p_total < 1.0:
+            continue
+
+        smaller = [t for t in sorted_group[:i] if totals[t.table_id] > 0.1]
+        if len(smaller) < 2:
+            continue
+
+        if len(smaller) > MAX_SMALLER:
+            same = sorted(
+                [t for t in smaller if t.sheet_name == parent.sheet_name],
+                key=lambda t: totals[t.table_id], reverse=True,
+            )
+            other = sorted(
+                [t for t in smaller if t.sheet_name != parent.sheet_name],
+                key=lambda t: totals[t.table_id], reverse=True,
+            )
+            n_same = min(len(same), MAX_SMALLER)
+            smaller = same[:n_same] + other[: MAX_SMALLER - n_same]
+
+        max_k = min(len(smaller), MAX_K)
+
+        while max_k > 2:
+            n_combos = sum(math.comb(len(smaller), k) for k in range(2, max_k + 1))
+            if n_combos <= COMBO_CAP:
+                break
+            max_k -= 1
+
+        found_sets: List[Tuple[frozenset, float]] = []
+        all_sheets_in_group = {t.sheet_name for t in group}
+
+        for k in range(2, max_k + 1):
+            for subset in combinations(smaller, k):
+                s_total = sum(totals[t.table_id] for t in subset)
+                if s_total > p_total * 1.15 or s_total < p_total * 0.72:
+                    continue
+
+                cross_kids = [t for t in subset if t.sheet_name != parent.sheet_name]
+                if cross_kids:
+                    if len(cross_kids) != len(subset):
+                        continue
+                    required = all_sheets_in_group - {parent.sheet_name}
+                    if {t.sheet_name for t in cross_kids} != required:
+                        continue
+
+                ratio = _match_ratio(parent, list(subset))
+                if ratio >= 0.88:
+                    found_sets.append((frozenset(t.table_id for t in subset), ratio))
+
+        minimal = [
+            (s, r) for s, r in found_sets
+            if not any(other < s for other, _ in found_sets)
+        ]
+        for child_set, ratio in minimal:
+            relations.append({
+                "parent_id": parent.table_id,
+                "child_ids": sorted(child_set),
+                "match_ratio": ratio,
+            })
+
+    return relations
+
+
+def _drop_supersets(relations: List[Dict]) -> List[Dict]:
+    """各親に対して上位集合となる子集合のみを除去し、全ての最小分解を保持する。"""
+    result: List[Dict] = []
+    keyfn = lambda r: r["parent_id"]
+    for _, group_iter in groupby(sorted(relations, key=keyfn), key=keyfn):
+        group_rels = list(group_iter)
+        sets = [(frozenset(r["child_ids"]), r) for r in group_rels]
+        result.extend(
+            r for s, r in sets
+            if not any(other < s for other, _ in sets)
+        )
+    return result
 
 
 def _make_client() -> Tuple[Any, str]:
