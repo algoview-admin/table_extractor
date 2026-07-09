@@ -416,8 +416,24 @@ def _is_redundant_agg_row(
             if v is not None and not (isinstance(v, float) and pd.isna(v))
         )
 
-    # コンテキスト一致行が見つからない場合: 列全体に非集計値があれば冗長と判定する。
-    # fill_grouping_cols の閾値でコンテキスト列が補完されていない場合に発生しうる。
+    # コンテキスト一致行が見つからない場合。
+    # 2通りの状況がある:
+    #
+    # A) コンテキスト列に None が含まれる → fill_grouping_cols が未適用・不完全な可能性。
+    #    集計行のグルーピング列が空白のまま残っているため、一致行が見つからなかった。
+    #    → 列全体に非集計値があれば冗長と判定（保守的に除去）。
+    #
+    # B) コンテキスト列がすべて非 None（完全なコンテキスト）→ このコンテキストに
+    #    サブレベルのデータが存在しない（例: 2015年は全国計のみで都道府県別データなし）。
+    #    他の年のデータ（北海道, 青森など）を誤って「sibling」と見なすべきではない。
+    #    → 冗長ではない = 除去しない。
+    has_null_ctx = any(
+        df.at[idx, cc] is None
+        or (isinstance(df.at[idx, cc], float) and pd.isna(df.at[idx, cc]))
+        for cc in context_cols
+    )
+    if not has_null_ctx:
+        return False
     return any(
         not _is_agg_label(str(v))
         for v in df[col].dropna()
