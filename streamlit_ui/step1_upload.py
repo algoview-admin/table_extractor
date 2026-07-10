@@ -105,11 +105,16 @@ def step1():
             "fullauto": "フルオート  —  推奨テーブルを自動選択してエクスポートまで完全自動実行",
         }
         mode_keys = list(mode_labels.keys())
+        # ウィジェットkeyは"run_mode_widget"とし、論理的な状態("run_mode")
+        # とは分離する。両者を同じキーにすると_load_project()の一括復元と
+        # 衝突してStreamlitAPIExceptionになる。
+        if "run_mode_widget" not in st.session_state:
+            st.session_state.run_mode_widget = st.session_state.run_mode
         selected_mode = st.radio(
             "モードを選択してください",
             options=mode_keys,
             format_func=lambda k: mode_labels[k],
-            index=mode_keys.index(st.session_state.run_mode),
+            key="run_mode_widget",
             label_visibility="collapsed",
         )
         st.session_state.run_mode = selected_mode

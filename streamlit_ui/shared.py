@@ -63,6 +63,7 @@ def _go_to(step: int, stop_auto: bool = True) -> None:
 
 def _build_and_go_step6() -> None:
     from streamlit_ui.step4_analyze import _build_final_tables
+
     _build_final_tables()
     st.session_state.step = 6
     st.session_state._scroll_to_top = True
@@ -133,6 +134,10 @@ def _load_project(raw: bytes) -> str:
         if k in payload:
             st.session_state[k] = payload[k]
 
+    # run_mode_widget（ラジオボタンのウィジェットkey）を破棄し、次回描画時に
+    # 復元後のrun_modeから再シードさせる。
+    st.session_state.pop("run_mode_widget", None)
+
     # 復元時はauto_processingをオフにし、ソースを記録する
     st.session_state["auto_processing"] = False
     st.session_state["source_mode"] = "project"
@@ -141,6 +146,7 @@ def _load_project(raw: bytes) -> str:
 
 # ---------------------------------------------------------------------------
 # 左右リサイズ可能スプリッター
+
 
 def _splitter_marker(split_id: str) -> None:
     """JSが直後のst.columns()を特定するために使う不可視マーカー。"""
@@ -303,16 +309,22 @@ def _inject_splitter_js() -> None:
                     el.removeAttribute('id');
                 });
 
-                /* ── 2b. Move Save button to position:absolute at top-right ──
+                fitStepPillFont(portal);
+                alignProgressDots(portal);
+
+                /* ── 2b. Move Save button to position:absolute, above the last pill ──
                    Search every <button> in the portal for the Save button by text,
                    then move its outermost Streamlit wrapper to an absolutely-positioned
-                   child div so it renders next to the ⋮ menu. ── */
+                   child div. Position is computed dynamically from the pill row's
+                   own rect so it always sits just above the pills (never overlapping)
+                   and its right edge always lines up with the last pill's right edge,
+                   regardless of column count/width/shrinking. ── */
                 (function() {
                     var allBtns = portal.querySelectorAll('button');
                     var saveBtn = null;
                     for (var i = 0; i < allBtns.length; i++) {
                         var t = allBtns[i].textContent;
-                        if (t.indexOf('Save') !== -1) { saveBtn = allBtns[i]; break; }
+                        if (t.indexOf('保存') !== -1) { saveBtn = allBtns[i]; break; }
                     }
                     if (!saveBtn) return;
                     /* Walk up to the first div with data-testid (the Streamlit wrapper) */
@@ -322,12 +334,33 @@ def _inject_splitter_js() -> None:
                         saveEl = saveEl.parentElement;
                     }
                     if (!saveEl || saveEl === portal) saveEl = saveBtn.parentElement;
+
+                    var saveHeight = saveEl.getBoundingClientRect().height || 30;
+
+                    /* Pull saveEl out of flow FIRST (placeholder position), so the
+                       pill row reflows to its final position before we measure it —
+                       measuring beforehand would use the stale, pre-reflow position
+                       and misplace the button. */
                     var saveWrap = pdoc.createElement('div');
                     saveWrap.className = 'hdr-save-wrap';
-                    saveWrap.style.cssText =
-                        'position:absolute;top:14px;right:52px;z-index:2;';
+                    saveWrap.style.cssText = 'position:absolute;top:0;right:32px;z-index:2;';
                     portal.appendChild(saveWrap);
                     saveWrap.appendChild(saveEl);
+
+                    var portalRect = portal.getBoundingClientRect();
+                    var hBlock = portal.querySelector('div[data-testid="stHorizontalBlock"]');
+                    var cols = hBlock ? Array.from(
+                        hBlock.querySelectorAll(':scope > [data-testid="stColumn"]')) : [];
+                    var lastCol = cols.length ? cols[cols.length - 1] : null;
+
+                    if (lastCol && hBlock) {
+                        var lastColRect = lastCol.getBoundingClientRect();
+                        var hBlockRect = hBlock.getBoundingClientRect();
+                        var rightOffset = portalRect.right - lastColRect.right;
+                        var topOffset = Math.max(4, hBlockRect.top - portalRect.top - saveHeight + 4);
+                        saveWrap.style.top = topOffset + 'px';
+                        saveWrap.style.right = rightOffset + 'px';
+                    }
                 })();
 
                 /* ── 3. Forward clicks to real Streamlit buttons in srcHdr ── */
@@ -381,10 +414,96 @@ def _inject_splitter_js() -> None:
                 /* ── 5. Push rootBlock content below the portal header ── */
                 var ph = portal.getBoundingClientRect().height;
                 if (ph > 0) rootBlock.style.setProperty('padding-top', ph + 'px', 'important');
+
+                /* ── 5b. 余白の微調整 ──
+                   Streamlitのネストしたブロック間のgapにより、padding-topを
+                   ヘッダー実測高さぴったりにしても見た目の余白はそれより
+                   大きくなる。実際に見えるコンテンツ要素を実測し、余白が
+                   常に一定の小さな値になるようpadding-topを補正する。 */
+                var DESIRED_GAP = 2;
+                var containers = Array.from(
+                    pdoc.querySelectorAll('[data-testid="stElementContainer"]'))
+                    .filter(function (el) { return !portal.contains(el); });
+                var portalBottom = portal.getBoundingClientRect().bottom;
+                var firstContent = null;
+                for (var ci = 0; ci < containers.length; ci++) {
+                    var cr = containers[ci].getBoundingClientRect();
+                    if (cr.height > 0 && cr.top >= portalBottom - 2) {
+                        firstContent = containers[ci];
+                        break;
+                    }
+                }
+                if (firstContent) {
+                    var actualGap = firstContent.getBoundingClientRect().top - portalBottom;
+                    var currentPad = parseFloat(rootBlock.style.paddingTop) || ph;
+                    var newPad = Math.max(0, currentPad - (actualGap - DESIRED_GAP));
+                    if (Math.abs(newPad - currentPad) > 0.5) {
+                        rootBlock.style.setProperty('padding-top', newPad + 'px', 'important');
+                    }
+                }
             }
 
-            /* ── Progress dots: width is set via inline style from Python; no JS needed ── */
-            function animateProgress() { /* no-op: replaced by CSS dot animation */ }
+            /* ── 進捗ドット/接続線を、実測したピル列の中心座標に合わせて配置 ──
+               CSSの%計算だと列間ギャップや文字縮小・省略記号を考慮できず
+               ズレるため、実際にレンダリングされた各stColumnの中心座標を
+               読み取って直接pxで配置する。 */
+            function alignProgressDots(container) {
+                var wrap = container.querySelector('.app-progress-wrap');
+                var hBlock = container.querySelector('div[data-testid="stHorizontalBlock"]');
+                if (!wrap || !hBlock) return;
+                var cols = Array.from(hBlock.querySelectorAll(':scope > [data-testid="stColumn"]'));
+                var dots = Array.from(wrap.querySelectorAll('.app-pd-dot'));
+                if (!cols.length || cols.length !== dots.length) return;
+
+                var wrapRect = wrap.getBoundingClientRect();
+                var centers = cols.map(function (c) {
+                    var r = c.getBoundingClientRect();
+                    return (r.left + r.right) / 2 - wrapRect.left;
+                });
+
+                dots.forEach(function (d, i) {
+                    d.style.left = centers[i].toFixed(1) + 'px';
+                });
+
+                var bg = wrap.querySelector('.app-progress-bg-line');
+                if (bg) {
+                    bg.style.left  = centers[0].toFixed(1) + 'px';
+                    bg.style.width = (centers[centers.length - 1] - centers[0]).toFixed(1) + 'px';
+                }
+
+                var fill = wrap.querySelector('.app-progress-fill-line');
+                if (fill) {
+                    var current = parseInt(wrap.getAttribute('data-current'), 10) || 1;
+                    var idx = Math.max(0, Math.min(centers.length - 1, current - 1));
+                    fill.style.left  = centers[0].toFixed(1) + 'px';
+                    fill.style.width = Math.max(0, centers[idx] - centers[0]).toFixed(1) + 'px';
+                }
+            }
+
+            /* ── ステップピルの文字サイズを全ピル共通で動的縮小 ──
+               最も窮屈な1ピルの収まり具合を基準に、全ピル共通の
+               --step-pill-fs を算出する。 */
+            function fitStepPillFont(container) {
+                var hBlock = container.querySelector('div[data-testid="stHorizontalBlock"]');
+                if (!hBlock) return;
+                var BASE_REM = 1;
+                var MIN_REM  = 0.62;
+                hBlock.style.setProperty('--step-pill-fs', BASE_REM + 'rem');
+                var labels = Array.from(hBlock.querySelectorAll(
+                    'button [data-testid="stMarkdownContainer"] p, ' +
+                    '[data-testid="stMarkdownContainer"] > div > span'
+                ));
+                if (!labels.length) return;
+                var minRatio = 1;
+                labels.forEach(function (el) {
+                    if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth) {
+                        minRatio = Math.min(minRatio, el.clientWidth / el.scrollWidth);
+                    }
+                });
+                if (minRatio >= 1) return; /* 全ピルが1remで収まっている */
+                var fs = Math.max(MIN_REM, BASE_REM * minRatio * 0.97);
+                hBlock.style.setProperty('--step-pill-fs', fs.toFixed(3) + 'rem');
+            }
 
             /* ── Light mode: 背景を薄グレーに ──
                インラインスタイルではなく <style> タグを head に注入する。
@@ -420,7 +539,6 @@ def _inject_splitter_js() -> None:
             /* ── Find markers and wire up ── */
             function init() {
                 buildFixedHeader();
-                animateProgress();
                 applyGreyBg();
                 var markers = pdoc.querySelectorAll(
                     '.split-init-marker:not([data-split-done])');
@@ -462,7 +580,6 @@ def _inject_splitter_js() -> None:
                     clearTimeout(win._hdrSyncTimer);
                     win._hdrSyncTimer = setTimeout(function () {
                         buildFixedHeader();
-                        animateProgress();
                     }, 50);
                 });
                 win._hdrObserver.observe(node, {
@@ -473,6 +590,22 @@ def _inject_splitter_js() -> None:
             [0, 80, 250, 600, 1400].forEach(function (ms) {
                 setTimeout(connectObserver, ms);
             });
+
+            /* ── ウィンドウ幅変更 / ズーム時: 列幅が変わるので文字サイズと
+               進捗ドット位置を再計算する。DOM変更を伴わないため
+               MutationObserver では拾えない。 */
+            if (!win._hdrResizeWired) {
+                win._hdrResizeWired = true;
+                win.addEventListener('resize', function () {
+                    clearTimeout(win._hdrResizeTimer);
+                    win._hdrResizeTimer = setTimeout(function () {
+                        var portal = pdoc.getElementById('_appFixedHdr');
+                        if (!portal) return;
+                        fitStepPillFont(portal);
+                        alignProgressDots(portal);
+                    }, 100);
+                });
+            }
         })();
         </script>
         """,
@@ -481,6 +614,7 @@ def _inject_splitter_js() -> None:
 
 
 # ---------------------------------------------------------------------------
+
 
 def _can_navigate_to(target: int) -> bool:
     """対象ステップに必要なデータが揃っている場合True を返す。"""
@@ -535,20 +669,21 @@ def _render_header():
             '<span class="app-hdr-sentinel" style="display:none"></span>',
             unsafe_allow_html=True,
         )
-        st.title("📊 Table Extractor (開発中)")
-        st.caption("Excel / CSV ファイルから分析対象とするテーブルを抽出します。")
+        st.title("✦ Table Extractor (Verification)")
+        st.caption("")
         if st.session_state.get("filename") and bool(
             st.session_state.get("detected_tables")
         ):
             if st.button(
-                "💾 Save",
+                "💾 保存",
                 key="hdr_save_btn",
-                help="現在の解析状態を .tep ファイルとしてダウンロードします。再開時はStep 1でアップロードしてください。",
+                help="現在の解析状態を .tep ファイルとしてダウンロードします。\n\n再開時はStep 1でアップロードしてください。",
             ):
                 _save_dialog()
 
         current = st.session_state.step
-        cols = st.columns(len(STEP_LABELS))
+        n_steps = len(STEP_LABELS)
+        cols = st.columns(n_steps)
 
         for i, (col, label) in enumerate(zip(cols, STEP_LABELS), 1):
             with col:
@@ -568,12 +703,18 @@ def _render_header():
                         f"font-weight:700;"
                         f"letter-spacing:0.01em;"
                         f"color:#7FFFD4;"
-                        f"min-height:1.9rem;"
+                        f"height:1.9rem;"
+                        f"overflow:hidden;"
                         f"display:flex;"
                         f"align-items:center;"
                         f"justify-content:center;"
                         f"box-sizing:border-box;"
-                        f'">▶ {label}</div>',
+                        f"min-width:0;"
+                        f'"><span style="'
+                        f"white-space:nowrap;"
+                        f"overflow:hidden;"
+                        f"text-overflow:ellipsis;"
+                        f'">▶ {label}</span></div>',
                         unsafe_allow_html=True,
                     )
                 elif is_done:
@@ -603,21 +744,20 @@ def _render_header():
                         disabled=True,
                     )
 
-        n_steps = len(STEP_LABELS)
-        slot_half = 100.0 / (2 * n_steps)  # half a slot width in %
-        fill_w = 2 * (current - 1) * slot_half  # fill ends at current dot center
-        bg_style = f"left:{slot_half:.3f}%;right:{slot_half:.3f}%"
-        fill_style = f"left:{slot_half:.3f}%;width:{fill_w:.3f}%"
+        # ── 進捗ドット + 接続線 ──
+        # ピルの列（stColumn）とは別の、独立した1本の行として描画する。
+        # 水平位置はJS(alignProgressDots)がピル列の実測中心座標を読み取って
+        # 配置する。
         dots_html = "".join(
-            f'<div class="app-pd-slot"><div class="app-pd-dot '
+            f'<div class="app-pd-dot '
             f'{"pd-done" if i < current else "pd-curr" if i == current else "pd-future"}'
-            f'"></div></div>'
+            f'" data-step="{i}"></div>'
             for i in range(1, n_steps + 1)
         )
         st.markdown(
-            f'<div class="app-progress-wrap">'
-            f'<div class="app-progress-bg-line" style="{bg_style}"></div>'
-            f'<div class="app-progress-fill-line" style="{fill_style}"></div>'
+            f'<div class="app-progress-wrap" data-current="{current}">'
+            f'<div class="app-progress-bg-line"></div>'
+            f'<div class="app-progress-fill-line"></div>'
             f'<div class="app-progress-dots">{dots_html}</div>'
             f"</div>",
             unsafe_allow_html=True,
@@ -628,6 +768,7 @@ def _render_header():
     # run_mode で表示有無を判定することで、タブ移動後も消えないようにする。
     _mode = st.session_state.get("run_mode", "manual")
     pass  # 処理中表示は進捗バーで代替するため削除
+
 
 _SCROLL_TO_TOP_JS = (
     "<script>"
