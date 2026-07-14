@@ -12,8 +12,53 @@ from src.step5_suggest import (
 )
 from src.models import (
     AIAnalysisResult, DetectedTable, DerivedLatentTable,
-    IntegrationRecommendation, MasterTableInfo,
+    IntegrationRecommendation, MasterTableInfo, TableAnalysisResult,
 )
+
+
+def _inject_unit_master_analyses(
+    result: AIAnalysisResult, detected_tables: List[DetectedTable]
+) -> None:
+    """Step3（単位混在の分離）で生成された指標マスタを、LLM分析結果の
+    table_analyses へ機械的に追加する。
+
+    指標マスタは detected_tables 自体には含まれず analyze_tables() への
+    入力に乗らないため、LLM分析結果だけを見ている「テーブル階層・種別」
+    （本ファイル内の表示）や後続の _build_final_tables() のマスタ判定から
+    漏れてしまう。ここで _build_final_tables() と同じ強制分類パターン
+    （is_master_table=True 固定）で補完し、両画面の表示を一致させる。
+    """
+    ta_by_id = {ta.table_id: ta for ta in result.table_analyses}
+    for t in detected_tables:
+        if t.unit_master_df is None or t.unit_master_df.empty:
+            continue
+        um_id = f"{t.table_id}_unit_master"
+        if um_id in ta_by_id:
+            continue
+        src_ta = ta_by_id.get(t.table_id)
+        src_name = (src_ta.display_name if src_ta else None) or t.title or t.table_id
+        label_col = (t.unit_split_info or {}).get("label_col", "指標")
+        result.table_analyses.append(
+            TableAnalysisResult(
+                table_id=um_id,
+                display_name=f"{src_name} 指標マスタ",
+                description=(
+                    f"「{src_name}」の {label_col} 列に混在していた単位を分離して"
+                    f"生成した指標マスタ（{label_col}・単位の対応表）。"
+                ),
+                granularity_level="master",
+                is_master_table=True,
+                parent_table_ids=[],
+                child_table_ids=[t.table_id],
+                similar_table_ids=[],
+                is_minimum_granularity_candidate=False,
+                recommended_for_extraction=True,
+                has_external_info=False,
+                external_info_description=None,
+                reasoning="テーブル整形（Step3 単位混在の分離）で自動生成されたマスタテーブルです。",
+            )
+        )
+
 
 def step3():
     st.header("🧠 ステップ 4 : テーブル関係分析")
@@ -25,6 +70,7 @@ def step3():
                     st.session_state.detected_tables,
                     st.session_state.sheet_names,
                 )
+                _inject_unit_master_analyses(result, st.session_state.detected_tables)
                 st.session_state.ai_analysis = result
             except Exception as e:
                 st.error(f"❌ テーブル関係分析エラー: {e}")
@@ -1903,6 +1949,7 @@ def _build_final_tables():
                     "granularity": "master",
                     "is_minimum": False,
                     "is_master": True,
+                    "is_synthetic_master": True,
                 }
 
     # 個別の非統合テーブル
@@ -1976,6 +2023,7 @@ def _build_final_tables():
             "granularity": "master",
             "is_minimum": False,
             "is_master": True,
+            "is_synthetic_master": True,
         }
 
     st.session_state.final_tables = final

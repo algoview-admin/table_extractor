@@ -19,9 +19,17 @@ from src.step7_export import (
 def _collect_agg_removed_metadata(info: dict) -> Tuple[List[dict], List[dict]]:
     """info["source_ids"] を辿り、元 DetectedTable の集計除去メタデータを集約する。
 
+    指標マスタ・ディメンションマスタ（is_synthetic_master）は、元テーブルの
+    行・列を配置し直しただけの複製ではなく新たに合成されたルックアップ表であり、
+    元テーブルの集計除去はそのテーブル自体には起きていない。ここで含めると
+    メインテーブルの _metadata.json と同一内容が無関係なマスタ側にも複製されて
+    しまうため、対象から除外する。
+
     Returns:
         (row_metadata, col_metadata) のタプル。
     """
+    if info.get("is_synthetic_master"):
+        return [], []
     tables_by_id = {t.table_id: t for t in st.session_state.detected_tables}
     row_combined: List[dict] = []
     col_combined: List[dict] = []
