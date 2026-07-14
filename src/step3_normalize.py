@@ -3,10 +3,11 @@
 
 処理概要: 検出された生 DataFrame を分析に適した形式に正規化する。
           多段ヘッダーの統合・集計行列の除去・グルーピング列の補完・
-          クロス集計の縦持ち変換を行う。
+          単位混在の分離（指標マスタ生成）・クロス集計の縦持ち変換を行う。
 入力    : DetectedTable.df（step2_detect が構築した生 DataFrame）
 出力    : 正規化済み DataFrame、整形メタ情報
-          （filled_cols, stack_info, agg_rows_removed 等を DetectedTable に付与）
+          （filled_cols, stack_info, agg_rows_removed, unit_split_info 等を
+          DetectedTable に付与）
 """
 
 import re as _re
@@ -898,3 +899,120 @@ def stack_cross_table(df: Any, stack_info: Dict[str, Any]) -> Any:
         melted.insert(len(label_cols), "年", year_context)
 
     return melted.reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# 単位混在の分離（指標マスタの生成）
+# ---------------------------------------------------------------------------
+
+# ラベル末尾の単位注記パターン: 「15歳以上人口(人)」「労働力率（％）」「指標[人]」など。
+# 括弧種別（半角/全角丸括弧・角括弧）の表記揺れを許容する。
+# 開き括弧と閉じ括弧の種類が一致しない組み合わせ（例: "指標(人]"）も緩く許容する
+# （既存の _TRAILING_BRACKET_RE と同じ方針）。
+_UNIT_SUFFIX_RE = _re.compile(
+    r"^(?P<label>.+?)[\s　]*[（(\[]\s*(?P<unit>[^()（）\[\]]{1,15})\s*[)）\]]\s*$"
+)
+
+_UNIT_SPLIT_MATCH_RATIO = 0.6  # 単位付きセルが列内で占めるべき最低割合
+_UNIT_SPLIT_MASTER_COL = "単位"
+
+
+def detect_and_split_units(df: Any) -> Optional[Dict[str, Any]]:
+    """
+    「15歳以上人口(人)」のように指標名へ単位が埋め込まれた列を検出し、
+    単位が異なる指標が同一テーブル内に混在している場合に指標マスタへ分離する。
+
+    判定条件（対象列につき両方必須）:
+      - 文字列セルのうち末尾に既知単位（UNIT_VOCAB）の括弧注記を持つものが
+        列内の文字列セルの 60% 以上を占める
+      - 抽出された単位が 2 種類以上存在する（単位が統一されている列は分離不要）
+
+    複数列が条件を満たす場合は、単位付きセルの割合が最も高い列を採用する。
+
+    Returns:
+      検出された場合: {"label_col", "master_col", "cleaned_df", "master_df",
+                       "mapping", "match_count"}
+      検出されなかった場合: None
+    """
+    import pandas as pd
+
+    if df is None or df.empty:
+        return None
+
+    best: Optional[Dict[str, Any]] = None
+    best_ratio = 0.0
+
+    for col in df.columns:
+        if _classify_col_time(col) is not None:
+            continue  # 時系列列（年・月等）は対象外
+
+        series = df[col]
+        non_null = [
+            v for v in series if v is not None and not (isinstance(v, float) and pd.isna(v))
+        ]
+        str_vals = [str(v).strip() for v in non_null if isinstance(v, str)]
+        if not str_vals or len(str_vals) / max(1, len(non_null)) < 0.8:
+            continue  # 文字列主体でない列（数値列・時系列値列等）は対象外
+
+        matches: Dict[str, Tuple[str, str]] = {}  # 元セル文字列 → (label, unit)
+        matched_cell_count = 0  # 重複値を含む実セル数（比率計算用）
+        for v in str_vals:
+            m = _UNIT_SUFFIX_RE.match(v)
+            if not m:
+                continue
+            label = m.group("label").strip()
+            unit = m.group("unit").strip()
+            if not label or unit.lower() not in UNIT_VOCAB:
+                continue
+            matches[v] = (label, unit)
+            matched_cell_count += 1
+
+        if not matches:
+            continue
+
+        """
+        比率は実セル数（matched_cell_count）を分子に使う。
+        matches は元セル文字列をキーとする辞書のため、指標列に同一ラベルが
+        複数行（性別・年など他のグルーピング列との組み合わせ）で繰り返される
+        典型的なケースでは重複が畳み込まれてしまい、len(matches) を使うと
+        実際は全セル一致でも比率が大きく下がって誤検出漏れが起きる。
+        """
+        match_ratio = matched_cell_count / len(str_vals)
+        distinct_units = {u for _, u in matches.values()}
+        if match_ratio < _UNIT_SPLIT_MATCH_RATIO or len(distinct_units) < 2:
+            continue  # 単位混在（2種類以上）でなければ分離不要
+
+        if match_ratio > best_ratio:
+            best_ratio = match_ratio
+            best = {"col": col, "matches": matches, "matched_cell_count": matched_cell_count}
+
+    if best is None:
+        return None
+
+    col = best["col"]
+    matches = best["matches"]
+    matched_cell_count = best["matched_cell_count"]
+
+    mapping: Dict[str, str] = {}
+    for label, unit in matches.values():
+        mapping.setdefault(label, unit)  # 表記ゆれ等で単位が割れた場合は初出を優先
+
+    cleaned_df = df.copy()
+    cleaned_df[col] = cleaned_df[col].apply(
+        lambda v: matches[str(v).strip()][0]
+        if isinstance(v, str) and str(v).strip() in matches
+        else v
+    )
+
+    master_df = pd.DataFrame(
+        {str(col): list(mapping.keys()), _UNIT_SPLIT_MASTER_COL: list(mapping.values())}
+    )
+
+    return {
+        "label_col": str(col),
+        "master_col": _UNIT_SPLIT_MASTER_COL,
+        "cleaned_df": cleaned_df,
+        "master_df": master_df,
+        "mapping": mapping,
+        "match_count": matched_cell_count,
+    }

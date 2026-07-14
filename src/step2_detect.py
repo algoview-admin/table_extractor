@@ -17,6 +17,7 @@ import pandas as pd
 from .keywords import STAT_PLACEHOLDERS as _STAT_PLACEHOLDERS
 from .models import DetectedTable, SheetGrid
 from .step3_normalize import (
+    detect_and_split_units,
     detect_cross_table,
     detect_header_roles,
     fill_grouping_cols,
@@ -626,6 +627,22 @@ def _detect_tables_in_grid(
             ) = remove_aggregates(df)
             pre_agg_df = df if (agg_rows or agg_cols) else None
 
+            unit_split = detect_and_split_units(cleaned_df)
+            if unit_split:
+                pre_unit_split_df = cleaned_df
+                cleaned_df = unit_split["cleaned_df"]
+                unit_master_df = unit_split["master_df"]
+                unit_split_info = {
+                    "label_col": unit_split["label_col"],
+                    "master_col": unit_split["master_col"],
+                    "mapping": unit_split["mapping"],
+                    "match_count": unit_split["match_count"],
+                }
+            else:
+                pre_unit_split_df = None
+                unit_master_df = None
+                unit_split_info = None
+
             detected.append(
                 DetectedTable(
                     table_id=table_id,
@@ -646,6 +663,9 @@ def _detect_tables_in_grid(
                     agg_removed_col_metadata=agg_col_meta,
                     filled_cols=filled_cols,
                     pre_fill_df=pre_fill_df,
+                    pre_unit_split_df=pre_unit_split_df,
+                    unit_split_info=unit_split_info,
+                    unit_master_df=unit_master_df,
                 )
             )
 
@@ -677,16 +697,62 @@ def detect_tables(
 
 
 def detect_from_csv(df: pd.DataFrame, filename: str) -> Tuple[List[DetectedTable], List[str]]:
-    """DataFrame（CSV 読み込み済み）を単一テーブルとして検出する。"""
+    """DataFrame（CSV 読み込み済み）を単一テーブルとして検出する。
+
+    Excel 経路（_detect_tables_in_grid）と同じく、グルーピング列の前方補完・
+    集計行列の除去・単位混在の分離を適用してからクロス集計検出を行う。
+    """
     safe = Path(filename).stem.replace(" ", "_")
+
+    pre_fill_df_candidate = df
+    df, filled_cols = fill_grouping_cols(df)
+    pre_fill_df = pre_fill_df_candidate if filled_cols else None
+
+    (
+        cleaned_df,
+        agg_rows,
+        agg_cols,
+        agg_row_positions,
+        agg_row_meta,
+        agg_col_meta,
+    ) = remove_aggregates(df)
+    pre_agg_df = df if (agg_rows or agg_cols) else None
+
+    unit_split = detect_and_split_units(cleaned_df)
+    if unit_split:
+        pre_unit_split_df = cleaned_df
+        cleaned_df = unit_split["cleaned_df"]
+        unit_master_df = unit_split["master_df"]
+        unit_split_info = {
+            "label_col": unit_split["label_col"],
+            "master_col": unit_split["master_col"],
+            "mapping": unit_split["mapping"],
+            "match_count": unit_split["match_count"],
+        }
+    else:
+        pre_unit_split_df = None
+        unit_master_df = None
+        unit_split_info = None
+
     table = DetectedTable(
         table_id=f"{safe}_T1",
         sheet_name="CSV",
         start_row=1,
-        end_row=len(df) + 1,
+        end_row=len(cleaned_df) + 1,
         start_col=1,
-        end_col=len(df.columns),
-        df=df,
+        end_col=len(cleaned_df.columns),
+        df=cleaned_df,
+        agg_rows_removed=agg_rows,
+        agg_cols_removed=agg_cols,
+        agg_rows_removed_positions=agg_row_positions,
+        agg_removed_row_metadata=agg_row_meta,
+        agg_removed_col_metadata=agg_col_meta,
+        filled_cols=filled_cols,
+        pre_fill_df=pre_fill_df,
+        pre_agg_df=pre_agg_df,
+        pre_unit_split_df=pre_unit_split_df,
+        unit_split_info=unit_split_info,
+        unit_master_df=unit_master_df,
     )
     _apply_cross_table_detection([table], filename)
     return [table], ["CSV"]

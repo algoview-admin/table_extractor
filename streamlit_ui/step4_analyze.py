@@ -1945,6 +1945,39 @@ def _build_final_tables():
             "is_master": False,
         }
 
+    # 単位混在分離（Step3）で生成された指標マスタを、LLM分析を介さず
+    # 機械的に「マスタ」として登録する（ディメンションマスタと同じ強制分類パターン）。
+    for t in st.session_state.detected_tables:
+        if t.unit_master_df is None or t.unit_master_df.empty:
+            continue
+        um_key = f"{t.table_id}_unit_master"
+        if um_key in final:
+            continue
+        src_ta = ta_by_id.get(t.table_id)
+        src_final = final.get(t.table_id)
+        src_name = (
+            (src_ta.display_name if src_ta else None)
+            or (src_final.get("display_name") if src_final else None)
+            or t.title
+            or t.table_id
+        )
+        label_col = (t.unit_split_info or {}).get("label_col", "指標")
+        final[um_key] = {
+            "df": t.unit_master_df,
+            "display_name": f"{src_name} 指標マスタ",
+            "description": (
+                f"「{src_name}」の {label_col} 列に混在していた単位を分離して"
+                f"生成した指標マスタ（{label_col}・単位の対応表）。"
+            ),
+            "reasoning": "テーブル整形（Step3 単位混在の分離）で自動生成されたマスタテーブルです。",
+            "is_integrated": False,
+            "source_ids": [t.table_id],
+            "recommended": True,
+            "granularity": "master",
+            "is_minimum": False,
+            "is_master": True,
+        }
+
     st.session_state.final_tables = final
     # 推奨テーブルを事前選択する
     st.session_state.selected_ids = {

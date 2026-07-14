@@ -34,6 +34,9 @@ class DetectedTable:
     pre_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 前 DataFrame（ffill 適用時のみ）
     stack_info: Optional[Dict[str, Any]] = field(default=None)          # クロス集計検出情報
     stacked_df: Optional[pd.DataFrame] = field(default=None, repr=False)   # 縦持ち変換後 DataFrame
+    pre_unit_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 単位分離前 DataFrame（単位混在検出時のみ）
+    unit_split_info: Optional[Dict[str, Any]] = field(default=None)     # 単位分離情報 {label_col, master_col, mapping, match_count}
+    unit_master_df: Optional[pd.DataFrame] = field(default=None, repr=False)     # 生成された指標マスタ DataFrame（指標列, 単位）
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

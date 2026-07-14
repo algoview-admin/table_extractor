@@ -586,6 +586,114 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
+def _render_unit_split_body(t: "DetectedTable") -> None:
+    """単位混在の分離（指標マスタ生成）の詳細（Streamlit ウィジェット版）。"""
+    info = t.unit_split_info
+    before = t.pre_unit_split_df
+    after = t.df
+    master = t.unit_master_df
+    if not info or before is None or after is None or master is None:
+        return
+
+    label_col = info.get("label_col", "")
+    master_col = info.get("master_col", "単位")
+    mapping = info.get("mapping", {})
+    match_count = info.get("match_count", 0)
+    distinct_units = sorted(set(mapping.values()))
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    unit_html = " ".join(_badge(u, "167,139,250") for u in distinct_units)
+    meta_lines = [
+        f"対象列: {_badge(label_col, '156,163,175')}",
+        f"検出された単位: {unit_html}（{len(distinct_units)} 種類 / {match_count} セル）",
+        f"分離後の構成: <b>{_html.escape(label_col)}</b>（単位除去済み）＋ "
+        f"指標マスタ（<b>{_html.escape(label_col)}</b>, <b>{_html.escape(master_col)}</b>）",
+    ]
+    st.markdown(
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        + "<br>".join(meta_lines)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(f"**変換前**（{len(before)} 行 / 紫列 = 単位混在列）")
+        st.markdown(
+            _df_to_html(before, max_height=340, unit_col_names={label_col}),
+            unsafe_allow_html=True,
+        )
+    with col_b:
+        st.markdown(f"**変換後**（{len(after)} 行 / 緑列 = 単位を除去した列）")
+        st.markdown(
+            _df_to_html(after, max_height=340, green_col_names={label_col}),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(f"**生成された指標マスタ**（{len(master)} 行）")
+    st.markdown(
+        _df_to_html(master, max_height=240, green_col_names={label_col, master_col}),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_unit_split_body_html(t: "DetectedTable") -> str:
+    """単位混在の分離（指標マスタ生成）の詳細（HTML 文字列版）。"""
+    info = t.unit_split_info
+    before = t.pre_unit_split_df
+    after = t.df
+    master = t.unit_master_df
+    if not info or before is None or after is None or master is None:
+        return ""
+
+    label_col = info.get("label_col", "")
+    master_col = info.get("master_col", "単位")
+    mapping = info.get("mapping", {})
+    match_count = info.get("match_count", 0)
+    distinct_units = sorted(set(mapping.values()))
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    unit_html = " ".join(_badge(u, "167,139,250") for u in distinct_units)
+    meta_html = (
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"対象列: {_badge(label_col, '156,163,175')}<br>"
+        f"検出された単位: {unit_html}（{len(distinct_units)} 種類 / {match_count} セル）<br>"
+        f"分離後の構成: <b>{_html.escape(label_col)}</b>（単位除去済み）＋ "
+        f"指標マスタ（<b>{_html.escape(label_col)}</b>, <b>{_html.escape(master_col)}</b>）"
+        "</div>"
+    )
+
+    pre_html = _df_to_html(before, max_height=340, unit_col_names={label_col})
+    post_html = _df_to_html(after, max_height=340, green_col_names={label_col})
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before)} 行 / 紫列 = 単位混在列）</p>{pre_html}</div>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after)} 行 / 緑列 = 単位を除去した列）</p>{post_html}</div>"
+        "</div>"
+    )
+    master_html = _df_to_html(
+        master, max_height=240, green_col_names={label_col, master_col}
+    )
+    master_block = (
+        f"<p style='margin:12px 0 6px;font-weight:600'>生成された指標マスタ（{len(master)} 行）</p>{master_html}"
+    )
+    return meta_html + grid_html + master_block
+
+
 _AGG_META_PREVIEW_N = 3  # 画面表示は重量化を避けるため代表件数のみに絞る（全件はエクスポート時に出力）
 
 
@@ -863,8 +971,13 @@ def step_format():
     fill_applied = [t for t in tables if getattr(t, "filled_cols", [])]
 
     stacked_all = [t for t in tables if getattr(t, "stacked_df", None) is not None]
+    unit_split_applied = [t for t in tables if getattr(t, "unit_split_info", None)]
     nothing_done = (
-        not formatted and not agg_removed and not fill_applied and not stacked_all
+        not formatted
+        and not agg_removed
+        and not fill_applied
+        and not stacked_all
+        and not unit_split_applied
     )
     if nothing_done:
         st.info("全テーブルに対して整形処理はありませんでした。")
@@ -971,7 +1084,51 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
-        # ── ④ クロス集計形式の検出と縦持ち変換機能 ──────────────────────────
+        # ── ④ 単位混在の分離（指標マスタ生成）機能 ────────────────────────
+        if unit_split_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            total_units = sum(
+                len(set((t.unit_split_info or {}).get("mapping", {}).values()))
+                for t in unit_split_applied
+            )
+            st.subheader(
+                f"🏷️ 単位混在の分離（指標マスタ生成）機能（対象：{len(unit_split_applied)}テーブル）"
+            )
+            st.success(
+                f"**{len(unit_split_applied)}** テーブルで単位混在の指標列を検出し、指標マスタへ分離しました  "
+                f"（検出単位: 計 {total_units} 種類）"
+            )
+            rep_u = unit_split_applied[0]
+            rep_u_title = f"  🏷️ `{rep_u.title}`" if rep_u.title else ""
+            with st.expander(
+                f"**`{rep_u.table_id}`**{rep_u_title}  —  シート: {rep_u.sheet_name}",
+                expanded=True,
+            ):
+                _render_unit_split_body(rep_u)
+
+                rest_unit = unit_split_applied[1:]
+                if rest_unit:
+                    inner_html = ""
+                    for r in rest_unit:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_unit_split_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_unit)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
+
+        # ── ⑤ クロス集計形式の検出と縦持ち変換機能 ──────────────────────────
         stacked = [t for t in tables if getattr(t, "stacked_df", None) is not None]
         if stacked:
             if not first_section:
