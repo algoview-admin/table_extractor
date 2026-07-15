@@ -45,6 +45,9 @@ class DetectedTable:
     uchi_split_info: Optional[Dict[str, Any]] = field(default=None)  # うち分離情報 {label_col, parent_col_name, child_col_name, rows, match_count}
     uchi_breakdown_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 生成された内訳テーブル DataFrame（親子列＋値列）
     is_step3_derived: bool = False  # Step3整形処理中に新規生成されたテーブルか（Step2の検出結果表示から除外するためのフラグ）
+    raw_header_rows: Optional[List[List[Any]]] = field(default=None, repr=False)  # 多段ヘッダー展開判定用の生ヘッダー行（結合前、全て"name"役割の2行以上の場合のみ）
+    pre_multi_axis_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 多軸ヘッダー展開前 DataFrame（展開適用時のみ）
+    multi_axis_info: Optional[Dict[str, Any]] = field(default=None)  # 多軸ヘッダー展開情報 {axis_names, value_name, dropped_labels, reasoning}
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

@@ -454,13 +454,16 @@ def _extract_dataframe(
     end_row: int,
     start_col: int,
     end_col: int,
-) -> Tuple[pd.DataFrame, Optional[str], Optional[pd.DataFrame]]:
+) -> Tuple[pd.DataFrame, Optional[str], Optional[pd.DataFrame], Optional[List[List[Any]]]]:
     """矩形領域を DataFrame として抽出する。
 
-    Returns (df, title, raw_df)
+    Returns (df, title, raw_df, raw_header_rows)
+
+    raw_header_rows は、全ヘッダー行が "name" 役割（結合セルスパン型の多段ヘッダー）
+    の場合のみ結合前の生データを保持する（Step3 の多軸ヘッダー展開検出用）。
     """
     if start_row > end_row or start_col > end_col:
-        return pd.DataFrame(), None, None
+        return pd.DataFrame(), None, None, None
 
     rows = [
         [grid[r][c] for c in range(start_col, end_col + 1)]
@@ -468,7 +471,7 @@ def _extract_dataframe(
     ]
 
     if not rows:
-        return pd.DataFrame(), None, None
+        return pd.DataFrame(), None, None, None
 
     n_title, header_roles = detect_header_roles(rows)
     num_cols = end_col - start_col + 1
@@ -488,14 +491,14 @@ def _extract_dataframe(
     if n_header == 0:
         columns = [f"列{i + 1}" for i in range(num_cols)]
         df = pd.DataFrame(remaining, columns=columns)
-        return df.dropna(how="all").reset_index(drop=True), title, None
+        return df.dropna(how="all").reset_index(drop=True), title, None, None
 
     if n_header == 1:
         header = _make_unique_columns(
             [str(v) if v is not None else "" for v in remaining[0]]
         )
         df = pd.DataFrame(remaining[1:], columns=header)
-        return df.dropna(how="all").reset_index(drop=True), title, None
+        return df.dropna(how="all").reset_index(drop=True), title, None, None
 
     raw_header = _make_unique_columns(
         [str(v) if v is not None else "" for v in remaining[0]]
@@ -507,7 +510,13 @@ def _extract_dataframe(
     header = _make_unique_columns(merged)
     df = pd.DataFrame(remaining[n_header:], columns=header)
 
-    return df.dropna(how="all").reset_index(drop=True), title, raw_df
+    raw_header_rows = (
+        [list(row) for row in header_data]
+        if n_header >= 2 and all(r == "name" for r in header_roles)
+        else None
+    )
+
+    return df.dropna(how="all").reset_index(drop=True), title, raw_df, raw_header_rows
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +591,7 @@ def _detect_tables_in_grid(
             if (band_end - first_header_row + 1) < 2:
                 continue
 
-            df, inner_title, raw_df = _extract_dataframe(
+            df, inner_title, raw_df, raw_header_rows = _extract_dataframe(
                 grid, first_header_row, band_end, col_start, col_end
             )
             if df.empty or len(df) == 0:
@@ -614,6 +623,7 @@ def _detect_tables_in_grid(
                     title=effective_title,
                     notes=reg.get("trailing_notes", []),
                     raw_df=raw_df,
+                    raw_header_rows=raw_header_rows,
                 )
             )
 

@@ -1,8 +1,9 @@
 """
 ステップ3 テーブル正規化モジュール（LLM使用処理）。
 
-処理概要: Transpose（行列逆転）の検出と変換など、意味判定にLLMが必要な
-          テーブル整形処理を扱う。
+処理概要: Transpose（行列逆転）の検出と変換、多軸ヘッダー展開（多段ヘッダーが
+          独立した複数カテゴリ軸の交差かどうかの判定・軸命名）など、
+          意味判定にLLMが必要なテーブル整形処理を扱う。
           Step3 と Step4（src/step4_analyze.py）は処理の性質が異なり
           （Step3 の出力が Step4 の入力になる関係）依存を持たせたくない
           ため、LLM クライアント生成・API 呼び出しは step4_analyze.py の
@@ -10,7 +11,8 @@
           決定論的処理（正規表現・語彙辞書のみで完結する処理）は
           src/step3_normalize_determ.py を参照。
 入力    : DetectedTable.df（step2_detect が構築した生 DataFrame）
-出力    : 変換済み DataFrame、transpose_info（{entity_axis_name, reasoning}）
+出力    : 変換済み DataFrame、transpose_info（{entity_axis_name, reasoning}）、
+          多軸ヘッダー展開情報（{axis_names, value_name, reasoning}）
 """
 
 import json
@@ -174,6 +176,96 @@ def detect_transpose(df: Any, client: Any, model: str) -> Optional[Dict[str, Any
 
     return {
         "entity_axis_name": entity_axis_name,
+        "reasoning": str(raw.get("reasoning") or ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 多軸ヘッダー展開（B-09: 多段ヘッダーの検出と解決機能）
+# ---------------------------------------------------------------------------
+#
+# src/step3_normalize_determ.py の detect_multi_axis_header が構造的に
+# 「単一値でも時系列でもない軸候補行」を切り分けた後、それが本当に独立した
+# 複数のカテゴリ軸（例: 科目, 支店）を交差させたものかどうか、また各軸に
+# どんな列名を付けるべきかは、値の意味を理解する必要があるため LLM を用いる。
+
+_MULTI_AXIS_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
+多段（複数行）の結合セルヘッダーが、複数の独立したカテゴリ軸（次元）を
+交差させたクロス集計形式かどうかを判定し、指定された JSON 形式のみで
+回答してください（説明文は不要）。"""
+
+_MULTI_AXIS_USER_PROMPT = """以下は、表の多段ヘッダーのうち、単一値でも時系列でもないと
+判定された「軸候補」の各行の値一覧です（表の上段から下段の順）。
+
+{axis_lines}
+{title_line}
+
+【判定基準】
+- 各行が、互いに独立したカテゴリ軸（例: 科目、支店、商品カテゴリなど）を
+  表しており、これらを交差させて元の値列が構成されている場合のみ
+  is_valid=true としてください。
+- 単に表記ゆれや不規則な値の羅列で、明確な軸として意味づけできない場合は
+  is_valid=false としてください。
+- axis_names は入力された行の順序と対応する配列にしてください（行数と同じ長さ）。
+- 少しでも判断に迷う場合は is_valid=false としてよい。
+
+JSON形式で回答してください:
+{{"is_valid": true または false, "axis_names": ["各行に対応する軸名（日本語、例: 科目、支店）", "..."], "value_name": "値列の名称（日本語、例: 金額、数量）。文脈から判断できない場合は「値」", "reasoning": "判断理由（日本語、1〜2文）"}}"""
+
+
+def detect_dimension_axes(
+    axis_candidates: List[List[str]],
+    title: Optional[str],
+    client: Any,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """多段ヘッダーの軸候補行が、真に独立したカテゴリ軸の交差かどうかを LLM で判定する。
+
+    axis_candidates: 各軸候補行の重複排除済み値リスト（表の上段→下段の順）。
+    空リストの場合は LLM を呼ばず None を返す。
+
+    ネットワークエラー・JSON パース失敗・行数不一致等は握りつぶして None を返し、
+    1テーブルの失敗が検出処理全体を落とさないようにする。
+
+    Returns:
+      有効と判定された場合: {"axis_names": [...], "value_name": str, "reasoning": str}
+      無効 / 判定不能な場合: None
+    """
+    if not axis_candidates:
+        return None
+
+    axis_lines = "\n".join(
+        f"行{i + 1}: {values}" for i, values in enumerate(axis_candidates)
+    )
+    title_line = f"\n表タイトル: {title}" if title else ""
+    messages = [
+        {"role": "system", "content": _MULTI_AXIS_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _MULTI_AXIS_USER_PROMPT.format(
+                axis_lines=axis_lines, title_line=title_line
+            ),
+        },
+    ]
+    try:
+        content = _call_transpose_api(client, model, messages)
+        raw = json.loads(content)
+    except Exception:
+        return None
+
+    if not isinstance(raw, dict) or not raw.get("is_valid"):
+        return None
+
+    axis_names = raw.get("axis_names")
+    if not isinstance(axis_names, list) or len(axis_names) != len(axis_candidates):
+        return None
+    axis_names = [str(n).strip() or f"軸{i + 1}" for i, n in enumerate(axis_names)]
+
+    value_name = str(raw.get("value_name") or "").strip() or "値"
+
+    return {
+        "axis_names": axis_names,
+        "value_name": value_name,
         "reasoning": str(raw.get("reasoning") or ""),
     }
 

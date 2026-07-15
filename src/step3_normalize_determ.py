@@ -28,7 +28,12 @@ from .keywords import (
     VAR_NAME_MAP as _VAR_NAME_MAP,
     VAR_NAME_FALLBACK as _VAR_NAME_FALLBACK,
 )
-from .step3_normalize_llm import apply_transpose, detect_transpose, make_transpose_client
+from .step3_normalize_llm import (
+    apply_transpose,
+    detect_dimension_axes,
+    detect_transpose,
+    make_transpose_client,
+)
 
 
 def _is_unit_row(row: List[Any]) -> bool:
@@ -271,6 +276,232 @@ def merge_header_rows(
         columns.append("_".join(parts) if parts else f"列{ci + 1}")
 
     return columns
+
+
+# ---------------------------------------------------------------------------
+# 多軸ヘッダー展開（B-09: 多段ヘッダーの検出と解決機能）
+# ---------------------------------------------------------------------------
+#
+# merge_header_rows は複数のヘッダー行を単純にアンダースコアで連結するだけ
+# だが、多段ヘッダーが「科目×支店」のように独立した複数のカテゴリ軸を
+# 交差させたクロス集計形式の場合は、本来 tidy 形式（各軸を列として展開し
+# 値を縦持ちに変換）に解決すべきである。
+#
+# 各ヘッダー行が (a) 単一値のみ（注記的な見出し。軸ではない）、
+# (b) 時系列パターンに一致（既存の TIME_PATTERNS を流用、決定論的に判定可）、
+# (c) 複数の異なる値がバランスよく並ぶ軸候補、のいずれかを構造的に分類する
+# （意味理解は不要）。(c) が残る場合のみ、それが本当に独立した軸として
+# 意味を持つか・軸名として何が適切かは値の意味を理解する必要があるため
+# LLM 判定を行う（src/step3_normalize_llm.py の detect_dimension_axes）。
+
+
+def _ffill_header_row(row: List[Any]) -> List[Any]:
+    """ヘッダー行内の空白セルを左から右へ前方補完する。
+
+    実際に結合されたセル（XLSX）は読み込み時点で複製済みのため冪等に働き、
+    CSV等で空白のまま連結を表現している場合はこれで復元する。
+    """
+    out = list(row)
+    last: Any = None
+    for i, v in enumerate(out):
+        s = str(v).strip() if v is not None else ""
+        if s and s.lower() != "nan":
+            last = v
+        else:
+            out[i] = last
+    return out
+
+
+def _header_row_kind(
+    ffilled_row: List[Any], value_positions: Optional[set] = None
+) -> Tuple[str, List[str]]:
+    """前方補完済みヘッダー行を分類する。
+
+    value_positions が指定された場合、その列位置のセルのみを対象にする
+    （ラベル列の判定に使う。最終行＝リーフ行はラベル列にも実名が入っている
+    ことがあるため、外側の行が空白だった列を除外しないと、ラベル列名が
+    軸候補の値として混入してしまう）。
+
+    Returns (kind, values):
+      kind   — "empty" / "constant" / "time" / "candidate" / "irregular"
+      values — 重複排除済みの値リスト（出現順）
+    """
+    non_blank = [
+        str(v).strip()
+        for ci, v in enumerate(ffilled_row)
+        if (value_positions is None or ci in value_positions)
+        and v is not None
+        and str(v).strip()
+        and str(v).strip().lower() != "nan"
+    ]
+    if not non_blank:
+        return "empty", []
+
+    seen: List[str] = []
+    for v in non_blank:
+        if v not in seen:
+            seen.append(v)
+    if len(seen) == 1:
+        return "constant", seen
+
+    from collections import Counter as _Counter
+
+    time_kinds = [_classify_col_time(v) for v in seen]
+    matched = [k for k in time_kinds if k is not None]
+    if matched:
+        dominant_kind, cnt = _Counter(matched).most_common(1)[0]
+        if cnt / len(seen) >= _WIDE_TO_LONG_MATCH_RATIO:
+            return "time", seen
+
+    # 値の種類数が非空セル数に対して多すぎる（≒繰り返しがほぼ無く、各セルが
+    # ほぼ一意）場合は、共有カテゴリを表す軸ではなく通常のラベル列名の羅列
+    # である可能性が高いため対象外とする安全弁（「累計」等、他の値より出現
+    # 回数が少ない値が混在すること自体は許容する）。
+    if len(seen) > len(non_blank) / 2:
+        return "irregular", seen
+
+    return "candidate", seen
+
+
+def _dedup_columns(columns: List[str]) -> List[str]:
+    """列名重複時に連番を付与する（step2_detect._make_unique_columns と同等。
+    循環importを避けるためここに複製）。"""
+    seen: Dict[str, int] = {}
+    result: List[str] = []
+    for col in columns:
+        col = col if col else "列"
+        if col in seen:
+            seen[col] += 1
+            result.append(f"{col}_{seen[col]}")
+        else:
+            seen[col] = 0
+            result.append(col)
+    return result
+
+
+def detect_multi_axis_header(raw_header_rows: List[List[Any]]) -> Optional[Dict[str, Any]]:
+    """多段ヘッダーの各行を構造的に分類し、除外可能な行・LLM判定が必要な
+    軸候補行を切り分ける（決定論的、値の意味理解は不要）。
+
+    2行未満、または分類不能な行（irregular）を含む場合は None を返し、
+    呼び出し側は従来通りの単純連結（merge_header_rows）にフォールバックする。
+    """
+    if len(raw_header_rows) < 2:
+        return None
+
+    ffilled = [_ffill_header_row(r) for r in raw_header_rows]
+
+    # 値列範囲の判定: 最終行（リーフ行）以外のいずれかの行で内容がある列のみを
+    # 対象にする。リーフ行はラベル列にも実名（例: "帳票支店名"）を持つことが
+    # あり、それを軸候補の値として誤って拾わないようにするため。
+    num_cols = len(ffilled[0])
+    value_positions = set()
+    for r in ffilled[:-1]:
+        for ci, v in enumerate(r):
+            if v is not None and str(v).strip() and str(v).strip().lower() != "nan":
+                value_positions.add(ci)
+    if not value_positions:
+        value_positions = set(range(num_cols))
+
+    analyzed = [_header_row_kind(r, value_positions) for r in ffilled]
+    kinds = [k for k, _ in analyzed]
+    values = [v for _, v in analyzed]
+
+    if any(k == "irregular" for k in kinds):
+        return None
+
+    leaf_time_idx: Optional[int] = None
+    for i, k in enumerate(kinds):
+        if k == "time":
+            leaf_time_idx = i  # 最も下段（最も細かい粒度）の time 行を採用
+
+    dropped = {i for i, k in enumerate(kinds) if k in ("constant", "empty")}
+    if leaf_time_idx is not None:
+        for i, k in enumerate(kinds):
+            if i == leaf_time_idx:
+                continue
+            if k == "time":
+                # leaf以外の time 行（稀）はより粗い粒度の冗長グルーピングとみなす
+                dropped.add(i)
+            elif k == "candidate" and len(values[i]) < len(values[leaf_time_idx]):
+                # leaf行より値の種類数が少ない候補行は、leafの冗長な上位グルーピング
+                # （例: 上期/下期 が 4月〜3月 の上位区分）とみなし除外する
+                dropped.add(i)
+
+    candidate_idxs = [
+        i for i, k in enumerate(kinds) if k == "candidate" and i not in dropped
+    ]
+
+    if leaf_time_idx is not None and candidate_idxs:
+        # 時系列軸と未解決の軸候補が混在する複合ケースは対象外とし、
+        # 誤変換を避けるため安全側（フォールバック）に倒す
+        return None
+
+    return {
+        "ffilled_rows": ffilled,
+        "kinds": kinds,
+        "values": values,
+        "leaf_time_idx": leaf_time_idx,
+        "dropped_idxs": dropped,
+        "candidate_idxs": candidate_idxs,
+    }
+
+
+def apply_multi_axis_header(
+    df: Any,
+    info: Dict[str, Any],
+    axis_result: Dict[str, Any],
+) -> Any:
+    """LLMが確定した軸名・値列名で、多軸クロス集計形式の多段ヘッダーを
+    tidy形式（各軸を列として展開し値を縦持ちに変換）に展開する。
+    """
+    import pandas as pd
+
+    ffilled = info["ffilled_rows"]
+    candidate_idxs = info["candidate_idxs"]
+    axis_names = axis_result["axis_names"]
+    value_name = axis_result["value_name"]
+
+    num_cols = len(ffilled[0])
+    label_positions = [
+        ci
+        for ci in range(num_cols)
+        if all(
+            ffilled[ri][ci] is None or str(ffilled[ri][ci]).strip() == ""
+            for ri in candidate_idxs
+        )
+    ]
+    data_positions = [ci for ci in range(num_cols) if ci not in label_positions]
+    label_col_names = [df.columns[ci] for ci in label_positions]
+
+    # ラベル列がヘッダー行に一切名前を持たない場合、列名は "列N" のプレース
+    # ホルダーのままになる（merge_header_rows のフォールバック）。データが
+    # 時系列パターン（既存 TIME_PATTERNS）に一致する場合は、その軸名を
+    # 決定論的に採用する（例: "2024年","2025年" → "年"）。
+    renamed_label_names = []
+    for name in label_col_names:
+        new_name = name
+        if _re.match(r"^列\d+$", str(name)):
+            col_values = [
+                str(v).strip() for v in df[name].dropna().unique() if str(v).strip()
+            ]
+            time_kinds = {_classify_col_time(v) for v in col_values}
+            if col_values and len(time_kinds) == 1 and None not in time_kinds:
+                new_name = _VAR_NAME_MAP.get(next(iter(time_kinds)), _VAR_NAME_FALLBACK)
+        renamed_label_names.append(new_name)
+    label_col_names = renamed_label_names
+
+    records: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        base = {name: row.iloc[pos] for name, pos in zip(label_col_names, label_positions)}
+        for ci in data_positions:
+            rec = dict(base)
+            for ax_name, ri in zip(axis_names, candidate_idxs):
+                rec[ax_name] = ffilled[ri][ci]
+            rec[value_name] = row.iloc[ci]
+            records.append(rec)
+
+    return pd.DataFrame(records).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1432,17 +1663,20 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
     各テーブルに対し、次の順序で処理する（各処理の出力が次の処理の入力になる）:
       1. Transpose検出・変換（LLM、step3_normalize_llm）— 他の処理はこの表が
          正しい向き（エンティティ＝行、属性＝列）であることを前提とするため最初に行う
-      2. グルーピング列の前方補完
-      3. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates が親として
+      2. 多軸ヘッダー展開（B-09。決定論的分類＋必要時のみLLM） — 多段ヘッダーの
+         列構造を確定させる処理のため、他の整形より前に行う（Transpose適用時は
+         raw_header_rows が転置前の構造を指すため対象外）
+      3. グルーピング列の前方補完
+      4. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates が親として
          参照される「合計」行自体を冗長行として削除してしまう場合があるため、
-         合計行が消える前に親情報を確定させる必要があり、必ず4.より前に行う。
+         合計行が消える前に親情報を確定させる必要があり、必ず5.より前に行う。
          分離結果は独立した新規 DetectedTable として tables に追加し、以降の
-         整形処理（4〜6）の対象にする（メインテーブルと同じ「実テーブル」として
+         整形処理（5〜6）の対象にする（メインテーブルと同じ「実テーブル」として
          Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
-      4. 集計行・集計列の除去
-      5. 単位混在の分離（指標マスタ生成）
+      5. 集計行・集計列の除去
+      6. 単位混在の分離（指標マスタ生成）
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
-      6. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
+      7. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
 
     DetectedTable の各フィールドを in-place で書き換え、tables 自体にも
     うち内訳テーブルを追加する（呼び出し元が持つ同一リストへの参照を
@@ -1465,6 +1699,53 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
             t.pre_transpose_df = df
             df = apply_transpose(df, transpose_result["entity_axis_name"])
             t.transpose_info = transpose_result
+
+        # 多軸ヘッダー展開（B-09）: Transpose適用時は raw_header_rows が
+        # 元の（転置前の）列構造を指すため対象外とする
+        if not transpose_result and t.raw_header_rows:
+            axis_info = detect_multi_axis_header(t.raw_header_rows)
+            if axis_info is not None:
+                if axis_info["candidate_idxs"]:
+                    axis_values = [
+                        axis_info["values"][i] for i in axis_info["candidate_idxs"]
+                    ]
+                    axis_result = detect_dimension_axes(
+                        axis_values, t.title, llm_client, llm_model
+                    )
+                    if axis_result is not None:
+                        t.pre_multi_axis_df = df
+                        df = apply_multi_axis_header(df, axis_info, axis_result)
+                        t.multi_axis_info = {
+                            **axis_result,
+                            "dropped_labels": [
+                                axis_info["values"][i][0]
+                                for i in axis_info["dropped_idxs"]
+                                if axis_info["values"][i]
+                            ],
+                        }
+                elif axis_info["dropped_idxs"]:
+                    # LLM不要: 除外可能な行（単一値の注記行・時系列の冗長な
+                    # 上位グルーピング行）を除いた素直な列名に置き換える。
+                    # これにより後段のクロス集計/Wide_to_long検出が複合列名に
+                    # 阻害されず正しく機能するようになる。
+                    surviving_idxs = [
+                        i
+                        for i in range(len(t.raw_header_rows))
+                        if i not in axis_info["dropped_idxs"]
+                    ]
+                    if surviving_idxs:
+                        surviving_rows = [
+                            axis_info["ffilled_rows"][i] for i in surviving_idxs
+                        ]
+                        new_cols = _dedup_columns(
+                            merge_header_rows(
+                                surviving_rows,
+                                ["name"] * len(surviving_rows),
+                                len(surviving_rows[0]),
+                            )
+                        )
+                        df = df.copy()
+                        df.columns = new_cols
 
         pre_fill_df_candidate = df
         df, filled_cols = fill_grouping_cols(df)

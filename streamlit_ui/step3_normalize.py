@@ -684,6 +684,95 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
+def _render_multi_axis_body(t: "DetectedTable") -> None:
+    """多軸ヘッダー展開（B-09。独立した複数カテゴリ軸の交差を縦持ちに展開）の
+    詳細（Streamlit ウィジェット版）。"""
+    info = t.multi_axis_info
+    wide = t.pre_multi_axis_df
+    long_df = t.df
+    if not info or wide is None or long_df is None:
+        return
+
+    axis_names = info.get("axis_names", [])
+    value_name = info.get("value_name", "値")
+    reasoning = info.get("reasoning", "")
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    axis_html = " ".join(_badge(c, "167,139,250") for c in axis_names) or "（なし）"
+
+    st.markdown(
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"検出された軸: {axis_html}<br>"
+        f"値列: {_badge(value_name, '52,211,153')}<br>"
+        f"理由: {_html.escape(reasoning)}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    new_col_set = set(axis_names) | {value_name}
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(f"**変換前**（多段ヘッダー / {len(wide.columns)} 列 × {len(wide)} 行）")
+        st.markdown(_df_to_html(wide, max_height=340), unsafe_allow_html=True)
+    with col_b:
+        st.markdown(
+            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 展開で生まれた列）"
+        )
+        st.markdown(
+            _df_to_html(long_df, max_height=340, green_col_names=new_col_set),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_multi_axis_body_html(t: "DetectedTable") -> str:
+    """多軸ヘッダー展開（B-09）の詳細（HTML 文字列版）。"""
+    info = t.multi_axis_info
+    wide = t.pre_multi_axis_df
+    long_df = t.df
+    if not info or wide is None or long_df is None:
+        return ""
+
+    axis_names = info.get("axis_names", [])
+    value_name = info.get("value_name", "値")
+    reasoning = info.get("reasoning", "")
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    axis_html = " ".join(_badge(c, "167,139,250") for c in axis_names) or "（なし）"
+    meta_html = (
+        f"<div style='margin:4px 0 12px;line-height:2'>"
+        f"検出された軸: {axis_html}<br>"
+        f"値列: {_badge(value_name, '52,211,153')}<br>"
+        f"理由: {_html.escape(reasoning)}"
+        f"</div>"
+    )
+
+    new_col_set = set(axis_names) | {value_name}
+    pre_html = _df_to_html(wide, max_height=340)
+    post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（多段ヘッダー / {len(wide.columns)} 列 × {len(wide)} 行）</p>{pre_html}</div>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 展開で生まれた列）</p>{post_html}</div>"
+        "</div>"
+    )
+    return meta_html + grid_html
+
+
 def _render_wide_to_long_body(t: "DetectedTable") -> None:
     """Wide_to_long（時系列×複数指標の複合列名）変換の詳細（Streamlit ウィジェット版）。"""
     info = t.wide_to_long_info
@@ -1309,6 +1398,7 @@ def step_format():
     stacked_all = [t for t in tables if getattr(t, "stacked_df", None) is not None]
     unit_split_applied = [t for t in tables if getattr(t, "unit_split_info", None)]
     transpose_applied = [t for t in tables if getattr(t, "transpose_info", None)]
+    multi_axis_applied = [t for t in tables if getattr(t, "multi_axis_info", None)]
     wide_to_long_applied = [t for t in tables if getattr(t, "wide_to_long_info", None)]
     uchi_split_applied = [t for t in tables if getattr(t, "uchi_split_info", None)]
     nothing_done = (
@@ -1318,6 +1408,7 @@ def step_format():
         and not stacked_all
         and not unit_split_applied
         and not transpose_applied
+        and not multi_axis_applied
         and not uchi_split_applied
     )
     if nothing_done:
@@ -1339,6 +1430,46 @@ def step_format():
             )
             rest = formatted[1:] if len(formatted) > 1 else None
             _render_header_merge_detail(formatted[0], rest=rest)
+
+        # ── ①.3 多軸ヘッダー展開機能（B-09） ─────────────────
+        if multi_axis_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            st.subheader(
+                f"🧩 多軸ヘッダー展開機能（対象：{len(multi_axis_applied)}テーブル）"
+            )
+            st.success(
+                f"**{len(multi_axis_applied)}** テーブルで多段ヘッダーが独立した"
+                f"複数カテゴリ軸の交差であることを検出し、縦持ち形式に展開しました"
+            )
+            rep_m = multi_axis_applied[0]
+            rep_m_title = f"  🏷️ `{rep_m.title}`" if rep_m.title else ""
+            with st.expander(
+                f"**`{rep_m.table_id}`**{rep_m_title}  —  シート: {rep_m.sheet_name}",
+                expanded=True,
+            ):
+                _render_multi_axis_body(rep_m)
+
+                rest_multi_axis = multi_axis_applied[1:]
+                if rest_multi_axis:
+                    inner_html = ""
+                    for r in rest_multi_axis:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_multi_axis_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_multi_axis)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
 
         # ── ①.5 Transpose検出と変換機能 ─────────────────
         if transpose_applied:
