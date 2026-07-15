@@ -1490,6 +1490,7 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
                     end_col=t.end_col,
                     df=breakdown_df,
                     title=child_title,
+                    is_step3_derived=True,
                 )
             )
 

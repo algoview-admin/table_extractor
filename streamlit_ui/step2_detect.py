@@ -37,7 +37,14 @@ def step2():
                 st.error(f"❌ 解析エラー: {e}")
                 return
 
-    tables: List[DetectedTable] = st.session_state.detected_tables
+    # Step3（テーブル整形）が「うち」書き分離等で新規生成したテーブルは、
+    # ファイルから実際に検出されたものではないため、このステップの表示
+    # （件数・ツリー・シート別一覧）からは除外する。st.session_state.detected_tables
+    # 自体は Step4 以降が参照する共有リストのためここではフィルタのみ行い、
+    # 変更・上書きはしない。
+    tables: List[DetectedTable] = [
+        t for t in st.session_state.detected_tables if not getattr(t, "is_step3_derived", False)
+    ]
     sheets: List[str] = st.session_state.sheet_names
 
     # 初回の前進パス中のみ自動的に次のステップへ進む（UI出力より前に実行）

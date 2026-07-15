@@ -44,6 +44,7 @@ class DetectedTable:
     pre_uchi_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # うち分離前 DataFrame（内訳検出時のみ）
     uchi_split_info: Optional[Dict[str, Any]] = field(default=None)  # うち分離情報 {label_col, parent_col_name, child_col_name, rows, match_count}
     uchi_breakdown_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 生成された内訳テーブル DataFrame（親子列＋値列）
+    is_step3_derived: bool = False  # Step3整形処理中に新規生成されたテーブルか（Step2の検出結果表示から除外するためのフラグ）
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

@@ -17,7 +17,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from .keywords import STAT_PLACEHOLDERS as _STAT_PLACEHOLDERS
+from .keywords import (
+    NOTE_ROW_PREFIXES as _NOTE_PREFIXES,
+    STAT_PLACEHOLDERS as _STAT_PLACEHOLDERS,
+)
 from .models import DetectedTable, SheetGrid
 from .step3_normalize_determ import detect_header_roles, merge_header_rows
 
@@ -64,11 +67,6 @@ _RT_COL_HDR = "col_hdr"
 _RT_DATA    = "data"
 _RT_MIXED   = "mixed"
 _RT_NOTE    = "note"
-
-_NOTE_PREFIXES: Tuple[str, ...] = (
-    "※", "＊", "*", "注）", "注)", "（注", "(注", "注意", "＜注", "<注",
-    "note:", "NOTE:", "＊注", "*注",
-)
 
 _AGG_ENUM_RE = re.compile(
     r"[・、,＋+].+[のをにおける]*(合計|内訳|合算|総計|小計|集計|含む|合わせた|除く|除外)"
@@ -137,6 +135,14 @@ def _classify_row(p: Dict[str, Any]) -> str:
                 return _RT_NOTE
             if _AGG_ENUM_RE.search(txt):
                 return _RT_NOTE
+            if p["col_min"] is not None and p["col_min"] > 1:
+                """
+                先頭列（ラベル列想定）が空白で、途中の列から結合テキストが
+                始まっている場合は、行全体を覆うドキュメントタイトルではなく
+                「販売実績（AP数）」のような値列だけをまとめる列グループ見出し
+                （多段ヘッダーの一部）である可能性が高いため、列ヘッダーとして扱う。
+                """
+                return _RT_COL_HDR
             return _RT_TITLE if len(txt) <= 40 else _RT_COL_HDR
 
     if p["texts"] and max(len(t) for t in p["texts"]) > 80 and n_ratio <= 0.30:
