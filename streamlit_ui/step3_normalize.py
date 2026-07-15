@@ -136,12 +136,17 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
     raw = t.raw_df
     # 集計行除去の前段階（ヘッダー統合直後）と比較することで、
     # 集計行を「残留ヘッダー除去対象」として誤表示しないようにする。
-    # Transpose 適用テーブルは行列数がここで変わるため、pre_agg_df/df より先に
-    # pre_transpose_df（ヘッダー統合直後・Transpose適用前）を優先する。
+    # Transpose・うち分離は行数・列数をここで変えるため、pre_agg_df/df より先に
+    # パイプライン順（Transpose→うち分離→集計除去）で最も早く捕捉された
+    # スナップショットを優先する。
     fmt = (
         t.pre_transpose_df
         if t.pre_transpose_df is not None
-        else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+        else (
+            t.pre_uchi_split_df
+            if t.pre_uchi_split_df is not None
+            else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+        )
     )
     n_residue = len(raw) - len(fmt)
     st.caption(
@@ -216,11 +221,16 @@ def _merge_detail_body_html(t: "DetectedTable") -> str:
     """列名対応表 + before/after プレビューをHTML文字列で返す（ネスト details 用）。"""
     raw = t.raw_df
     # 集計行除去の前段階と比較し、集計行を残留ヘッダー除去対象として誤表示しない。
-    # Transpose 適用テーブルは pre_transpose_df（ヘッダー統合直後・Transpose適用前）を優先する。
+    # Transpose・うち分離は行数・列数を変えるため、パイプライン順で最も早く
+    # 捕捉されたスナップショットを優先する。
     fmt = (
         t.pre_transpose_df
         if t.pre_transpose_df is not None
-        else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+        else (
+            t.pre_uchi_split_df
+            if t.pre_uchi_split_df is not None
+            else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+        )
     )
     n_residue = len(raw) - len(fmt)
 
@@ -797,6 +807,112 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
+def _render_uchi_split_body(t: "DetectedTable") -> None:
+    """「うち」書きの内訳を別テーブルへ分離した詳細（Streamlit ウィジェット版）。"""
+    info = t.uchi_split_info
+    before = t.pre_uchi_split_df
+    after = t.df
+    breakdown = t.uchi_breakdown_df
+    if not info or before is None or after is None or breakdown is None:
+        return
+
+    label_col = info.get("label_col", "")
+    parent_col_name = info.get("parent_col_name", "")
+    child_col_name = info.get("child_col_name", "")
+    match_count = info.get("match_count", 0)
+    removed_positions = set(info.get("rows", {}).keys())
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    meta_lines = [
+        f"対象列: {_badge(label_col, '156,163,175')}",
+        f"検出された内訳行: {match_count} 件",
+        f"分離後の構成: メインテーブル（内訳行を除去）＋ "
+        f"内訳テーブル（<b>{_html.escape(parent_col_name)}</b>, <b>{_html.escape(child_col_name)}</b>）",
+    ]
+    st.markdown(
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        + "<br>".join(meta_lines)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(f"**変換前**（{len(before)} 行 / 赤色 {len(removed_positions)} 行 = 内訳行）")
+        st.markdown(
+            _df_to_html(before, max_height=340, highlight_row_indices=removed_positions),
+            unsafe_allow_html=True,
+        )
+    with col_b:
+        st.markdown(f"**変換後**（{len(after)} 行 / 内訳行を除去済み）")
+        st.markdown(
+            _df_to_html(after, max_height=340),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(f"**生成された内訳テーブル**（{len(breakdown)} 行）")
+    st.markdown(
+        _df_to_html(breakdown, max_height=240, green_col_names={parent_col_name, child_col_name}),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_uchi_split_body_html(t: "DetectedTable") -> str:
+    """「うち」書きの内訳を別テーブルへ分離した詳細（HTML 文字列版）。"""
+    info = t.uchi_split_info
+    before = t.pre_uchi_split_df
+    after = t.df
+    breakdown = t.uchi_breakdown_df
+    if not info or before is None or after is None or breakdown is None:
+        return ""
+
+    label_col = info.get("label_col", "")
+    parent_col_name = info.get("parent_col_name", "")
+    child_col_name = info.get("child_col_name", "")
+    match_count = info.get("match_count", 0)
+    removed_positions = set(info.get("rows", {}).keys())
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    meta_html = (
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"対象列: {_badge(label_col, '156,163,175')}<br>"
+        f"検出された内訳行: {match_count} 件<br>"
+        f"分離後の構成: メインテーブル（内訳行を除去）＋ "
+        f"内訳テーブル（<b>{_html.escape(parent_col_name)}</b>, <b>{_html.escape(child_col_name)}</b>）"
+        "</div>"
+    )
+
+    pre_html = _df_to_html(before, max_height=340, highlight_row_indices=removed_positions)
+    post_html = _df_to_html(after, max_height=340)
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before)} 行 / 赤色 {len(removed_positions)} 行 = 内訳行）</p>{pre_html}</div>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after)} 行 / 内訳行を除去済み）</p>{post_html}</div>"
+        "</div>"
+    )
+    breakdown_html = _df_to_html(
+        breakdown, max_height=240, green_col_names={parent_col_name, child_col_name}
+    )
+    breakdown_block = (
+        f"<p style='margin:12px 0 6px;font-weight:600'>生成された内訳テーブル（{len(breakdown)} 行）</p>{breakdown_html}"
+    )
+    return meta_html + grid_html + breakdown_block
+
+
 def _render_unit_split_body(t: "DetectedTable") -> None:
     """単位混在の分離（指標マスタ生成）の詳細（Streamlit ウィジェット版）。"""
     info = t.unit_split_info
@@ -1194,6 +1310,7 @@ def step_format():
     unit_split_applied = [t for t in tables if getattr(t, "unit_split_info", None)]
     transpose_applied = [t for t in tables if getattr(t, "transpose_info", None)]
     wide_to_long_applied = [t for t in tables if getattr(t, "wide_to_long_info", None)]
+    uchi_split_applied = [t for t in tables if getattr(t, "uchi_split_info", None)]
     nothing_done = (
         not formatted
         and not agg_removed
@@ -1201,6 +1318,7 @@ def step_format():
         and not stacked_all
         and not unit_split_applied
         and not transpose_applied
+        and not uchi_split_applied
     )
     if nothing_done:
         st.info("全テーブルに対して整形処理はありませんでした。")
@@ -1297,6 +1415,50 @@ def step_format():
                         )
                     outer_html = _MHD_CSS + _make_details_html(
                         f"その他の同様処理（{len(rest_fill)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
+
+        # ── ②.5 「うち」書き識別と別テーブル分離機能 ────────────────
+        if uchi_split_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            total_uchi_rows = sum(
+                (t.uchi_split_info or {}).get("match_count", 0) for t in uchi_split_applied
+            )
+            st.subheader(
+                f"📤 「うち」書き識別と別テーブル分離機能（対象：{len(uchi_split_applied)}テーブル）"
+            )
+            st.success(
+                f"**{len(uchi_split_applied)}** テーブルで「うち」書きの内訳行を検出し、"
+                f"内訳テーブルへ分離しました  "
+                f"（内訳行: 計 {total_uchi_rows} 件）"
+            )
+            rep_uc = uchi_split_applied[0]
+            rep_uc_title = f"  🏷️ `{rep_uc.title}`" if rep_uc.title else ""
+            with st.expander(
+                f"**`{rep_uc.table_id}`**{rep_uc_title}  —  シート: {rep_uc.sheet_name}",
+                expanded=True,
+            ):
+                _render_uchi_split_body(rep_uc)
+
+                rest_uchi = uchi_split_applied[1:]
+                if rest_uchi:
+                    inner_html = ""
+                    for r in rest_uchi:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_uchi_split_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_uchi)} 件）",
                         inner_html,
                         open=False,
                         level=2,

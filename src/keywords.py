@@ -5,7 +5,7 @@
           各ステップが使う定数として公開する。
           モジュール初回インポート時に一度だけ評価される。
 入力    : src/dictionaries/*.yaml
-出力    : UNIT_VOCAB, AGG_KEYWORDS, TIME_PATTERNS, VAR_NAME_MAP,
+出力    : UNIT_VOCAB, AGG_KEYWORDS, UCHI_PREFIXES, TIME_PATTERNS, VAR_NAME_MAP,
           VALUE_KEYWORDS, NOTE_AGG_KEYWORDS, NOTE_EXCL_KEYWORDS,
           NOTE_REF_KEYWORDS, STAT_PLACEHOLDERS, STAT_NA_MARKERS
 """
@@ -35,6 +35,9 @@ UNIT_VOCAB: FrozenSet[str] = frozenset(
 
 # ── 集計キーワード (step3 / stage2) ────────────────────────────────────────
 AGG_KEYWORDS: FrozenSet[str] = frozenset(_load("agg_keywords.yaml"))
+
+# ── 内訳接頭辞 (step3 / stage2.5) ──────────────────────────────────────────
+UCHI_PREFIXES: Tuple[str, ...] = tuple(_load("uchi_prefixes.yaml"))
 
 # ── 時系列パターン (step3 / stage4) ────────────────────────────────────────
 _time_raw = _load("time_patterns.yaml")

@@ -41,6 +41,9 @@ class DetectedTable:
     transpose_info: Optional[Dict[str, Any]] = field(default=None)  # Transpose検出情報 {entity_axis_name, reasoning}
     pre_wide_to_long_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Wide_to_long前 DataFrame（複合列名検出時のみ）
     wide_to_long_info: Optional[Dict[str, Any]] = field(default=None)  # Wide_to_long検出情報 {label_cols, time_var_name, time_kind, time_tokens, indicators, parsed_cols}
+    pre_uchi_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # うち分離前 DataFrame（内訳検出時のみ）
+    uchi_split_info: Optional[Dict[str, Any]] = field(default=None)  # うち分離情報 {label_col, parent_col_name, child_col_name, rows, match_count}
+    uchi_breakdown_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 生成された内訳テーブル DataFrame（親子列＋値列）
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

@@ -60,6 +60,57 @@ def _inject_unit_master_analyses(
         )
 
 
+def _force_uchi_breakdown_as_detail(
+    result: AIAnalysisResult, detected_tables: List[DetectedTable]
+) -> None:
+    """Step3（「うち」書きの内訳分離）で生成された内訳テーブルの分類を、
+    LLMの判定に関わらず常に詳細データ（granularity_level="detail"）に固定する。
+
+    内訳テーブルは normalize_tables() の時点で detected_tables に実テーブルと
+    して追加されるため（指標マスタ等とは異なり）、analyze_tables() の入力に
+    自然に含まれ、LLMが独自に分類する。しかしメインテーブルより細かい粒度の
+    実測値であることは構造的に確定しているため、LLMの判断に委ねず上書きする。
+    LLM分析結果に該当エントリが存在すればその場で上書きし、大規模ファイルの
+    チャンク処理漏れ等で存在しない場合のみ機械的に補完する。
+    """
+    ta_by_id = {ta.table_id: ta for ta in result.table_analyses}
+    for t in detected_tables:
+        if not getattr(t, "uchi_split_info", None):
+            continue
+        ub_id = f"{t.table_id}_uchi_breakdown"
+        existing = ta_by_id.get(ub_id)
+        if existing is not None:
+            existing.granularity_level = "detail"
+            existing.is_master_table = False
+            existing.is_minimum_granularity_candidate = True
+            existing.recommended_for_extraction = True
+            continue
+
+        src_ta = ta_by_id.get(t.table_id)
+        src_name = (src_ta.display_name if src_ta else None) or t.title or t.table_id
+        label_col = (t.uchi_split_info or {}).get("label_col", "分類")
+        result.table_analyses.append(
+            TableAnalysisResult(
+                table_id=ub_id,
+                display_name=f"{src_name} 内訳テーブル",
+                description=(
+                    f"「{src_name}」の {label_col} 列に混在していた「うち」書きの"
+                    f"内訳行を分離して生成した内訳テーブル（親子関係付き）。"
+                ),
+                granularity_level="detail",
+                is_master_table=False,
+                parent_table_ids=[t.table_id],
+                child_table_ids=[],
+                similar_table_ids=[],
+                is_minimum_granularity_candidate=True,
+                recommended_for_extraction=True,
+                has_external_info=False,
+                external_info_description=None,
+                reasoning="テーブル整形（Step3 「うち」書き識別）で自動生成された内訳テーブルです。",
+            )
+        )
+
+
 def step3():
     st.header("🧠 ステップ 4 : テーブル関係分析")
 
@@ -71,6 +122,7 @@ def step3():
                     st.session_state.sheet_names,
                 )
                 _inject_unit_master_analyses(result, st.session_state.detected_tables)
+                _force_uchi_breakdown_as_detail(result, st.session_state.detected_tables)
                 st.session_state.ai_analysis = result
             except Exception as e:
                 st.error(f"❌ テーブル関係分析エラー: {e}")
@@ -2025,6 +2077,13 @@ def _build_final_tables():
             "is_master": True,
             "is_synthetic_master": True,
         }
+
+    # 「うち」書き識別（Step3）で生成された内訳テーブルは、normalize_tables() の
+    # 時点で detected_tables に実テーブルとして追加されているため、上の
+    # 「個別の非統合テーブル」ループで通常のテーブルと同様に自動登録される
+    # （_force_uchi_breakdown_as_detail が analysis.table_analyses 側で
+    # granularity_level="detail" 等を確定させている）。指標マスタのような
+    # 専用登録ブロックはここでは不要。
 
     st.session_state.final_tables = final
     # 推奨テーブルを事前選択する

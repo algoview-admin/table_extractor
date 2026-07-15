@@ -2,16 +2,17 @@
 ステップ3 テーブル正規化モジュール（決定論的処理）。
 
 処理概要: 検出された生 DataFrame を分析に適した形式に正規化する。
-          多段ヘッダーの統合・集計行列の除去・グルーピング列の補完・
-          単位混在の分離（指標マスタ生成）・クロス集計の縦持ち変換など、
-          正規表現・語彙辞書のみで完結する（LLMを使わない）処理を扱う。
+          多段ヘッダーの統合・グルーピング列の補完・「うち」書きの内訳
+          別テーブル分離・集計行列の除去・単位混在の分離（指標マスタ生成）・
+          クロス集計/Wide_to_longの縦持ち変換など、正規表現・語彙辞書のみで
+          完結する（LLMを使わない）処理を扱う。
           LLMを使用する処理（Transpose検出等）は
           src/step3_normalize_llm.py を参照。
           normalize_tables() が両者を正しい順序で呼び出す統括関数。
 入力    : DetectedTable.df（step2_detect が構築した生 DataFrame）
 出力    : 正規化済み DataFrame、整形メタ情報
-          （transpose_info, filled_cols, stack_info, agg_rows_removed,
-          unit_split_info 等を DetectedTable に付与）
+          （transpose_info, filled_cols, uchi_split_info, stack_info,
+          agg_rows_removed, unit_split_info 等を DetectedTable に付与）
 """
 
 import re as _re
@@ -21,6 +22,7 @@ from .keywords import (
     AGG_KEYWORDS,
     STAT_NA_MARKERS as _STAT_NA_MARKERS,
     TIME_PATTERNS as _TIME_PATTERNS,
+    UCHI_PREFIXES,
     UNIT_VOCAB,
     VALUE_KEYWORDS as _VALUE_KEYWORDS,
     VAR_NAME_MAP as _VAR_NAME_MAP,
@@ -789,6 +791,220 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
 
 
 # ---------------------------------------------------------------------------
+# 「うち」書き識別と別テーブル分離
+# ---------------------------------------------------------------------------
+#
+# 「うち男性」のように直前の合計値の内訳を示す行を検出し、削除ではなく
+# 親子関係を保ったまま別テーブル（内訳テーブル）へ分離する。
+#
+# remove_aggregates（「計」「合計」等の冗長な集計行を削除する）は、この機能が
+# 親として参照する「合計」行そのものを削除対象とみなす場合があるため、
+# 必ず remove_aggregates より前に実行し、合計行が消える前に親情報を
+# 確定させる（詳細は normalize_tables 内のコメントを参照）。
+
+
+_UCHI_OPEN_BRACKETS = "（("
+_UCHI_CLOSE_BRACKETS = "）)"
+_UCHI_TRAILING_PUNCT = " 　、：:・"
+
+
+def _is_uchi_label(s: str) -> Optional[str]:
+    """セル値が UCHI_PREFIXES のいずれかで始まるかを判定する。
+
+    括弧（半角/全角丸括弧）で囲まれた表記も2パターン許容する:
+      - 括弧内に接頭辞＋子ラベルの両方（例: "（うち男性）" → "男性"）
+      - 接頭辞のみ括弧で囲み、子ラベルが括弧の外（例: "（再掲）女性" → "女性"）
+    接頭辞直後の区切り文字（読点・コロン・中黒等）も除去してから子ラベルを返す。
+
+    一致すれば子ラベルを返す。一致しない場合、または接頭辞を除くと
+    空文字になる場合は None。
+    """
+    stripped = str(s).strip()
+    if not stripped:
+        return None
+
+    # 1. 括弧なしの単純接頭辞（例: "うち男性"、"再掲・女性"）
+    for prefix in UCHI_PREFIXES:
+        if stripped.startswith(prefix):
+            child = stripped[len(prefix):].strip(_UCHI_TRAILING_PUNCT)
+            if child:
+                return child
+
+    # 2. 先頭が丸括弧の場合、対応する閉じ括弧までを接頭辞候補として調べる
+    if stripped[0] in _UCHI_OPEN_BRACKETS:
+        close_idx = next(
+            (i for i, ch in enumerate(stripped) if ch in _UCHI_CLOSE_BRACKETS), None
+        )
+        if close_idx is not None:
+            inner = stripped[1:close_idx].strip()
+            after = stripped[close_idx + 1 :].strip(_UCHI_TRAILING_PUNCT)
+            for prefix in UCHI_PREFIXES:
+                if inner == prefix and after:
+                    return after  # 例: "（再掲）女性"
+                if inner.startswith(prefix):
+                    child = inner[len(prefix):].strip(_UCHI_TRAILING_PUNCT)
+                    if child:
+                        return child  # 例: "（うち男性）"
+    return None
+
+
+def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
+    """
+    「うち」等の接頭辞を持つ内訳行を検出し、親子関係を解決する。
+
+    対象列: 文字列型の列のうち、_is_uchi_label に一致する行を1件以上持つ列。
+    複数列が該当する場合は一致件数が最多の列を採用する。
+
+    各「うち」行の親は次の順で解決する（同一コンテキスト＝他のラベル列の
+    値が完全一致する範囲内で先行行を探索）:
+      1. 当該列の値が _is_agg_label に一致する直近の先行行
+      2. 上記が見つからない場合、直近の非「うち」行
+      3. どちらも見つからない、またはコンテキストが切り替わって
+         見つけられない場合はその行を分離対象から除外する（安全側に倒す）
+
+    Returns:
+      検出された場合: {"label_col", "parent_col_name", "child_col_name",
+                       "rows"（{idx: (parent_value, child_label)}）, "match_count"}
+      検出されなかった場合: None
+    """
+    import pandas as pd
+    import pandas.api.types as _pat
+
+    if df is None or df.empty:
+        return None
+
+    def _is_text_dtype(series: Any) -> bool:
+        return not (
+            _pat.is_numeric_dtype(series)
+            or _pat.is_bool_dtype(series)
+            or _pat.is_datetime64_any_dtype(series)
+        )
+
+    def _is_null_scalar(v: Any) -> bool:
+        if v is None:
+            return True
+        try:
+            return bool(pd.isna(v))
+        except (TypeError, ValueError):
+            return False
+
+    label_cols = [c for c in df.columns if _is_text_dtype(df[c])]
+    if not label_cols:
+        return None
+
+    best_col = None
+    best_matches: Dict[Any, str] = {}
+    for col in label_cols:
+        matches: Dict[Any, str] = {}
+        for idx, v in df[col].items():
+            if _is_null_scalar(v):
+                continue
+            child = _is_uchi_label(str(v))
+            if child:
+                matches[idx] = child
+        if matches and len(matches) > len(best_matches):
+            best_col = col
+            best_matches = matches
+
+    if best_col is None:
+        return None
+
+    other_label_cols = [c for c in label_cols if c != best_col]
+    idx_list = list(df.index)
+    pos_of = {idx: p for p, idx in enumerate(idx_list)}
+
+    def _same_context(idx_a: Any, idx_b: Any) -> bool:
+        for oc in other_label_cols:
+            a, b = df.at[idx_a, oc], df.at[idx_b, oc]
+            a_null, b_null = _is_null_scalar(a), _is_null_scalar(b)
+            if a_null and b_null:
+                continue
+            if a_null != b_null or a != b:
+                return False
+        return True
+
+    resolved: Dict[Any, Tuple[Any, str]] = {}
+    for idx, child_label in best_matches.items():
+        pos = pos_of[idx]
+        parent_value = None
+
+        # 1. 直近の「合計」ラベル行を優先して探す
+        for p in range(pos - 1, -1, -1):
+            pidx = idx_list[p]
+            if not _same_context(idx, pidx):
+                break
+            pval = df.at[pidx, best_col]
+            if _is_null_scalar(pval) or pidx in best_matches:
+                continue
+            if _is_agg_label(str(pval)):
+                parent_value = pval
+                break
+
+        # 2. 見つからなければ直近の非「うち」行にフォールバック
+        if parent_value is None:
+            for p in range(pos - 1, -1, -1):
+                pidx = idx_list[p]
+                if not _same_context(idx, pidx):
+                    break
+                pval = df.at[pidx, best_col]
+                if _is_null_scalar(pval) or pidx in best_matches:
+                    continue
+                parent_value = pval
+                break
+
+        if parent_value is not None:
+            resolved[idx] = (parent_value, child_label)
+
+    if not resolved:
+        return None
+
+    return {
+        "label_col": str(best_col),
+        "parent_col_name": f"親{best_col}",
+        "child_col_name": f"子{best_col}",
+        "rows": resolved,
+        "match_count": len(resolved),
+    }
+
+
+def apply_uchi_split(df: Any, info: Dict[str, Any]) -> Tuple[Any, Any]:
+    """detect_uchi_breakdown の検出結果を使って、うち内訳行をメインテーブルから
+    除去し、親子関係を保った内訳テーブルを生成する。
+
+    Returns: (main_df, breakdown_df)
+    """
+    import pandas as pd
+
+    label_col = info["label_col"]
+    parent_col_name = info["parent_col_name"]
+    child_col_name = info["child_col_name"]
+    rows: Dict[Any, Tuple[Any, str]] = info["rows"]
+
+    main_df = df.drop(index=list(rows.keys())).reset_index(drop=True)
+
+    other_cols = [c for c in df.columns if c != label_col]
+    breakdown_rows = []
+    for idx, (parent_value, child_label) in rows.items():
+        row = df.loc[idx]
+        new_row = {parent_col_name: parent_value, child_col_name: child_label}
+        for c in other_cols:
+            new_row[c] = row[c]
+        breakdown_rows.append(new_row)
+
+    breakdown_df = pd.DataFrame(breakdown_rows)
+
+    # 列順: label_col があった位置に親/子列を配置し、他の列は元の順序を維持
+    cols = list(df.columns)
+    label_pos = cols.index(label_col)
+    ordered_cols = (
+        cols[:label_pos] + [parent_col_name, child_col_name] + cols[label_pos + 1 :]
+    )
+    breakdown_df = breakdown_df[ordered_cols].reset_index(drop=True)
+
+    return main_df, breakdown_df
+
+
+# ---------------------------------------------------------------------------
 # クロス集計形式（横持ち時系列）の検出と縦持ち変換
 # ---------------------------------------------------------------------------
 
@@ -1174,6 +1390,42 @@ def detect_and_split_units(df: Any) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _apply_agg_and_unit_split(t: Any, df: Any) -> Any:
+    """集計行・集計列の除去、単位混在の分離を1テーブルに適用し、結果の df を返す。
+
+    normalize_tables() のメインループと、うち分離で新規生成された内訳テーブルの
+    両方から呼ばれる共通処理（DetectedTable の該当フィールドを in-place 更新する）。
+    """
+    (
+        cleaned_df,
+        agg_rows,
+        agg_cols,
+        agg_row_positions,
+        agg_row_meta,
+        agg_col_meta,
+    ) = remove_aggregates(df)
+    t.pre_agg_df = df if (agg_rows or agg_cols) else None
+    t.agg_rows_removed = agg_rows
+    t.agg_cols_removed = agg_cols
+    t.agg_rows_removed_positions = agg_row_positions
+    t.agg_removed_row_metadata = agg_row_meta
+    t.agg_removed_col_metadata = agg_col_meta
+
+    unit_split = detect_and_split_units(cleaned_df)
+    if unit_split:
+        t.pre_unit_split_df = cleaned_df
+        cleaned_df = unit_split["cleaned_df"]
+        t.unit_master_df = unit_split["master_df"]
+        t.unit_split_info = {
+            "label_col": unit_split["label_col"],
+            "master_col": unit_split["master_col"],
+            "mapping": unit_split["mapping"],
+            "match_count": unit_split["match_count"],
+        }
+
+    return cleaned_df
+
+
 def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
     """検出済みテーブル（DetectedTable）に Step3 の整形処理一式を適用する。
 
@@ -1181,15 +1433,26 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
       1. Transpose検出・変換（LLM、step3_normalize_llm）— 他の処理はこの表が
          正しい向き（エンティティ＝行、属性＝列）であることを前提とするため最初に行う
       2. グルーピング列の前方補完
-      3. 集計行・集計列の除去
-      4. 単位混在の分離（指標マスタ生成）
+      3. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates が親として
+         参照される「合計」行自体を冗長行として削除してしまう場合があるため、
+         合計行が消える前に親情報を確定させる必要があり、必ず4.より前に行う。
+         分離結果は独立した新規 DetectedTable として tables に追加し、以降の
+         整形処理（4〜6）の対象にする（メインテーブルと同じ「実テーブル」として
+         Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
+      4. 集計行・集計列の除去
+      5. 単位混在の分離（指標マスタ生成）
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
-      5. クロス集計形式の検出と縦持ち変換
+      6. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
 
-    DetectedTable の各フィールドを in-place で書き換える（戻り値なし）。
+    DetectedTable の各フィールドを in-place で書き換え、tables 自体にも
+    うち内訳テーブルを追加する（呼び出し元が持つ同一リストへの参照を
+    直接変更するため、st.session_state.detected_tables 等にもそのまま反映される）。
     LLM クライアントは一度だけ生成し、全テーブルで使い回す。
     """
+    from .models import DetectedTable
+
     llm_client, llm_model = make_transpose_client()
+    new_tables: List[Any] = []
 
     for t in tables:
         if t.df is None or t.df.empty:
@@ -1208,34 +1471,37 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         t.filled_cols = filled_cols
         t.pre_fill_df = pre_fill_df_candidate if filled_cols else None
 
-        (
-            cleaned_df,
-            agg_rows,
-            agg_cols,
-            agg_row_positions,
-            agg_row_meta,
-            agg_col_meta,
-        ) = remove_aggregates(df)
-        t.pre_agg_df = df if (agg_rows or agg_cols) else None
-        t.agg_rows_removed = agg_rows
-        t.agg_cols_removed = agg_cols
-        t.agg_rows_removed_positions = agg_row_positions
-        t.agg_removed_row_metadata = agg_row_meta
-        t.agg_removed_col_metadata = agg_col_meta
+        uchi_info = detect_uchi_breakdown(df)
+        if uchi_info:
+            t.pre_uchi_split_df = df
+            df, breakdown_df = apply_uchi_split(df, uchi_info)
+            t.uchi_split_info = uchi_info
+            t.uchi_breakdown_df = breakdown_df
 
-        unit_split = detect_and_split_units(cleaned_df)
-        if unit_split:
-            t.pre_unit_split_df = cleaned_df
-            cleaned_df = unit_split["cleaned_df"]
-            t.unit_master_df = unit_split["master_df"]
-            t.unit_split_info = {
-                "label_col": unit_split["label_col"],
-                "master_col": unit_split["master_col"],
-                "mapping": unit_split["mapping"],
-                "match_count": unit_split["match_count"],
-            }
+            child_id = f"{t.table_id}_uchi_breakdown"
+            child_title = f"{t.title or t.table_id} 内訳テーブル"
+            new_tables.append(
+                DetectedTable(
+                    table_id=child_id,
+                    sheet_name=t.sheet_name,
+                    start_row=t.start_row,
+                    end_row=t.end_row,
+                    start_col=t.start_col,
+                    end_col=t.end_col,
+                    df=breakdown_df,
+                    title=child_title,
+                )
+            )
 
-        t.df = cleaned_df
+        t.df = _apply_agg_and_unit_split(t, df)
+
+    # ── うち内訳テーブルにも集計除去・単位分離を適用する ────────────
+    # Transpose・グルーピング列前方補完・うち検出自身は対象外（既に整形済みの
+    # 派生テーブルであり、親の段階で確定した構造を再度崩す必要はないため）。
+    for ct in new_tables:
+        ct.df = _apply_agg_and_unit_split(ct, ct.df)
+
+    tables.extend(new_tables)
 
     # ── クロス集計検出（テーブル間で独立、全テーブル走査後に一括適用）────
     # Wide_to_long（時系列×複数指標の複合列名）を先に試す。指標が1種類のみの
