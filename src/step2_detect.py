@@ -17,10 +17,13 @@ import pandas as pd
 from .keywords import STAT_PLACEHOLDERS as _STAT_PLACEHOLDERS
 from .models import DetectedTable, SheetGrid
 from .step3_normalize import (
+    apply_transpose,
     detect_and_split_units,
     detect_cross_table,
     detect_header_roles,
+    detect_transpose,
     fill_grouping_cols,
+    make_transpose_client,
     merge_header_rows,
     remove_aggregates,
     stack_cross_table,
@@ -571,6 +574,8 @@ def _detect_tables_in_grid(
     max_col: int,
     sheet_name: str,
     table_counter: Dict[str, int],
+    llm_client: Any,
+    llm_model: str,
 ) -> List[DetectedTable]:
     """グリッドからテーブルを検出して DetectedTable のリストを返す。"""
     if max_row == 0 or max_col == 0:
@@ -612,6 +617,15 @@ def _detect_tables_in_grid(
             safe = sheet_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
             table_counter[safe] = table_counter.get(safe, 0) + 1
             table_id = f"{safe}_T{table_counter[safe]}"
+
+            transpose_result = detect_transpose(df, llm_client, llm_model)
+            if transpose_result:
+                pre_transpose_df = df
+                df = apply_transpose(df, transpose_result["entity_axis_name"])
+                transpose_info = transpose_result
+            else:
+                pre_transpose_df = None
+                transpose_info = None
 
             pre_fill_df_candidate = df
             df, filled_cols = fill_grouping_cols(df)
@@ -666,6 +680,8 @@ def _detect_tables_in_grid(
                     pre_unit_split_df=pre_unit_split_df,
                     unit_split_info=unit_split_info,
                     unit_master_df=unit_master_df,
+                    pre_transpose_df=pre_transpose_df,
+                    transpose_info=transpose_info,
                 )
             )
 
@@ -683,11 +699,12 @@ def detect_tables(
     """SheetGrid のリストからテーブルを検出する。"""
     all_tables: List[DetectedTable] = []
     table_counter: Dict[str, int] = {}
+    llm_client, llm_model = make_transpose_client()
 
     for sheet in sheets:
         tables = _detect_tables_in_grid(
             sheet.grid, sheet.max_row, sheet.max_col,
-            sheet.sheet_name, table_counter,
+            sheet.sheet_name, table_counter, llm_client, llm_model,
         )
         all_tables.extend(tables)
 
@@ -699,10 +716,20 @@ def detect_tables(
 def detect_from_csv(df: pd.DataFrame, filename: str) -> Tuple[List[DetectedTable], List[str]]:
     """DataFrame（CSV 読み込み済み）を単一テーブルとして検出する。
 
-    Excel 経路（_detect_tables_in_grid）と同じく、グルーピング列の前方補完・
-    集計行列の除去・単位混在の分離を適用してからクロス集計検出を行う。
+    Excel 経路（_detect_tables_in_grid）と同じく、Transpose検出・グルーピング列の
+    前方補完・集計行列の除去・単位混在の分離を適用してからクロス集計検出を行う。
     """
     safe = Path(filename).stem.replace(" ", "_")
+
+    llm_client, llm_model = make_transpose_client()
+    transpose_result = detect_transpose(df, llm_client, llm_model)
+    if transpose_result:
+        pre_transpose_df = df
+        df = apply_transpose(df, transpose_result["entity_axis_name"])
+        transpose_info = transpose_result
+    else:
+        pre_transpose_df = None
+        transpose_info = None
 
     pre_fill_df_candidate = df
     df, filled_cols = fill_grouping_cols(df)
@@ -753,6 +780,8 @@ def detect_from_csv(df: pd.DataFrame, filename: str) -> Tuple[List[DetectedTable
         pre_unit_split_df=pre_unit_split_df,
         unit_split_info=unit_split_info,
         unit_master_df=unit_master_df,
+        pre_transpose_df=pre_transpose_df,
+        transpose_info=transpose_info,
     )
     _apply_cross_table_detection([table], filename)
     return [table], ["CSV"]

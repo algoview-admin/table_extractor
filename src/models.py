@@ -37,6 +37,8 @@ class DetectedTable:
     pre_unit_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 単位分離前 DataFrame（単位混在検出時のみ）
     unit_split_info: Optional[Dict[str, Any]] = field(default=None)     # 単位分離情報 {label_col, master_col, mapping, match_count}
     unit_master_df: Optional[pd.DataFrame] = field(default=None, repr=False)     # 生成された指標マスタ DataFrame（指標列, 単位）
+    pre_transpose_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Transpose前 DataFrame（行列逆転検出時のみ）
+    transpose_info: Optional[Dict[str, Any]] = field(default=None)  # Transpose検出情報 {entity_axis_name, reasoning}
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

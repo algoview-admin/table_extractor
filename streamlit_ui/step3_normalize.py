@@ -135,8 +135,14 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
     """列名対応表 + before/after プレビュー（expander なし）。"""
     raw = t.raw_df
     # 集計行除去の前段階（ヘッダー統合直後）と比較することで、
-    # 集計行を「残留ヘッダー除去対象」として誤表示しないようにする
-    fmt = t.pre_agg_df if t.pre_agg_df is not None else t.df
+    # 集計行を「残留ヘッダー除去対象」として誤表示しないようにする。
+    # Transpose 適用テーブルは行列数がここで変わるため、pre_agg_df/df より先に
+    # pre_transpose_df（ヘッダー統合直後・Transpose適用前）を優先する。
+    fmt = (
+        t.pre_transpose_df
+        if t.pre_transpose_df is not None
+        else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+    )
     n_residue = len(raw) - len(fmt)
     st.caption(
         f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました"
@@ -209,8 +215,13 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
 def _merge_detail_body_html(t: "DetectedTable") -> str:
     """列名対応表 + before/after プレビューをHTML文字列で返す（ネスト details 用）。"""
     raw = t.raw_df
-    # 集計行除去の前段階と比較し、集計行を残留ヘッダー除去対象として誤表示しない
-    fmt = t.pre_agg_df if t.pre_agg_df is not None else t.df
+    # 集計行除去の前段階と比較し、集計行を残留ヘッダー除去対象として誤表示しない。
+    # Transpose 適用テーブルは pre_transpose_df（ヘッダー統合直後・Transpose適用前）を優先する。
+    fmt = (
+        t.pre_transpose_df
+        if t.pre_transpose_df is not None
+        else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+    )
     n_residue = len(raw) - len(fmt)
 
     before_cols = list(raw.columns)
@@ -390,6 +401,83 @@ def _render_header_merge_detail(
                 level=2,
             )
             st.markdown(outer_html, unsafe_allow_html=True)
+
+
+def _render_transpose_body(t: "DetectedTable") -> None:
+    """Transpose（行列逆転）変換の詳細（Streamlit ウィジェット版）。"""
+    before = t.pre_transpose_df
+    after = t.df
+    info = t.transpose_info
+    if not info or before is None or after is None:
+        return
+
+    entity_axis_name = str(info.get("entity_axis_name", ""))
+    reasoning = str(info.get("reasoning", ""))
+
+    st.markdown(
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"検出されたエンティティ軸: "
+        f"<span style='background:rgba(167,139,250,0.15);color:rgba(167,139,250,1);"
+        f"border:1px solid rgba(167,139,250,0.4);border-radius:4px;"
+        f"padding:2px 8px;font-size:12px;font-weight:600'>{_html.escape(entity_axis_name)}</span><br>"
+        f"理由: {_html.escape(reasoning)}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    entity_cols = {str(c) for c in before.columns[1:]}
+    col_b, col_a = st.columns(2)
+    with col_b:
+        st.markdown(
+            f"**変換前**（{len(before.columns)} 列 × {len(before)} 行 / "
+            f"オレンジ列 = 本来エンティティであるべき列群）"
+        )
+        st.markdown(
+            _df_to_html(before, max_height=340, highlight_col_names=entity_cols),
+            unsafe_allow_html=True,
+        )
+    with col_a:
+        st.markdown(
+            f"**変換後**（{len(after.columns)} 列 × {len(after)} 行 / "
+            f"緑列 = 変換で生まれたエンティティ軸列）"
+        )
+        st.markdown(
+            _df_to_html(after, max_height=340, green_col_names={entity_axis_name}),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_transpose_body_html(t: "DetectedTable") -> str:
+    """Transpose（行列逆転）変換の詳細（HTML文字列版）。"""
+    before = t.pre_transpose_df
+    after = t.df
+    info = t.transpose_info
+    if not info or before is None or after is None:
+        return ""
+
+    entity_axis_name = str(info.get("entity_axis_name", ""))
+    reasoning = str(info.get("reasoning", ""))
+
+    meta_html = (
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"検出されたエンティティ軸: "
+        f"<span style='background:rgba(167,139,250,0.15);color:rgba(167,139,250,1);"
+        f"border:1px solid rgba(167,139,250,0.4);border-radius:4px;"
+        f"padding:2px 8px;font-size:12px;font-weight:600'>{_html.escape(entity_axis_name)}</span><br>"
+        f"理由: {_html.escape(reasoning)}"
+        "</div>"
+    )
+
+    entity_cols = {str(c) for c in before.columns[1:]}
+    pre_html = _df_to_html(before, max_height=340, highlight_col_names=entity_cols)
+    post_html = _df_to_html(after, max_height=340, green_col_names={entity_axis_name})
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before.columns)} 列 × {len(before)} 行 / オレンジ列 = 本来エンティティであるべき列群）</p>{pre_html}</div>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 変換で生まれたエンティティ軸列）</p>{post_html}</div>"
+        "</div>"
+    )
+    return meta_html + grid_html
 
 
 def _render_fill_cols_body(t: "DetectedTable") -> None:
@@ -972,12 +1060,14 @@ def step_format():
 
     stacked_all = [t for t in tables if getattr(t, "stacked_df", None) is not None]
     unit_split_applied = [t for t in tables if getattr(t, "unit_split_info", None)]
+    transpose_applied = [t for t in tables if getattr(t, "transpose_info", None)]
     nothing_done = (
         not formatted
         and not agg_removed
         and not fill_applied
         and not stacked_all
         and not unit_split_applied
+        and not transpose_applied
     )
     if nothing_done:
         st.info("全テーブルに対して整形処理はありませんでした。")
@@ -998,6 +1088,46 @@ def step_format():
             )
             rest = formatted[1:] if len(formatted) > 1 else None
             _render_header_merge_detail(formatted[0], rest=rest)
+
+        # ── ①.5 Transpose検出と変換機能 ─────────────────
+        if transpose_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            st.subheader(
+                f"🔄 Transpose検出と変換機能（対象：{len(transpose_applied)}テーブル）"
+            )
+            st.success(
+                f"**{len(transpose_applied)}** テーブルで行列が意味的に逆転した表を検出し、"
+                f"正しい向き（エンティティ＝行、属性＝列）に変換しました"
+            )
+            rep_t = transpose_applied[0]
+            rep_t_title = f"  🏷️ `{rep_t.title}`" if rep_t.title else ""
+            with st.expander(
+                f"**`{rep_t.table_id}`**{rep_t_title}  —  シート: {rep_t.sheet_name}",
+                expanded=True,
+            ):
+                _render_transpose_body(rep_t)
+
+                rest_transpose = transpose_applied[1:]
+                if rest_transpose:
+                    inner_html = ""
+                    for r in rest_transpose:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_transpose_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_transpose)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
 
         # ── ② グルーピング列の前方補完機能 ─────────────────
         if fill_applied:
