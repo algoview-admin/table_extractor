@@ -809,7 +809,7 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
         f"ラベル列: {label_html}",
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）",
         f"時系列トークン: {time_html}（計 {len(time_tokens)} 件）",
-        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(time_var_name)}</b> → 指標列（{len(indicators)} 列を維持）",
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(time_var_name)}</b> → 指標列（{len(indicators)} 列に分離）",
     ]
 
     st.markdown(
@@ -820,7 +820,7 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
     )
 
     compound_col_set = set(parsed_cols.keys())
-    new_col_set = {time_var_name}
+    new_col_set = {time_var_name} | set(indicators)
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -878,12 +878,12 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
         f"ラベル列: {label_html}<br>"
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）<br>"
         f"時系列トークン: {time_html}（計 {len(time_tokens)} 件）<br>"
-        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(time_var_name)}</b> → 指標列（{len(indicators)} 列を維持）"
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(time_var_name)}</b> → 指標列（{len(indicators)} 列に分離）"
         f"</div>"
     )
 
     compound_col_set = set(parsed_cols.keys())
-    new_col_set = {time_var_name}
+    new_col_set = {time_var_name} | set(indicators)
 
     pre_html = _df_to_html(wide, max_height=340, highlight_col_names=compound_col_set)
     post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
