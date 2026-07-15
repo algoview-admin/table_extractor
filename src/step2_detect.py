@@ -134,13 +134,17 @@ def _classify_row(p: Dict[str, Any]) -> str:
     if p["numeric"] == 0 and p["text"] >= 2:
         unique = set(p["texts"])
         if len(unique) == 1:
+            """
+            全セルが同一テキスト＝結合セルの複製（openpyxl の結合範囲展開で
+            同じ値が全列に複製される）である可能性が高い。この場合は列数に
+            関わらず文字列長のみで判定する（列数で col_hdr 側に倒すと、
+            4列以上に結合されたタイトル行が列ヘッダーと誤認識されてしまう）。
+            """
             txt = next(iter(unique))
             if txt.startswith(_NOTE_PREFIXES) or len(txt) > 60:
                 return _RT_NOTE
             if _AGG_ENUM_RE.search(txt):
                 return _RT_NOTE
-            if p["text"] >= 4:
-                return _RT_COL_HDR
             return _RT_TITLE if len(txt) <= 40 else _RT_COL_HDR
 
     if p["texts"] and max(len(t) for t in p["texts"]) > 80 and n_ratio <= 0.30:
@@ -270,7 +274,10 @@ def _detect_table_regions(
                 _flush(cur, r - 1, regions)
                 cur = _mk()
                 pending_titles = []
-            text = " ".join(p["texts"])
+            # 結合セルの複製で同一テキストが複数列に並ぶ場合があるため、
+            # _RT_NOTE と同様に重複排除してから結合する。
+            unique_title_texts = list(dict.fromkeys(p["texts"]))
+            text = " ".join(unique_title_texts)
             pending_titles.append((r, text))
             continue
 
