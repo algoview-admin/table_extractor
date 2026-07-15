@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Step3 各種機能フローチャート</title>
+<style>
+:root {
+  --bg:#F6F7FB; --surface:#FFFFFF; --sur2:#F1F3F9;
+  --tx1:#101828; --tx2:#475467; --tx3:#98A2B3;
+  --bd:#E4E7EC; --bd2:#D0D5DD;
+  --terminal-fill:#D1E9FF; --terminal-line:#2E90FA;
+  --decision-fill:#D3F8DF; --decision-line:#12B76A;
+  --process-fill:#FFFFFF; --process-line:#2E90FA;
+  --arrow:#667085;
+  --sh: 0 1px 3px rgba(16,24,40,.08), 0 6px 16px rgba(16,24,40,.06);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--tx1);
+  font-family:'Yu Gothic','Hiragino Sans',system-ui,sans-serif;
+  font-size:14px; line-height:1.6;
+}
+.page { max-width:1440px; margin:0 auto; padding:1.5rem 1.25rem 2.5rem; }
+.hero { margin-bottom:.9rem; display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }
+.hero h1 { font-size:26px; margin:0 0 .25rem; color:var(--tx1); }
+.hero p { margin:0; color:var(--tx2); font-size:14px; }
+.other-btn {
+  flex-shrink:0; display:inline-flex; align-items:center; gap:.4rem;
+  font-size:14px; font-weight:700; color:#fff; text-decoration:none;
+  background:var(--decision-line); padding:.6rem 1.1rem; border-radius:8px;
+  box-shadow:var(--sh); white-space:nowrap; margin-top:.1rem;
+  transition:filter .13s;
+}
+.other-btn:hover { filter:brightness(0.93); }
+.nav {
+  display:flex; flex-wrap:wrap; gap:.5rem; margin:0 0 1.1rem;
+  padding:.65rem .9rem; background:var(--surface); border:1.5px solid var(--bd);
+  border-radius:10px; box-shadow:var(--sh);
+}
+.nav-lnk {
+  font-size:13.5px; color:var(--tx2); text-decoration:none;
+  padding:.3rem .65rem; border-radius:6px; border:1px solid var(--bd);
+  background:var(--sur2); white-space:nowrap;
+}
+.nav-lnk:hover { border-color:var(--decision-line); color:var(--tx1); }
+
+.feature {
+  background:var(--surface); border:1.5px solid var(--bd); border-radius:14px;
+  box-shadow:var(--sh); margin-bottom:1.1rem; overflow:hidden; scroll-margin-top:1rem;
+}
+.feature-hd {
+  display:flex; align-items:center; gap:.9rem;
+  padding:.85rem 1.2rem; border-bottom:1.5px solid var(--bd); background:var(--sur2);
+}
+.feature-num {
+  flex-shrink:0; width:36px; height:36px; border-radius:50%;
+  background:var(--decision-line); color:#fff; font-weight:800; font-size:16px;
+  display:flex; align-items:center; justify-content:center;
+}
+.feature-hd h2 { margin:0 0 .15rem; font-size:18px; color:var(--tx1); }
+.feature-desc { margin:0; font-size:13.5px; color:var(--tx2); }
+
+.feature-body {
+  display:flex; gap:1rem; padding:.9rem 1rem 1rem; align-items:flex-start;
+  flex-wrap:nowrap; overflow-x:auto;
+}
+.flow-pane { flex:1 0 560px; min-width:560px; }
+.flow-svg { width:100%; height:auto; display:block; }
+
+.sh-terminal { fill:var(--terminal-fill); stroke:var(--terminal-line); stroke-width:2; }
+.sh-decision { fill:var(--decision-fill); stroke:var(--decision-line); stroke-width:2; }
+.sh-process  { fill:var(--process-fill);  stroke:var(--process-line);  stroke-width:2; }
+.fc-arrow { stroke:var(--arrow); stroke-width:1.6; }
+.fc-arrow-head { fill:var(--arrow); }
+.flow-svg text { fill:var(--tx1); }
+
+.sample-pane {
+  flex:0 0 460px; max-width:460px;
+  background:#EAF1FE; border:1.5px solid var(--bd2); border-radius:12px;
+  padding:.9rem 1rem; box-shadow:inset 0 1px 3px rgba(16,24,40,.05);
+}
+.sample-pane-title {
+  font-size:11.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--tx2); margin-bottom:.65rem;
+}
+.sample-block { margin-bottom:.4rem; }
+.sample-label { font-size:13px; font-weight:700; color:var(--tx1); margin-bottom:.3rem; }
+.sample-note { font-size:12px; color:var(--tx3); margin-top:.2rem; }
+.sample-tbl-wrap {
+  max-width:100%; overflow-x:auto; border-radius:4px;
+}
+.sample-tbl {
+  border-collapse:collapse; width:100%; font-size:12.5px;
+  background:var(--surface); border:1px solid var(--bd2); border-radius:6px; overflow:hidden;
+  box-shadow:0 1px 6px rgba(16,24,40,.12);
+}
+.sample-tbl th, .sample-tbl td {
+  border:1px solid var(--bd); padding:5px 8px; text-align:center; white-space:nowrap;
+}
+.sample-tbl th { background:#F0F4FA; color:var(--tx1); font-weight:700; }
+.sample-tbl th.hl { background:color-mix(in srgb, var(--decision-line) 26%, #F0F4FA); color:var(--tx1); }
+.down-arrow {
+  text-align:center; font-size:14px; font-weight:700; color:var(--decision-line); margin:.35rem 0;
+  display:flex; align-items:center; justify-content:center; gap:.35rem;
+}
+.down-arrow.plus { color:var(--terminal-line); }
+.da-txt { font-size:13px; font-weight:700; color:var(--tx1); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero">
+    <div>
+      <h1>Step3 各種機能フローチャート</h1>
+      <p>Transpose検出・「うち」書き分離・単位混在の分離・Wide_to_long変換 の大まかな処理フローと、変換前後のテーブルサンプル</p>
+    </div>
+    <a href="step3_other_features_flowchart.html" class="other-btn">その他の処理 →</a>
+  </div>
+  <nav class="nav"><a href="#transpose" class="nav-lnk">1. Transpose検出と変換機能</a><a href="#uchi" class="nav-lnk">2. 「うち」書き識別と別テーブル分離機能</a><a href="#unit" class="nav-lnk">3. 単位混在の分離機能</a><a href="#wtl" class="nav-lnk">4. Wide_to_long検出と変換機能</a></nav>
+  
+<section class="feature" id="transpose">
+  <div class="feature-hd">
+    <span class="feature-num">1</span>
+    <div>
+      <h2>Transpose検出と変換機能</h2>
+      <p class="feature-desc">表の行と列が意味的に入れ替わっていないかを判定し、正しい向きに変換する</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">変換前（列＝支店）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">指標</th><th class="hl">東京</th><th class="hl">大阪</th></tr></thead><tbody><tr><td>売上</td><td>100</td><td>80</td></tr><tr><td>利益</td><td>20</td><td>15</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">転置</span></div><div class="sample-block"><div class="sample-label">変換後（行＝支店）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="hl">支店</th><th class="">売上</th><th class="">利益</th></tr></thead><tbody><tr><td>東京</td><td>100</td><td>20</td></tr><tr><td>大阪</td><td>80</td><td>15</td></tr></tbody></table></div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="0 0 850 796" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="19" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">検出した表を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">列数は2列以上か？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま</tspan><tspan x="660" dy="22">次の処理へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<polygon class="sh-decision" points="280,354.0 450.0,432.0 280,510.0 110.0,432.0"/><text x="280" y="438.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-23.0">1列目が指標名、2列目以降が</tspan><tspan x="280" dy="23">エンティティに見えるか？</tspan><tspan x="280" dy="23">（LLM判定）</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="432.0" x2="500.0" y2="432.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="416.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="394.0" width="320" height="76"/><text x="660" y="438.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">元の向きのまま</tspan><tspan x="660" dy="22">次の処理へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="510" x2="280" y2="568" marker-end="url(#arrowhead)"/>
+<text x="312" y="539.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="568.0" width="320" height="76"/><text x="280" y="612.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">表を転置する</tspan><tspan x="280" dy="22">（行と列を入れ替える）</tspan></text>
+<line class="fc-arrow" x1="280" y1="644" x2="280" y2="702" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="702.0" width="340" height="64" rx="32.0"/><text x="280" y="740.0" text-anchor="middle" font-size="19" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">変換後の表を次の処理へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="599" width="48" height="22" rx="11"/>
+<text x="692" y="616" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,641 678,652 654,663 630,652"/>
+<text x="692" y="658" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="683" width="48" height="22"/>
+<text x="692" y="700" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="uchi">
+  <div class="feature-hd">
+    <span class="feature-num">2</span>
+    <div>
+      <h2>「うち」書き識別と別テーブル分離機能</h2>
+      <p class="feature-desc">「うち男性」等の内訳行を検出し、親子関係を保ったまま別テーブルへ分離する</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">変換前</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="">区分</th><th class="">人数</th></tr></thead><tbody><tr><td>東京</td><td>社員</td><td>100</td></tr><tr><td>東京</td><td>うち男性</td><td>60</td></tr><tr><td>東京</td><td>うち女性</td><td>40</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">分離</span></div><div class="sample-block"><div class="sample-label">変換後（メイン）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="">区分</th><th class="">人数</th></tr></thead><tbody><tr><td>東京</td><td>社員</td><td>100</td></tr></tbody></table></div></div><div class="down-arrow plus">＋<span class="da-txt">新規</span></div><div class="sample-block"><div class="sample-label">内訳テーブル（新規）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="hl">親区分</th><th class="hl">子区分</th><th class="">人数</th></tr></thead><tbody><tr><td>東京</td><td>社員</td><td>男性</td><td>60</td></tr><tr><td>東京</td><td>社員</td><td>女性</td><td>40</td></tr></tbody></table></div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="0 0 850 796" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="19" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">検出した表を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">「うち」「内数」「再掲」等の</tspan><tspan x="280" dy="23">接頭辞を持つ行があるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま</tspan><tspan x="660" dy="22">次の処理へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<polygon class="sh-decision" points="280,354.0 450.0,432.0 280,510.0 110.0,432.0"/><text x="280" y="438.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-23.0">親行（直近の合計行、</tspan><tspan x="280" dy="23">なければ非内訳行）は</tspan><tspan x="280" dy="23">見つかるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="432.0" x2="500.0" y2="432.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="416.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="394.0" width="320" height="76"/><text x="660" y="438.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">分離せず</tspan><tspan x="660" dy="22">そのまま残す</tspan></text>
+<line class="fc-arrow" x1="280" y1="510" x2="280" y2="568" marker-end="url(#arrowhead)"/>
+<text x="312" y="539.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="568.0" width="320" height="76"/><text x="280" y="612.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">メインテーブルから分離し、</tspan><tspan x="280" dy="22">内訳テーブルを新規作成</tspan></text>
+<line class="fc-arrow" x1="280" y1="644" x2="280" y2="702" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="702.0" width="340" height="64" rx="32.0"/><text x="280" y="740.0" text-anchor="middle" font-size="19" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">変換後の表を次の処理へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="599" width="48" height="22" rx="11"/>
+<text x="692" y="616" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,641 678,652 654,663 630,652"/>
+<text x="692" y="658" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="683" width="48" height="22"/>
+<text x="692" y="700" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="unit">
+  <div class="feature-hd">
+    <span class="feature-num">3</span>
+    <div>
+      <h2>単位混在の分離機能</h2>
+      <p class="feature-desc">指標名へ単位が埋め込まれた列を検出し、指標マスタへ分離する</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">変換前</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">年</th><th class="">指標</th><th class="">値</th></tr></thead><tbody><tr><td>2024</td><td>人口(人)</td><td>1200</td></tr><tr><td>2024</td><td>労働力率(％)</td><td>62.5</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">分離</span></div><div class="sample-block"><div class="sample-label">変換後（メイン）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">年</th><th class="">指標</th><th class="">値</th></tr></thead><tbody><tr><td>2024</td><td>人口</td><td>1200</td></tr><tr><td>2024</td><td>労働力率</td><td>62.5</td></tr></tbody></table></div></div><div class="down-arrow plus">＋<span class="da-txt">新規</span></div><div class="sample-block"><div class="sample-label">指標マスタ（新規）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">指標</th><th class="hl">単位</th></tr></thead><tbody><tr><td>人口</td><td>人</td></tr><tr><td>労働力率</td><td>％</td></tr></tbody></table></div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="0 0 850 796" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="19" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">検出した表を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-23.0">列名やセルに単位</tspan><tspan x="280" dy="23">（人・円・％等）が</tspan><tspan x="280" dy="23">埋め込まれているか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま</tspan><tspan x="660" dy="22">次の処理へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<polygon class="sh-decision" points="280,354.0 450.0,432.0 280,510.0 110.0,432.0"/><text x="280" y="438.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">単位が2種類以上</tspan><tspan x="280" dy="23">混在しているか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="432.0" x2="500.0" y2="432.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="416.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="394.0" width="320" height="76"/><text x="660" y="438.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">単位は統一済み</tspan><tspan x="660" dy="22">のため分離不要</tspan></text>
+<line class="fc-arrow" x1="280" y1="510" x2="280" y2="568" marker-end="url(#arrowhead)"/>
+<text x="312" y="539.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="568.0" width="320" height="76"/><text x="280" y="612.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">指標名と単位を分離し、</tspan><tspan x="280" dy="22">指標マスタを作成</tspan></text>
+<line class="fc-arrow" x1="280" y1="644" x2="280" y2="702" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="702.0" width="340" height="64" rx="32.0"/><text x="280" y="740.0" text-anchor="middle" font-size="19" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">変換後の表を次の処理へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="599" width="48" height="22" rx="11"/>
+<text x="692" y="616" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,641 678,652 654,663 630,652"/>
+<text x="692" y="658" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="683" width="48" height="22"/>
+<text x="692" y="700" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="wtl">
+  <div class="feature-hd">
+    <span class="feature-num">4</span>
+    <div>
+      <h2>Wide_to_long検出と変換機能</h2>
+      <p class="feature-desc">時系列と指標名が1つの列名に合成された表を検出し、時系列軸のみ縦持ちに変換する</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">変換前（横持ち）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="hl">2023_売上</th><th class="hl">2023_原価</th><th class="hl">2024_売上</th><th class="hl">2024_原価</th></tr></thead><tbody><tr><td>東京</td><td>100</td><td>60</td><td>120</td><td>65</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">縦持ち化</span></div><div class="sample-block"><div class="sample-label">変換後（縦持ち）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="hl">年</th><th class="hl">売上</th><th class="hl">原価</th></tr></thead><tbody><tr><td>東京</td><td>2023</td><td>100</td><td>60</td></tr><tr><td>東京</td><td>2024</td><td>120</td><td>65</td></tr></tbody></table></div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="0 0 850 796" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="19" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">検出した表を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">列名が「時系列＋指標」の複合</tspan><tspan x="280" dy="23">表記か？（例: 2023_売上 等）</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま</tspan><tspan x="660" dy="22">次の処理へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<polygon class="sh-decision" points="280,354.0 450.0,432.0 280,510.0 110.0,432.0"/><text x="280" y="438.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">指標の種類は</tspan><tspan x="280" dy="23">2種類以上あるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="432.0" x2="500.0" y2="432.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="416.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="394.0" width="320" height="76"/><text x="660" y="438.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">指標1種類のみ→</tspan><tspan x="660" dy="22">クロス集計検出が担当</tspan></text>
+<line class="fc-arrow" x1="280" y1="510" x2="280" y2="568" marker-end="url(#arrowhead)"/>
+<text x="312" y="539.0" text-anchor="middle" font-size="17" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="568.0" width="320" height="76"/><text x="280" y="612.0" text-anchor="middle" font-size="16.5" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">時系列軸のみを縦持ちに変換</tspan><tspan x="280" dy="22">（指標は列として維持）</tspan></text>
+<line class="fc-arrow" x1="280" y1="644" x2="280" y2="702" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="702.0" width="340" height="64" rx="32.0"/><text x="280" y="740.0" text-anchor="middle" font-size="19" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">変換後の表を次の処理へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="599" width="48" height="22" rx="11"/>
+<text x="692" y="616" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,641 678,652 654,663 630,652"/>
+<text x="692" y="658" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="683" width="48" height="22"/>
+<text x="692" y="700" font-size="16" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+</div>
+</body>
+</html>
