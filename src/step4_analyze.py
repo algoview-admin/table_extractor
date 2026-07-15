@@ -5,7 +5,7 @@
           API 呼び出し前にルールベースで合計関係・シート階層を事前計算してプロンプトに付加する。
           統合推奨（integration_recommendations）も同一 API 呼び出しで生成し結果に含める。
           統合推奨の提示は step5_suggest が担う（分析と提案を1回の API 呼び出しで効率化するための集約）。
-入力    : List[DetectedTable]（step3_normalize 適用済み）、ファイル名
+入力    : List[DetectedTable]（Step3整形適用済み）、ファイル名
 出力    : AIAnalysisResult
           （シート分類・テーブル分析・統合推奨・マスタテーブル情報・要約を含む）
           ※ integration_recommendations は step5_suggest に渡して提示する

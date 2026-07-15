@@ -7,7 +7,7 @@
             2. 潜在テーブル提案  : 注記・注釈からルールベースで未取得テーブルを示唆する
             3. 導出テーブル提案  : 親テーブル − 子テーブルの数値差分で算出可能なテーブルを導出する
           2・3 は API 呼び出しなし。
-入力    : AIAnalysisResult（step4_analyze の出力）、List[DetectedTable]（step3_normalize 適用済み）
+入力    : AIAnalysisResult（step4_analyze の出力）、List[DetectedTable]（Step3整形適用済み）
 出力    : List[LatentTableProposal]（注記から示唆される潜在テーブル候補）
           List[DerivedLatentTable]（数値差分で導出した潜在テーブル）
           ※ integration_recommendations は AIAnalysisResult から読み取って UI に提示する

@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 
 from src.step4_analyze import analyze_tables
 from src.models import AIAnalysisResult, DetectedTable
-from src.step3_normalize import UNIT_VOCAB, _is_agg_label
 from src.step5_suggest import (
     find_latent_tables,
     derive_latent_tables,

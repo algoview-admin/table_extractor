@@ -39,6 +39,8 @@ class DetectedTable:
     unit_master_df: Optional[pd.DataFrame] = field(default=None, repr=False)     # 生成された指標マスタ DataFrame（指標列, 単位）
     pre_transpose_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Transpose前 DataFrame（行列逆転検出時のみ）
     transpose_info: Optional[Dict[str, Any]] = field(default=None)  # Transpose検出情報 {entity_axis_name, reasoning}
+    pre_wide_to_long_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Wide_to_long前 DataFrame（複合列名検出時のみ）
+    wide_to_long_info: Optional[Dict[str, Any]] = field(default=None)  # Wide_to_long検出情報 {label_cols, time_var_name, time_kind, time_tokens, indicators, parsed_cols}
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

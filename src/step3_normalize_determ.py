@@ -1,10 +1,13 @@
 """
-ステップ3 テーブル構造正規化モジュール。
+ステップ3 テーブル正規化モジュール（決定論的処理）。
 
 処理概要: 検出された生 DataFrame を分析に適した形式に正規化する。
-          Transpose（行列逆転）の検出と変換・多段ヘッダーの統合・
-          集計行列の除去・グルーピング列の補完・単位混在の分離
-          （指標マスタ生成）・クロス集計の縦持ち変換を行う。
+          多段ヘッダーの統合・集計行列の除去・グルーピング列の補完・
+          単位混在の分離（指標マスタ生成）・クロス集計の縦持ち変換など、
+          正規表現・語彙辞書のみで完結する（LLMを使わない）処理を扱う。
+          LLMを使用する処理（Transpose検出等）は
+          src/step3_normalize_llm.py を参照。
+          normalize_tables() が両者を正しい順序で呼び出す統括関数。
 入力    : DetectedTable.df（step2_detect が構築した生 DataFrame）
 出力    : 正規化済み DataFrame、整形メタ情報
           （transpose_info, filled_cols, stack_info, agg_rows_removed,
@@ -23,6 +26,7 @@ from .keywords import (
     VAR_NAME_MAP as _VAR_NAME_MAP,
     VAR_NAME_FALLBACK as _VAR_NAME_FALLBACK,
 )
+from .step3_normalize_llm import apply_transpose, detect_transpose, make_transpose_client
 
 
 def _is_unit_row(row: List[Any]) -> bool:
@@ -162,7 +166,7 @@ def _detect_row_language(row: List[Any], n_cols: int) -> str:
         return "other"
 
     def _has_cjk(s: str) -> bool:
-        return any("぀" <= c <= "鿿" or "豈" <= c <= "﫿" for c in s)
+        return any("぀" <= c <= "鿿" or "豈" <= c <= "﫿" for c in s)
 
     cjk_cells = sum(1 for t in texts if _has_cjk(t))
     ascii_cells = sum(
@@ -903,6 +907,152 @@ def stack_cross_table(df: Any, stack_info: Dict[str, Any]) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Wide_to_long（時系列×複数指標の複合列名）検出と変換
+# ---------------------------------------------------------------------------
+#
+# detect_cross_table は「列名が時系列トークンそのもの」（例: 2023年）である
+# 横持ち表しか検出できない。ここでは「支店,2023売上,2023原価」のように
+# 時系列と指標名が1つの列名に合成された複合表記の横持ち表を検出し、
+# 時系列軸のみを縦持ちに変換する（指標は列として維持する）。
+#
+# 列名の意味（指標名が何を表すか）を理解する必要はなく、既存の
+# _classify_col_time（完全一致の時系列パターン判定）をあらゆる分割点で
+# 適用するだけで判定できるため、LLM を使わず決定論的に実装する。
+
+_WIDE_TO_LONG_MATCH_RATIO = 0.8  # 時系列+指標に分解できる列が占めるべき最低割合
+_WIDE_TO_LONG_COMPLETENESS = 0.6  # 想定グリッド（時系列数×指標数）に対する実列数の最低割合
+
+
+def _split_time_indicator(col_name: str) -> Optional[Tuple[str, str, str]]:
+    """列名を (time_token, indicator_name, time_kind) に分解する。
+
+    列名のあらゆる分割点でプレフィックス／サフィックスが _classify_col_time
+    （完全一致の時系列パターン判定）にマッチするかを試す。複数の分割点が
+    マッチする場合は最も長く一致したトークンを採用する
+    （例: "2024Q1売上" で "2024"(year_num) ではなく "2024Q1"(fiscal_quarter) を優先）。
+
+    分解できない場合（時系列を含まない通常のラベル列名等）は None。
+    """
+    s = str(col_name).strip()
+    candidates: List[Tuple[str, str, str]] = []
+    for cut in range(1, len(s)):
+        prefix, suffix = s[:cut], s[cut:]
+        kind = _classify_col_time(prefix)
+        if kind is not None:
+            indicator = suffix.lstrip("_- 　")
+            if indicator:
+                candidates.append((prefix, indicator, kind))
+        kind = _classify_col_time(suffix)
+        if kind is not None:
+            indicator = prefix.rstrip("_- 　")
+            if indicator:
+                candidates.append((suffix, indicator, kind))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: len(c[0]))
+
+
+def detect_wide_to_long(
+    df: Any,
+    title: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    DataFrame が「時系列×複数指標」の複合列名を持つ横持ち表かを検出する。
+
+    判定条件（すべて必須）:
+      - 列名が時系列トークン単体（_classify_col_time が非Noneを返す）の列は
+        対象外とする（detect_cross_table の担当領域と重複させない）
+      - 残りの列のうち、時系列+指標に分解できる列が全体の
+        _WIDE_TO_LONG_MATCH_RATIO（既定0.8）以上
+      - 検出された時系列トークンが2種類以上、かつ指標名が2種類以上
+        （指標が1種類のみなら detect_cross_table の担当。この条件により
+        両検出は互いに排他になる）
+      - 想定グリッド（時系列数×指標数）に対する実列数の割合が
+        _WIDE_TO_LONG_COMPLETENESS（既定0.6）以上（歯抜けが多すぎる場合は
+        誤検出とみなす）
+
+    Returns:
+      検出された場合: {"label_cols", "time_var_name", "time_kind",
+                       "time_tokens", "indicators", "parsed_cols"}
+      検出されなかった場合: None
+    """
+    if df is None or df.empty or len(df.columns) < 4:
+        return None
+
+    col_names = [str(c) for c in df.columns]
+
+    parsed: Dict[str, Tuple[str, str, str]] = {}
+    candidate_cols = [c for c in col_names if _classify_col_time(c) is None]
+    if not candidate_cols:
+        return None
+    for c in candidate_cols:
+        result = _split_time_indicator(c)
+        if result:
+            parsed[c] = result
+
+    if len(parsed) / len(candidate_cols) < _WIDE_TO_LONG_MATCH_RATIO:
+        return None
+
+    time_tokens = sorted({t for t, _, _ in parsed.values()})
+    indicators: List[str] = []
+    for _, ind, _ in parsed.values():
+        if ind not in indicators:
+            indicators.append(ind)
+
+    if len(time_tokens) < 2 or len(indicators) < 2:
+        return None  # 指標が1種類のみなら detect_cross_table の担当
+
+    expected = len(time_tokens) * len(indicators)
+    if len(parsed) / expected < _WIDE_TO_LONG_COMPLETENESS:
+        return None
+
+    label_cols = [c for c in col_names if c not in parsed]
+    time_kind = next(iter(parsed.values()))[2]
+    time_var_name = _VAR_NAME_MAP.get(time_kind, _VAR_NAME_FALLBACK)
+
+    return {
+        "label_cols": label_cols,
+        "time_var_name": time_var_name,
+        "time_kind": time_kind,
+        "time_tokens": time_tokens,
+        "indicators": indicators,
+        "parsed_cols": parsed,
+    }
+
+
+def stack_wide_to_long(df: Any, info: Dict[str, Any]) -> Any:
+    """detect_wide_to_long の検出結果を使って横持ち→縦持ち変換する。
+
+    時系列トークンごとにサブフレームを作り（指標列は元の列出現順を維持し、
+    該当する元列が存在しない組み合わせは NaN で埋めてグリッドの歯抜けを
+    許容する）、縦に連結する。
+    """
+    import pandas as pd
+
+    label_cols = info["label_cols"]
+    time_var_name = info["time_var_name"]
+    time_tokens = info["time_tokens"]
+    indicators = info["indicators"]
+    parsed_cols = info["parsed_cols"]
+
+    frames = []
+    for token in time_tokens:
+        sub = df[label_cols].copy()
+        sub.insert(len(label_cols), time_var_name, token)
+        for ind in indicators:
+            src_col = next(
+                (c for c, (t, i, _k) in parsed_cols.items() if t == token and i == ind),
+                None,
+            )
+            sub[ind] = df[src_col] if src_col is not None else None
+        frames.append(sub)
+
+    result = pd.concat(frames, ignore_index=True)
+    return result.reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
 # 単位混在の分離（指標マスタの生成）
 # ---------------------------------------------------------------------------
 
@@ -1020,183 +1170,95 @@ def detect_and_split_units(df: Any) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Transpose（行列逆転）の検出と変換
+# 統括関数（LLM処理＋決定論的処理を正しい順序で適用）
 # ---------------------------------------------------------------------------
-#
-# 「エンティティが列、属性が行」のように意味的に行列が逆転した表を検出し、
-# 正しい向き（エンティティ＝行、属性＝列）に変換する。
-#
-# 列ヘッダーが固有名詞（地名・支店名等）かどうか、行ラベルが指標名かどうかは
-# 正規表現・語彙辞書では汎用的に判定できないため、この機能のみ LLM を用いる。
-#
-# Step3 と Step4（src/step4_analyze.py）は処理の性質が異なり（Step3 の出力が
-# Step4 の入力になる関係）依存を持たせたくないため、LLM クライアント生成・
-# API 呼び出しは step4_analyze.py のものを共有せず、ここに独立実装する。
-
-_TRANSPOSE_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
-与えられた表の行と列が意味的に入れ替わっている（Transpose）かどうかを判定し、
-指定された JSON 形式のみで回答してください（説明文は不要）。"""
-
-_TRANSPOSE_USER_PROMPT = """以下の表について、行と列が意味的に逆転していないか判定してください。
-
-{table_text}
-
-【判定基準】
-- 「行列が逆転している」とは、本来は個体・エンティティ（例: 支店名、都市名、商品名、日付など、
-  複数の観測対象を識別するもの）であるべき値が列ヘッダーに並び、本来は属性・指標名
-  （例: 売上、利益、在庫、価格など、観測対象が共通して持つ性質の名称）であるべき値が
-  1列目（ラベル列）に並んでいる状態を指す。
-- 1列目（ラベル列）の値が指標・属性名のリストに見え、かつ2列目以降の列名がエンティティ
-  （個体識別子）のリストに見える場合のみ is_transposed=true とする。
-- 通常の縦持ち/横持ち表（エンティティが行、属性や時系列が列に並ぶ一般的な表）は対象外。
-- 少しでも判断に迷う場合は is_transposed=false としてよい。
-
-JSON形式で回答してください:
-{{"is_transposed": true または false, "entity_axis_name": "エンティティ軸の新しい列名（例: 支店）。is_transposed=falseの場合はnull", "reasoning": "判断理由（日本語、1〜2文）"}}"""
 
 
-def make_transpose_client() -> Tuple[Any, str]:
-    """Transpose 検出用の LLM クライアントを生成する。
+def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
+    """検出済みテーブル（DetectedTable）に Step3 の整形処理一式を適用する。
 
-    step4_analyze.py の _make_client() と同等のロジックだが、Step3 は
-    Step4 のプライベート関数に依存させたくないため独立実装している。
+    各テーブルに対し、次の順序で処理する（各処理の出力が次の処理の入力になる）:
+      1. Transpose検出・変換（LLM、step3_normalize_llm）— 他の処理はこの表が
+         正しい向き（エンティティ＝行、属性＝列）であることを前提とするため最初に行う
+      2. グルーピング列の前方補完
+      3. 集計行・集計列の除去
+      4. 単位混在の分離（指標マスタ生成）
+    全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
+      5. クロス集計形式の検出と縦持ち変換
+
+    DetectedTable の各フィールドを in-place で書き換える（戻り値なし）。
+    LLM クライアントは一度だけ生成し、全テーブルで使い回す。
     """
-    import os
+    llm_client, llm_model = make_transpose_client()
 
-    api_type = os.getenv("OPENAI_API_TYPE", "openai").strip().lower()
+    for t in tables:
+        if t.df is None or t.df.empty:
+            continue
 
-    if api_type == "azure":
-        from openai import AzureOpenAI
+        df = t.df
 
-        client = AzureOpenAI(
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
-        )
-        model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4")
-    else:
-        from openai import OpenAI
+        transpose_result = detect_transpose(df, llm_client, llm_model)
+        if transpose_result:
+            t.pre_transpose_df = df
+            df = apply_transpose(df, transpose_result["entity_axis_name"])
+            t.transpose_info = transpose_result
 
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        model = os.getenv("OPENAI_MODEL", "gpt-5.4")
+        pre_fill_df_candidate = df
+        df, filled_cols = fill_grouping_cols(df)
+        t.filled_cols = filled_cols
+        t.pre_fill_df = pre_fill_df_candidate if filled_cols else None
 
-    return client, model
+        (
+            cleaned_df,
+            agg_rows,
+            agg_cols,
+            agg_row_positions,
+            agg_row_meta,
+            agg_col_meta,
+        ) = remove_aggregates(df)
+        t.pre_agg_df = df if (agg_rows or agg_cols) else None
+        t.agg_rows_removed = agg_rows
+        t.agg_cols_removed = agg_cols
+        t.agg_rows_removed_positions = agg_row_positions
+        t.agg_removed_row_metadata = agg_row_meta
+        t.agg_removed_col_metadata = agg_col_meta
 
+        unit_split = detect_and_split_units(cleaned_df)
+        if unit_split:
+            t.pre_unit_split_df = cleaned_df
+            cleaned_df = unit_split["cleaned_df"]
+            t.unit_master_df = unit_split["master_df"]
+            t.unit_split_info = {
+                "label_col": unit_split["label_col"],
+                "master_col": unit_split["master_col"],
+                "mapping": unit_split["mapping"],
+                "match_count": unit_split["match_count"],
+            }
 
-def _call_transpose_api(
-    client: Any,
-    model: str,
-    messages: List[Dict[str, str]],
-    max_completion_tokens: int = 500,
-    timeout: float = 60.0,
-) -> str:
-    """429 / レートリミットエラー時にリトライしながら Transpose 判定 API を呼び出す。"""
-    import time
+        t.df = cleaned_df
 
-    last_exc: Optional[Exception] = None
-    for attempt in range(4):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                response_format={"type": "json_object"},
-                temperature=0.1,
-                max_completion_tokens=max_completion_tokens,
-                timeout=timeout,
-            )
-            choice = response.choices[0]
-            if choice.finish_reason == "length":
-                raise ValueError(
-                    "Transpose 判定の GPT レスポンスがトークン上限に達して途中で切れました。"
-                )
-            return choice.message.content or ""
-        except Exception as exc:
-            err = str(exc)
-            if (
-                "429" in err
-                or "too_many_requests" in err.lower()
-                or "rate_limit" in err.lower()
-            ):
-                last_exc = exc
-                if attempt < 3:
-                    time.sleep(15 * (2**attempt))  # 15秒、30秒、60秒
-                    continue
-            raise
-    raise RuntimeError(f"Transpose 判定 API 呼び出しが最大リトライ回数を超えました: {last_exc}")
+    # ── クロス集計検出（テーブル間で独立、全テーブル走査後に一括適用）────
+    # Wide_to_long（時系列×複数指標の複合列名）を先に試す。指標が1種類のみの
+    # 場合は None を返す設計のため、detect_cross_table（単一指標）とは
+    # 互いに排他的に発火する。
+    for t in tables:
+        if t.df is None or t.df.empty:
+            continue
 
+        wtl_info = detect_wide_to_long(t.df, title=t.title, filename=filename)
+        if wtl_info:
+            t.pre_wide_to_long_df = t.df
+            t.wide_to_long_info = wtl_info
+            t.stacked_df = stack_wide_to_long(t.df, wtl_info)
+            continue
 
-_TRANSPOSE_MAX_SAMPLE_ROWS = 30  # プロンプトに載せる最大サンプル行数（トークンコスト抑制用）
-
-
-def _format_table_for_transpose_check(
-    df: Any, max_sample_rows: int = _TRANSPOSE_MAX_SAMPLE_ROWS
-) -> str:
-    """Transpose 判定プロンプト用に列名とサンプル行を軽量テキスト化する。
-
-    行数が多いテーブルでも max_sample_rows でトランケートしてトークンコストを
-    抑える（LLM 呼び出し自体はスキップしない）。
-    """
-    columns = [str(c) for c in df.columns]
-    sample = df.head(max_sample_rows)
-    total_rows = len(df)
-    lines = [", ".join(str(v) for v in row) for row in sample.itertuples(index=False)]
-    return (
-        f"列名: {columns}\n"
-        f"サンプル行（先頭{len(sample)}行 / 全{total_rows}行中）:\n" + "\n".join(lines)
-    )
-
-
-def detect_transpose(df: Any, client: Any, model: str) -> Optional[Dict[str, Any]]:
-    """表の行列が意味的に逆転しているかを LLM で判定する。
-
-    列数が1列以下の場合は転置が意味をなさないため LLM を呼ばず None を返す
-    （意味的なヒューリスティックではなく形状上自明な退化ケースの除外のみ）。
-    それ以外は行数に関わらず必ず LLM を呼ぶ（サンプル行数のみ上限でトランケートする）。
-
-    ネットワークエラー・JSON パース失敗等は握りつぶして None を返し、
-    1テーブルの失敗が検出処理全体を落とさないようにする。
-
-    Returns:
-      検出された場合: {"entity_axis_name": str, "reasoning": str}
-      検出されなかった場合 / 判定不能な場合: None
-    """
-    import json
-
-    if df is None or df.empty or len(df.columns) < 2:
-        return None
-
-    table_text = _format_table_for_transpose_check(df)
-    messages = [
-        {"role": "system", "content": _TRANSPOSE_SYSTEM_PROMPT},
-        {"role": "user", "content": _TRANSPOSE_USER_PROMPT.format(table_text=table_text)},
-    ]
-    try:
-        content = _call_transpose_api(client, model, messages)
-        raw = json.loads(content)
-    except Exception:
-        return None
-
-    if not isinstance(raw, dict) or not raw.get("is_transposed"):
-        return None
-
-    entity_axis_name = str(raw.get("entity_axis_name") or "").strip()
-    if not entity_axis_name:
-        entity_axis_name = "項目"
-
-    return {
-        "entity_axis_name": entity_axis_name,
-        "reasoning": str(raw.get("reasoning") or ""),
-    }
-
-
-def apply_transpose(df: Any, entity_axis_name: str) -> Any:
-    """先頭列をラベル列とみなして表を転置し、新しいラベル列名を entity_axis_name にする。
-
-    例: 列=[指標,東京,大阪,名古屋] 行=[売上,利益,在庫] の表を、
-        列=[支店,売上,利益,在庫] 行=[東京,大阪,名古屋] に変換する。
-    """
-    label_col = df.columns[0]
-    out = df.set_index(label_col).T.reset_index()
-    out = out.rename(columns={"index": entity_axis_name})
-    out.columns.name = None
-    return out
+        info = detect_cross_table(t.df, title=t.title, filename=filename)
+        if info:
+            t.stack_info = info
+            stacked = stack_cross_table(t.df, info)
+            var_name = info.get("var_name", "")
+            if var_name and var_name in stacked.columns:
+                agg_mask = stacked[var_name].astype(str).apply(_is_agg_label)
+                if agg_mask.any():
+                    stacked = stacked[~agg_mask].reset_index(drop=True)
+            t.stacked_df = stacked

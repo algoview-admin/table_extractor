@@ -32,6 +32,7 @@ def _init():
         "file_ext": None,
         "detected_tables": [],
         "sheet_names": [],
+        "tables_normalized": False,  # Step3のnormalize_tables()が実行済みか（冪等性フラグ）
         "ai_analysis": None,
         "integration_decisions": {},  # rec_id -> bool
         "master_decisions": {},  # dim_master_{rec_id} -> bool
@@ -82,6 +83,7 @@ _SAVE_KEYS = [
     "run_mode",
     "detected_tables",
     "sheet_names",
+    "tables_normalized",
     "ai_analysis",
     "integration_decisions",
     "master_decisions",

@@ -170,6 +170,7 @@ def step1():
                 st.session_state.filename = name
                 st.session_state.file_ext = e
                 st.session_state.detected_tables = []
+                st.session_state.tables_normalized = False
                 st.session_state.ai_analysis = None
                 st.session_state.final_tables = {}
                 st.session_state.selected_ids = set()

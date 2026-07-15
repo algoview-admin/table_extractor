@@ -2,9 +2,12 @@
 ステップ2 テーブル検出モジュール。
 
 処理概要: 生グリッドまたは DataFrame を受け取り、行分類ステートマシンでテーブル領域を特定する。
-          ファイル読み込み・整形・分析は行わない。
+          ファイル読み込み・整形・分析は行わない（テーブル整形処理は
+          src/step3_normalize_determ.py の normalize_tables() が
+          Step3 側で別途適用する）。
 入力    : List[SheetGrid]（step1_upload が構築した生グリッド）/ pd.DataFrame（CSV の場合）、ファイル名
-出力    : List[DetectedTable]（検出されたテーブルごとの位置・DataFrame・タイトル・注記を含む）
+出力    : List[DetectedTable]（検出されたテーブルごとの位置・DataFrame・タイトル・注記を含む。
+          整形前の生 DataFrame のみを保持する）
 """
 
 import re
@@ -16,18 +19,7 @@ import pandas as pd
 
 from .keywords import STAT_PLACEHOLDERS as _STAT_PLACEHOLDERS
 from .models import DetectedTable, SheetGrid
-from .step3_normalize import (
-    apply_transpose,
-    detect_and_split_units,
-    detect_cross_table,
-    detect_header_roles,
-    detect_transpose,
-    fill_grouping_cols,
-    make_transpose_client,
-    merge_header_rows,
-    remove_aggregates,
-    stack_cross_table,
-)
+from .step3_normalize_determ import detect_header_roles, merge_header_rows
 
 
 # ---------------------------------------------------------------------------
@@ -556,33 +548,12 @@ def _propagate_sheet_title(detected: List[DetectedTable]) -> None:
             tables[0].title = f"{sheet_title}_{section_parts[0]}"
 
 
-def _apply_cross_table_detection(tables: List[DetectedTable], filename: str) -> None:
-    """テーブルリスト全体にクロス集計検出と縦持ち変換を適用する。"""
-    from .step3_normalize import _is_agg_label
-
-    for t in tables:
-        if t.df is None or t.df.empty:
-            continue
-        info = detect_cross_table(t.df, title=t.title, filename=filename)
-        if info:
-            t.stack_info = info
-            stacked = stack_cross_table(t.df, info)
-            var_name = info.get("var_name", "")
-            if var_name and var_name in stacked.columns:
-                agg_mask = stacked[var_name].astype(str).apply(_is_agg_label)
-                if agg_mask.any():
-                    stacked = stacked[~agg_mask].reset_index(drop=True)
-            t.stacked_df = stacked
-
-
 def _detect_tables_in_grid(
     grid: List[List[Any]],
     max_row: int,
     max_col: int,
     sheet_name: str,
     table_counter: Dict[str, int],
-    llm_client: Any,
-    llm_model: str,
 ) -> List[DetectedTable]:
     """グリッドからテーブルを検出して DetectedTable のリストを返す。"""
     if max_row == 0 or max_col == 0:
@@ -625,45 +596,6 @@ def _detect_tables_in_grid(
             table_counter[safe] = table_counter.get(safe, 0) + 1
             table_id = f"{safe}_T{table_counter[safe]}"
 
-            transpose_result = detect_transpose(df, llm_client, llm_model)
-            if transpose_result:
-                pre_transpose_df = df
-                df = apply_transpose(df, transpose_result["entity_axis_name"])
-                transpose_info = transpose_result
-            else:
-                pre_transpose_df = None
-                transpose_info = None
-
-            pre_fill_df_candidate = df
-            df, filled_cols = fill_grouping_cols(df)
-            pre_fill_df = pre_fill_df_candidate if filled_cols else None
-
-            (
-                cleaned_df,
-                agg_rows,
-                agg_cols,
-                agg_row_positions,
-                agg_row_meta,
-                agg_col_meta,
-            ) = remove_aggregates(df)
-            pre_agg_df = df if (agg_rows or agg_cols) else None
-
-            unit_split = detect_and_split_units(cleaned_df)
-            if unit_split:
-                pre_unit_split_df = cleaned_df
-                cleaned_df = unit_split["cleaned_df"]
-                unit_master_df = unit_split["master_df"]
-                unit_split_info = {
-                    "label_col": unit_split["label_col"],
-                    "master_col": unit_split["master_col"],
-                    "mapping": unit_split["mapping"],
-                    "match_count": unit_split["match_count"],
-                }
-            else:
-                pre_unit_split_df = None
-                unit_master_df = None
-                unit_split_info = None
-
             detected.append(
                 DetectedTable(
                     table_id=table_id,
@@ -672,23 +604,10 @@ def _detect_tables_in_grid(
                     end_row=band_end,
                     start_col=col_start,
                     end_col=col_end,
-                    df=cleaned_df,
+                    df=df,
                     title=effective_title,
                     notes=reg.get("trailing_notes", []),
                     raw_df=raw_df,
-                    pre_agg_df=pre_agg_df,
-                    agg_rows_removed=agg_rows,
-                    agg_cols_removed=agg_cols,
-                    agg_rows_removed_positions=agg_row_positions,
-                    agg_removed_row_metadata=agg_row_meta,
-                    agg_removed_col_metadata=agg_col_meta,
-                    filled_cols=filled_cols,
-                    pre_fill_df=pre_fill_df,
-                    pre_unit_split_df=pre_unit_split_df,
-                    unit_split_info=unit_split_info,
-                    unit_master_df=unit_master_df,
-                    pre_transpose_df=pre_transpose_df,
-                    transpose_info=transpose_info,
                 )
             )
 
@@ -697,100 +616,40 @@ def _detect_tables_in_grid(
 
 
 # ---------------------------------------------------------------------------
-# 公開 API
+# ファイル単位のテーブル検出エントリポイント（Excel経路 / CSV経路）
 # ---------------------------------------------------------------------------
 
 def detect_tables(
-    sheets: List[SheetGrid], filename: str
+    sheets: List[SheetGrid],
 ) -> Tuple[List[DetectedTable], List[str]]:
-    """SheetGrid のリストからテーブルを検出する。"""
+    """SheetGrid のリストからテーブルを検出する（整形処理は行わない）。"""
     all_tables: List[DetectedTable] = []
     table_counter: Dict[str, int] = {}
-    llm_client, llm_model = make_transpose_client()
 
     for sheet in sheets:
         tables = _detect_tables_in_grid(
             sheet.grid, sheet.max_row, sheet.max_col,
-            sheet.sheet_name, table_counter, llm_client, llm_model,
+            sheet.sheet_name, table_counter,
         )
         all_tables.extend(tables)
 
-    _apply_cross_table_detection(all_tables, filename)
     sheet_names = [s.sheet_name for s in sheets]
     return all_tables, sheet_names
 
 
 def detect_from_csv(df: pd.DataFrame, filename: str) -> Tuple[List[DetectedTable], List[str]]:
-    """DataFrame（CSV 読み込み済み）を単一テーブルとして検出する。
-
-    Excel 経路（_detect_tables_in_grid）と同じく、Transpose検出・グルーピング列の
-    前方補完・集計行列の除去・単位混在の分離を適用してからクロス集計検出を行う。
-    """
+    """DataFrame（CSV 読み込み済み）を単一テーブルとして検出する（整形処理は行わない）。"""
     safe = Path(filename).stem.replace(" ", "_")
-
-    llm_client, llm_model = make_transpose_client()
-    transpose_result = detect_transpose(df, llm_client, llm_model)
-    if transpose_result:
-        pre_transpose_df = df
-        df = apply_transpose(df, transpose_result["entity_axis_name"])
-        transpose_info = transpose_result
-    else:
-        pre_transpose_df = None
-        transpose_info = None
-
-    pre_fill_df_candidate = df
-    df, filled_cols = fill_grouping_cols(df)
-    pre_fill_df = pre_fill_df_candidate if filled_cols else None
-
-    (
-        cleaned_df,
-        agg_rows,
-        agg_cols,
-        agg_row_positions,
-        agg_row_meta,
-        agg_col_meta,
-    ) = remove_aggregates(df)
-    pre_agg_df = df if (agg_rows or agg_cols) else None
-
-    unit_split = detect_and_split_units(cleaned_df)
-    if unit_split:
-        pre_unit_split_df = cleaned_df
-        cleaned_df = unit_split["cleaned_df"]
-        unit_master_df = unit_split["master_df"]
-        unit_split_info = {
-            "label_col": unit_split["label_col"],
-            "master_col": unit_split["master_col"],
-            "mapping": unit_split["mapping"],
-            "match_count": unit_split["match_count"],
-        }
-    else:
-        pre_unit_split_df = None
-        unit_master_df = None
-        unit_split_info = None
 
     table = DetectedTable(
         table_id=f"{safe}_T1",
         sheet_name="CSV",
         start_row=1,
-        end_row=len(cleaned_df) + 1,
+        end_row=len(df) + 1,
         start_col=1,
-        end_col=len(cleaned_df.columns),
-        df=cleaned_df,
-        agg_rows_removed=agg_rows,
-        agg_cols_removed=agg_cols,
-        agg_rows_removed_positions=agg_row_positions,
-        agg_removed_row_metadata=agg_row_meta,
-        agg_removed_col_metadata=agg_col_meta,
-        filled_cols=filled_cols,
-        pre_fill_df=pre_fill_df,
-        pre_agg_df=pre_agg_df,
-        pre_unit_split_df=pre_unit_split_df,
-        unit_split_info=unit_split_info,
-        unit_master_df=unit_master_df,
-        pre_transpose_df=pre_transpose_df,
-        transpose_info=transpose_info,
+        end_col=len(df.columns),
+        df=df,
     )
-    _apply_cross_table_detection([table], filename)
     return [table], ["CSV"]
 
 

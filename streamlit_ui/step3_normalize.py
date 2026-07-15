@@ -8,7 +8,7 @@ import streamlit.components.v1 as components
 
 from streamlit_ui.shared import _go_to, _inject_splitter_js, _splitter_marker
 from src.models import DetectedTable
-from src.step3_normalize import UNIT_VOCAB, _is_agg_label
+from src.step3_normalize_determ import _is_agg_label, normalize_tables
 
 _TH_STYLE = (
     "position:sticky;top:0;z-index:2;"
@@ -674,6 +674,129 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
+def _render_wide_to_long_body(t: "DetectedTable") -> None:
+    """Wide_to_long（時系列×複数指標の複合列名）変換の詳細（Streamlit ウィジェット版）。"""
+    info = t.wide_to_long_info
+    wide = t.pre_wide_to_long_df
+    long_df = t.stacked_df
+    if not info or wide is None or long_df is None:
+        return
+
+    label_cols = info.get("label_cols", [])
+    time_var_name = info.get("time_var_name", "期間")
+    indicators = info.get("indicators", [])
+    parsed_cols = info.get("parsed_cols", {})
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    label_html = " ".join(_badge(c, "156,163,175") for c in label_cols) or "（なし）"
+    indicator_html = " ".join(_badge(c, "251,191,36") for c in indicators) or "（なし）"
+    time_tokens = info.get("time_tokens", [])
+    shown_tokens = time_tokens[:6]
+    rest_count = len(time_tokens) - len(shown_tokens)
+    time_html = " ".join(_badge(c, "56,189,248") for c in shown_tokens)
+    if rest_count > 0:
+        time_html += (
+            f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 件</span>"
+        )
+
+    meta_lines = [
+        f"ラベル列: {label_html}",
+        f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）",
+        f"時系列トークン: {time_html}（計 {len(time_tokens)} 件）",
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(time_var_name)}</b> → 指標列（{len(indicators)} 列を維持）",
+    ]
+
+    st.markdown(
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        + "<br>".join(meta_lines)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    compound_col_set = set(parsed_cols.keys())
+    new_col_set = {time_var_name}
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(
+            f"**変換前**（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列+指標の複合列）"
+        )
+        st.markdown(
+            _df_to_html(wide, max_height=340, highlight_col_names=compound_col_set),
+            unsafe_allow_html=True,
+        )
+    with col_b:
+        st.markdown(
+            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）"
+        )
+        st.markdown(
+            _df_to_html(long_df, max_height=340, green_col_names=new_col_set),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
+    """Wide_to_long（時系列×複数指標の複合列名）変換の詳細（HTML 文字列版）。"""
+    info = t.wide_to_long_info
+    wide = t.pre_wide_to_long_df
+    long_df = t.stacked_df
+    if not info or wide is None or long_df is None:
+        return ""
+
+    label_cols = info.get("label_cols", [])
+    time_var_name = info.get("time_var_name", "期間")
+    indicators = info.get("indicators", [])
+    parsed_cols = info.get("parsed_cols", {})
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    label_html = " ".join(_badge(c, "156,163,175") for c in label_cols) or "（なし）"
+    indicator_html = " ".join(_badge(c, "251,191,36") for c in indicators) or "（なし）"
+    time_tokens = info.get("time_tokens", [])
+    shown_tokens = time_tokens[:6]
+    rest_count = len(time_tokens) - len(shown_tokens)
+    time_html = " ".join(_badge(c, "56,189,248") for c in shown_tokens)
+    if rest_count > 0:
+        time_html += (
+            f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 件</span>"
+        )
+
+    meta_html = (
+        f"<div style='margin:4px 0 12px;line-height:2'>"
+        f"ラベル列: {label_html}<br>"
+        f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）<br>"
+        f"時系列トークン: {time_html}（計 {len(time_tokens)} 件）<br>"
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(time_var_name)}</b> → 指標列（{len(indicators)} 列を維持）"
+        f"</div>"
+    )
+
+    compound_col_set = set(parsed_cols.keys())
+    new_col_set = {time_var_name}
+
+    pre_html = _df_to_html(wide, max_height=340, highlight_col_names=compound_col_set)
+    post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列+指標の複合列）</p>{pre_html}</div>"
+        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
+        "</div>"
+    )
+    return meta_html + grid_html
+
+
 def _render_unit_split_body(t: "DetectedTable") -> None:
     """単位混在の分離（指標マスタ生成）の詳細（Streamlit ウィジェット版）。"""
     info = t.unit_split_info
@@ -1049,6 +1172,15 @@ def step_format():
 
     tables: List[DetectedTable] = st.session_state.detected_tables
 
+    if not st.session_state.get("tables_normalized"):
+        with st.spinner("テーブルを整形中です..."):
+            try:
+                normalize_tables(tables, st.session_state.filename)
+                st.session_state.tables_normalized = True
+            except Exception as e:
+                st.error(f"❌ テーブル整形エラー: {e}")
+                return
+
     if st.session_state.auto_processing:
         st.session_state.step = 4
         st.rerun()
@@ -1061,6 +1193,7 @@ def step_format():
     stacked_all = [t for t in tables if getattr(t, "stacked_df", None) is not None]
     unit_split_applied = [t for t in tables if getattr(t, "unit_split_info", None)]
     transpose_applied = [t for t in tables if getattr(t, "transpose_info", None)]
+    wide_to_long_applied = [t for t in tables if getattr(t, "wide_to_long_info", None)]
     nothing_done = (
         not formatted
         and not agg_removed
@@ -1258,8 +1391,60 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
+        # ── ④.5 Wide_to_long検出と変換機能 ────────────────────
+        if wide_to_long_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            total_indicators = sum(
+                len((t.wide_to_long_info or {}).get("indicators", []))
+                for t in wide_to_long_applied
+            )
+            st.subheader(
+                f"🔀 Wide_to_long検出と変換機能（対象：{len(wide_to_long_applied)}テーブル）"
+            )
+            st.success(
+                f"**{len(wide_to_long_applied)}** テーブルで時系列×複数指標の複合列名を検出し、"
+                f"時系列軸を縦持ちに変換しました  "
+                f"（検出指標: 計 {total_indicators} 種類）"
+            )
+            rep_w = wide_to_long_applied[0]
+            rep_w_title = f"  🏷️ `{rep_w.title}`" if rep_w.title else ""
+            with st.expander(
+                f"**`{rep_w.table_id}`**{rep_w_title}  —  シート: {rep_w.sheet_name}",
+                expanded=True,
+            ):
+                _render_wide_to_long_body(rep_w)
+
+                rest_wtl = wide_to_long_applied[1:]
+                if rest_wtl:
+                    inner_html = ""
+                    for r in rest_wtl:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_wide_to_long_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_wtl)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
+
         # ── ⑤ クロス集計形式の検出と縦持ち変換機能 ──────────────────────────
-        stacked = [t for t in tables if getattr(t, "stacked_df", None) is not None]
+        # Wide_to_long で処理済みのテーブルは対象外にする（互いに排他だが、
+        # stacked_df は両方が書き込む共有フィールドのため二重計上を防ぐ）。
+        stacked = [
+            t
+            for t in tables
+            if getattr(t, "stacked_df", None) is not None
+            and not getattr(t, "wide_to_long_info", None)
+        ]
         if stacked:
             if not first_section:
                 st.divider()

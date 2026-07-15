@@ -29,7 +29,7 @@ def step2():
                     sheet_grids, sheets = load_excel(
                         st.session_state.file_content, st.session_state.filename
                     )
-                    tables, _ = detect_tables(sheet_grids, st.session_state.filename)
+                    tables, _ = detect_tables(sheet_grids)
                 st.session_state.detected_tables = tables
                 st.session_state.sheet_names = sheets
                 st.rerun()  # re-render header so Save button appears
