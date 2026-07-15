@@ -685,7 +685,7 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
 
 
 def _render_multi_axis_body(t: "DetectedTable") -> None:
-    """多軸ヘッダー展開（B-09。独立した複数カテゴリ軸の交差を縦持ちに展開）の
+    """多軸ヘッダー展開（独立した複数カテゴリ軸の交差を縦持ちに展開）の
     詳細（Streamlit ウィジェット版）。"""
     info = t.multi_axis_info
     wide = t.pre_multi_axis_df
@@ -733,7 +733,7 @@ def _render_multi_axis_body(t: "DetectedTable") -> None:
 
 
 def _render_multi_axis_body_html(t: "DetectedTable") -> str:
-    """多軸ヘッダー展開（B-09）の詳細（HTML 文字列版）。"""
+    """多軸ヘッダー展開の詳細（HTML 文字列版）。"""
     info = t.multi_axis_info
     wide = t.pre_multi_axis_df
     long_df = t.df
@@ -1416,7 +1416,7 @@ def step_format():
     else:
         first_section = True
 
-        # ── ① 多段ヘッダーの検出と解決機能 ──────────────────────────────
+        # ── 多段ヘッダーの検出と解決機能 ──────────────────────────────
         if formatted:
             if not first_section:
                 st.divider()
@@ -1431,7 +1431,7 @@ def step_format():
             rest = formatted[1:] if len(formatted) > 1 else None
             _render_header_merge_detail(formatted[0], rest=rest)
 
-        # ── ①.3 多軸ヘッダー展開機能（B-09） ─────────────────
+        # ── 多軸ヘッダー展開機能 ─────────────────────────────────
         if multi_axis_applied:
             if not first_section:
                 st.divider()
@@ -1471,7 +1471,7 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
-        # ── ①.5 Transpose検出と変換機能 ─────────────────
+        # ── Transpose検出と変換機能 ─────────────────────────────
         if transpose_applied:
             if not first_section:
                 st.divider()
@@ -1511,7 +1511,7 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
-        # ── ② グルーピング列の前方補完機能 ─────────────────
+        # ── グルーピング列の前方補完機能 ─────────────────────────
         if fill_applied:
             if not first_section:
                 st.divider()
@@ -1552,7 +1552,7 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
-        # ── ②.5 「うち」書き識別と別テーブル分離機能 ────────────────
+        # ── 「うち」書き識別と別テーブル分離機能 ────────────────
         if uchi_split_applied:
             if not first_section:
                 st.divider()
@@ -1596,7 +1596,7 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
-        # ── ③ 集計行の検出・削除・メタデータ保存機能 ──────────────────────
+        # ── 集計行の検出・削除・メタデータ保存機能 ──────────────────────
         if agg_removed:
             if not first_section:
                 st.divider()
@@ -1640,7 +1640,7 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
-        # ── ④ 単位混在の分離（指標マスタ生成）機能 ────────────────────────
+        # ── 単位混在の分離（指標マスタ生成）機能 ────────────────────────
         if unit_split_applied:
             if not first_section:
                 st.divider()
@@ -1684,7 +1684,7 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
-        # ── ④.5 Wide_to_long検出と変換機能 ────────────────────
+        # ── Wide_to_long検出と変換機能 ────────────────────────
         if wide_to_long_applied:
             if not first_section:
                 st.divider()
@@ -1729,7 +1729,7 @@ def step_format():
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
 
-        # ── ⑤ クロス集計形式の検出と縦持ち変換機能 ──────────────────────────
+        # ── クロス集計形式の検出と縦持ち変換機能 ──────────────────────
         # Wide_to_long で処理済みのテーブルは対象外にする（互いに排他だが、
         # stacked_df は両方が書き込む共有フィールドのため二重計上を防ぐ）。
         stacked = [

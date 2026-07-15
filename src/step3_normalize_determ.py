@@ -279,7 +279,7 @@ def merge_header_rows(
 
 
 # ---------------------------------------------------------------------------
-# 多軸ヘッダー展開（B-09: 多段ヘッダーの検出と解決機能）
+# 多軸ヘッダー展開（多段ヘッダーの検出と解決機能）
 # ---------------------------------------------------------------------------
 #
 # merge_header_rows は複数のヘッダー行を単純にアンダースコアで連結するだけ
@@ -670,6 +670,66 @@ def _to_jsonable(v: Any) -> Any:
     return v
 
 
+def _agg_column_group_key(col_name: str) -> str:
+    """列名から、集計列と内訳候補列を対応付けるためのグループキーを求める。
+
+    単位表記（末尾の "[百万円]" 等）を除去した上で、アンダースコア区切りの
+    最初のセグメント（多段ヘッダー統合時の上位グループ名）を返す。
+    アンダースコアが無い単独名の列は空文字列（"接頭辞なしグループ"）を返す。
+    例: "事業所数_合計" → "事業所数"、"現金給与総額 [百万円]" → ""
+    """
+    s = _re.sub(r"\s*\[[^\]]*\]\s*$", "", str(col_name)).strip()
+    return s.split("_")[0] if "_" in s else ""
+
+
+def _is_column_sum_verified(
+    df: Any,
+    agg_col: str,
+    sibling_cols: List[str],
+    match_ratio: float = 0.8,  # Wide_to_long検出等と揃えた一致率閾値
+) -> bool:
+    """agg_col の値が sibling_cols の行ごとの合計とみなせるかを検証する。
+
+    合計元となりうる列（同じグループの内訳列）が2列未満の場合は検証不能と
+    みなし False を返す（行の集計判定 _is_redundant_agg_row と同じ考え方で、
+    内訳データが存在しない場合は集計列と誤認しない）。
+    """
+    import numbers
+
+    import pandas as pd
+
+    if len(sibling_cols) < 2:
+        return False
+
+    def _num(v: Any) -> Optional[float]:
+        if isinstance(v, bool):
+            return None
+        # df.at[] は numpy.int64/float64 等をそのまま返し Python の int/float に
+        # 自動変換されないため（Series の for ループでは自動変換される点と異なる）、
+        # numbers.Number で判定する。
+        if isinstance(v, numbers.Number) and not (isinstance(v, float) and pd.isna(v)):
+            return float(v)
+        return None
+
+    checked = 0
+    matched = 0
+    for idx in df.index:
+        agg_val = _num(df.at[idx, agg_col])
+        if agg_val is None:
+            continue
+        sib_vals = [_num(df.at[idx, sc]) for sc in sibling_cols]
+        if any(v is None for v in sib_vals):
+            continue
+        checked += 1
+        tolerance = max(1e-6, abs(agg_val) * 0.01)
+        if abs(agg_val - sum(sib_vals)) <= tolerance:
+            matched += 1
+
+    if checked == 0:
+        return False
+    return matched / checked >= match_ratio
+
+
 def remove_aggregates(
     df: Any,  # pd.DataFrame
 ) -> Tuple[
@@ -683,7 +743,11 @@ def remove_aggregates(
     """
     集計行・集計列を除去した DataFrame と除去情報を返す。
 
-    集計列: 列名がキーワードに一致するもの。
+    集計列: 列名がキーワードに一致し、かつ他の列（同じ多段ヘッダー由来グループの
+            内訳列）の行ごとの合計と実際に一致することを検証できた場合のみ除去する
+            （行の集計判定と同じ「冗長性を検証できた場合のみ除去」という考え方）。
+            合計元となりうる内訳列が存在しない場合（例: 内訳の無い単独の指標）は、
+            列名がキーワードに一致していても除去しない。
     集計行: dtype==object の列（ラベル列）に集計ラベルを持ち、かつその集計が「冗長」
             （同じ文脈で個別データが存在する）場合のみ除去する。
             個別データが存在しない場合（例: 全行が同一の集計ラベルのみの区分）は除去しない。
@@ -711,9 +775,6 @@ def remove_aggregates(
                                     後から参照できるよう全行分を記録する。
     """
     import pandas as pd
-
-    # ── 集計列の検出 ──────────────────────────────────────────────
-    removed_cols: List[str] = [col for col in df.columns if _is_agg_label(str(col))]
 
     # ── ラベル列の特定（文字列型の列）────────────────────────────
     """
@@ -767,12 +828,10 @@ def remove_aggregates(
     label_cols: List[str] = [
         col
         for col in df.columns
-        if col not in removed_cols
-        and _is_text_dtype(df[col])
-        and not _is_numeric_values_col(df[col])
+        if _is_text_dtype(df[col]) and not _is_numeric_values_col(df[col])
     ]
 
-    # ── 数値（集計対象）列 — ラベル列でも除去済み集計列でもない列 ──
+    # ── 数値列 — ラベル列ではない列 ──────────────────────────────
     """
     メタデータの context には文字列型のラベル列を使う。
 
@@ -780,9 +839,31 @@ def remove_aggregates(
     正当な集計対象列まで誤って除外してしまうことを実データ検証で確認したため、
     数値列は絞り込まずすべて集計対象候補として扱う。
     """
-    value_cols: List[str] = [
-        col for col in df.columns if col not in removed_cols and col not in label_cols
-    ]
+    all_value_cols: List[str] = [col for col in df.columns if col not in label_cols]
+
+    # ── 集計列の検出（列名キーワード一致 ＋ 内訳列の合計として検証）──
+    """
+    列名がキーワードに一致するだけの候補（agg_col_candidates）のうち、
+    同じ多段ヘッダー由来グループ（_agg_column_group_key が一致）に属する
+    他の列が2列以上存在し、かつ行ごとの値がそれらの合計と一致する場合の
+    みを実際の集計列とみなす。これにより、「現金給与総額」のように内訳列
+    が存在しない単独指標が、列名だけを理由に誤って除去されることを防ぐ。
+    """
+    agg_col_candidates = [col for col in all_value_cols if _is_agg_label(str(col))]
+    removed_cols: List[str] = []
+    for cand in agg_col_candidates:
+        group_key = _agg_column_group_key(cand)
+        siblings = [
+            c
+            for c in all_value_cols
+            if c != cand
+            and c not in agg_col_candidates
+            and _agg_column_group_key(c) == group_key
+        ]
+        if _is_column_sum_verified(df, cand, siblings):
+            removed_cols.append(cand)
+
+    value_cols: List[str] = [col for col in all_value_cols if col not in removed_cols]
 
     n_rows = len(df)
 
@@ -1663,7 +1744,7 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
     各テーブルに対し、次の順序で処理する（各処理の出力が次の処理の入力になる）:
       1. Transpose検出・変換（LLM、step3_normalize_llm）— 他の処理はこの表が
          正しい向き（エンティティ＝行、属性＝列）であることを前提とするため最初に行う
-      2. 多軸ヘッダー展開（B-09。決定論的分類＋必要時のみLLM） — 多段ヘッダーの
+      2. 多軸ヘッダー展開（決定論的分類＋必要時のみLLM） — 多段ヘッダーの
          列構造を確定させる処理のため、他の整形より前に行う（Transpose適用時は
          raw_header_rows が転置前の構造を指すため対象外）
       3. グルーピング列の前方補完
