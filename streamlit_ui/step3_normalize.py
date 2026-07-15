@@ -483,8 +483,8 @@ def _render_transpose_body_html(t: "DetectedTable") -> str:
     post_html = _df_to_html(after, max_height=340, green_col_names={entity_axis_name})
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before.columns)} 列 × {len(before)} 行 / オレンジ列 = 本来エンティティであるべき列群）</p>{pre_html}</div>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 変換で生まれたエンティティ軸列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before.columns)} 列 × {len(before)} 行 / オレンジ列 = 本来エンティティであるべき列群）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 変換で生まれたエンティティ軸列）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -550,8 +550,8 @@ def _render_fill_cols_body_html(t: "DetectedTable") -> str:
     return (
         badge_html
         + "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        + f"<div><p style='margin:0 0 6px;font-weight:600'>補完前（オレンジ列 = 空白補完の対象）</p>{pre_html}</div>"
-        + f"<div><p style='margin:0 0 6px;font-weight:600'>補完後（緑列 = 補完済み）</p>{post_html}</div>"
+        + f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>補完前（オレンジ列 = 空白補完の対象）</p>{pre_html}</div>"
+        + f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>補完後（緑列 = 補完済み）</p>{post_html}</div>"
         + "</div>"
     )
 
@@ -677,8 +677,8 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列カラム）</p>{pre_html}</div>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列カラム）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -766,8 +766,8 @@ def _render_multi_axis_body_html(t: "DetectedTable") -> str:
     post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（多段ヘッダー / {len(wide.columns)} 列 × {len(wide)} 行）</p>{pre_html}</div>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 展開で生まれた列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（多段ヘッダー / {len(wide.columns)} 列 × {len(wide)} 行）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 展開で生まれた列）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -889,8 +889,8 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
     post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列+指標の複合列）</p>{pre_html}</div>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列+指標の複合列）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -989,8 +989,8 @@ def _render_uchi_split_body_html(t: "DetectedTable") -> str:
     post_html = _df_to_html(after, max_height=340)
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before)} 行 / 赤色 {len(removed_positions)} 行 = 内訳行）</p>{pre_html}</div>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after)} 行 / 内訳行を除去済み）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before)} 行 / 赤色 {len(removed_positions)} 行 = 内訳行）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after)} 行 / 内訳行を除去済み）</p>{post_html}</div>"
         "</div>"
     )
     breakdown_html = _df_to_html(
@@ -1097,8 +1097,8 @@ def _render_unit_split_body_html(t: "DetectedTable") -> str:
     post_html = _df_to_html(after, max_height=340, green_col_names={label_col})
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before)} 行 / 紫列 = 単位混在列）</p>{pre_html}</div>"
-        f"<div><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after)} 行 / 緑列 = 単位を除去した列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before)} 行 / 紫列 = 単位混在列）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after)} 行 / 緑列 = 単位を除去した列）</p>{post_html}</div>"
         "</div>"
     )
     master_html = _df_to_html(
