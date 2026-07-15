@@ -40,6 +40,11 @@ patterns:
     var_name: 四半期
     description: '第1四半期'
 
+  - pattern: '^\d{4}年度[上下]期$'
+    kind: fiscal_half
+    var_name: 半期
+    description: '2022年度上期, 2022年度下期（年度+半期の複合表記）'
+
   - pattern: '^\d{4}年度$'
     kind: fiscal_year
     var_name: 年度
