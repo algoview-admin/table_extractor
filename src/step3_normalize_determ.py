@@ -88,7 +88,7 @@ def merge_header_rows(
     header_data: List[List[Any]],
     roles: List[str],
     n_cols: int,
-) -> List[str]:
+) -> Tuple[List[str], set]:
     """複数のヘッダー行を 1 つの列名リストにマージする。
 
     roles が全て "name" の場合（結合セルスパン型）: アンダースコアで連結する。
@@ -98,6 +98,11 @@ def merge_header_rows(
     複数の name+unit ペアが存在する場合（多言語ヘッダー）は、最初の name 行の言語を
     主言語とみなし、その言語に一致するペアのみを使用する。
       例（日本語主言語）: ["従業者数","人","Number of persons","persons"] → "従業者数[人]"
+
+    Returns (columns, used_indices): used_indices は header_data のうち実際に
+    列名へ反映された行のインデックス集合（多言語ヘッダーで非主要言語の行が
+    除外された場合、その行は used_indices に含まれない。UI側で「本当に破棄
+    される行」と「列名に反映される行」を区別する表示に使う）。
     """
 
     def _get(row: List[Any], ci: int) -> str:
@@ -111,26 +116,28 @@ def merge_header_rows(
         for ci in range(n_cols):
             parts = [p for p in (_get(row, ci) for row in header_data) if p]
             columns.append("_".join(parts) if parts else f"列{ci + 1}")
-        return columns
+        return columns, set(range(len(header_data)))
 
-    # name+unit ペアリング
-    pairs: List[Tuple[List[Any], Optional[List[Any]]]] = []
+    # name+unit ペアリング（元のインデックスを保持したまま構築する）
+    pairs: List[Tuple[int, List[Any], Optional[int], Optional[List[Any]]]] = []
     i = 0
     while i < len(roles):
         if roles[i] == "name":
             if i + 1 < len(roles) and roles[i + 1] == "unit":
-                pairs.append((header_data[i], header_data[i + 1]))
+                pairs.append((i, header_data[i], i + 1, header_data[i + 1]))
                 i += 2
             else:
-                pairs.append((header_data[i], None))
+                pairs.append((i, header_data[i], None, None))
                 i += 1
         else:
-            pairs.append((header_data[i], None))
+            pairs.append((i, header_data[i], None, None))
             i += 1
 
     # 複数ペアが存在する場合、主言語（最初の明確な言語）のペアのみを選択する
     if len(pairs) > 1:
-        pair_langs = [_detect_row_language(name_row, n_cols) for name_row, _ in pairs]
+        pair_langs = [
+            _detect_row_language(name_row, n_cols) for _, name_row, _, _ in pairs
+        ]
         unique_clear = {l for l in pair_langs if l != "other"}
         if len(unique_clear) > 1:
             dominant = next((l for l in pair_langs if l != "other"), None)
@@ -141,12 +148,18 @@ def merge_header_rows(
                 if filtered:
                     pairs = filtered
 
+    used_indices = set()
+    for name_idx, _, unit_idx, _ in pairs:
+        used_indices.add(name_idx)
+        if unit_idx is not None:
+            used_indices.add(unit_idx)
+
     columns = []
     for ci in range(n_cols):
         parts: List[str] = []
         # 名前セルが空だったペアの単位。ループ後に最後の名前パーツへ付加する。
         orphan_unit = ""
-        for name_row, unit_row in pairs:
+        for _, name_row, _, unit_row in pairs:
             name = _get(name_row, ci)
             unit = _get(unit_row, ci) if unit_row is not None else ""
             if name and unit:
@@ -164,7 +177,7 @@ def merge_header_rows(
             parts[-1] = f"{parts[-1]} [{orphan_unit}]"
         columns.append("_".join(parts) if parts else f"列{ci + 1}")
 
-    return columns
+    return columns, used_indices
 
 
 # ---------------------------------------------------------------------------
@@ -2054,13 +2067,18 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         # 構造認識のみで統合結果を生成しないため、ここで必ず統合する。
         if t.raw_header_rows:
             df = df.copy()
-            df.columns = _dedup_columns(
-                merge_header_rows(
-                    t.raw_header_rows,
-                    t.raw_header_roles or ["name"] * len(t.raw_header_rows),
-                    len(t.raw_header_rows[0]),
-                )
+            merged_cols, used_idx = merge_header_rows(
+                t.raw_header_rows,
+                t.raw_header_roles or ["name"] * len(t.raw_header_rows),
+                len(t.raw_header_rows[0]),
             )
+            df.columns = _dedup_columns(merged_cols)
+            # raw_df の行 j は raw_header_rows[j+1] に対応する（index 0 は
+            # raw_df 自身の列名として使われるため行には現れない）。UI側で
+            # 「本当に破棄される行」と「列名に反映される行」を区別する表示に使う。
+            t.header_merge_discarded_row_indices = {
+                i - 1 for i in range(1, len(t.raw_header_rows)) if i not in used_idx
+            }
 
         # 多段ヘッダーの検出と解決機能（軸展開）の構造判定は決定論的でLLMを
         # 使わないため、Transposeより先に（無条件で）行っておく。①が書いた
@@ -2138,15 +2156,20 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
                         if t.raw_header_roles
                         else ["name"] * len(surviving_idxs)
                     )
-                    new_cols = _dedup_columns(
-                        merge_header_rows(
-                            surviving_rows,
-                            surviving_roles,
-                            len(surviving_rows[0]),
-                        )
+                    merged_cols, used_local_idx = merge_header_rows(
+                        surviving_rows,
+                        surviving_roles,
+                        len(surviving_rows[0]),
                     )
+                    new_cols = _dedup_columns(merged_cols)
                     df = df.copy()
                     df.columns = new_cols
+                    used_original_idx = {surviving_idxs[li] for li in used_local_idx}
+                    t.header_merge_discarded_row_indices = {
+                        i - 1
+                        for i in range(1, len(t.raw_header_rows))
+                        if i not in used_original_idx
+                    }
 
         pre_fill_df_candidate = df
         df, filled_cols = fill_grouping_cols(df)

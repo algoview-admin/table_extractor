@@ -41,6 +41,7 @@ def _df_to_html(
     max_height: Optional[int] = None,
     highlight_row_count: int = 0,
     highlight_row_indices: Optional[set] = None,
+    amber_row_indices: Optional[set] = None,
     highlight_col_names: Optional[set] = None,
     unit_col_names: Optional[set] = None,
     green_col_names: Optional[set] = None,
@@ -48,7 +49,9 @@ def _df_to_html(
     """DataFrameをモダンなスタイルのHTMLテーブルに変換する。
     max_height を指定すると縦スクロール可能なコンテナで包む。
     highlight_row_count > 0 の場合、先頭 N 行を赤色強調表示する。
-    highlight_row_indices: 赤色強調する行の位置インデックス集合。
+    highlight_row_indices: 赤色強調する行の位置インデックス集合（本当に破棄される行）。
+    amber_row_indices: 黄色強調する行の位置インデックス集合（破棄はされず、
+      列名として採用される行。highlight_row_indices と重複する場合は赤を優先）。
     highlight_col_names: オレンジ色ヘッダーで示す除去列名集合。
     unit_col_names: 紫色ヘッダーで示す単位付加列名集合。
     green_col_names: 緑色ヘッダーで示す前方補完列名集合。"""
@@ -100,6 +103,7 @@ def _df_to_html(
         is_red = (i < highlight_row_count) or (
             highlight_row_indices is not None and i in highlight_row_indices
         )
+        is_amber = not is_red and amber_row_indices is not None and i in amber_row_indices
         if is_red:
             cells = "".join(
                 f"<td style='{_TD_STYLE}"
@@ -110,6 +114,17 @@ def _df_to_html(
             )
             rows_parts.append(
                 f"<tr style='background:rgba(239,68,68,0.10);'>{cells}</tr>"
+            )
+        elif is_amber:
+            cells = "".join(
+                f"<td style='{_TD_STYLE}"
+                f"{'border-left:3px solid rgba(217,119,6,0.55);' if j == 0 else ''}"
+                f"color:rgba(217,119,6,0.95);'>"
+                f"{_html.escape(str(v))}</td>"
+                for j, v in enumerate(row)
+            )
+            rows_parts.append(
+                f"<tr style='background:rgba(217,119,6,0.10);'>{cells}</tr>"
             )
         else:
             cells = "".join(
@@ -149,9 +164,26 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
         )
     )
     n_residue = len(raw) - len(fmt)
-    st.caption(
-        f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました"
-    )
+    # header_merge_discarded_row_indices が分かれば、残留ヘッダー行のうち
+    # 「本当に破棄される行」と「列名として採用される行」を色分けする。
+    # 情報がない場合（軸展開が適用された等）は全て破棄扱いにフォールバックする。
+    discarded_idx = t.header_merge_discarded_row_indices
+    if discarded_idx is None:
+        truly_discarded = set(range(n_residue))
+        adopted = set()
+    else:
+        truly_discarded = {i for i in discarded_idx if i < n_residue}
+        adopted = {i for i in range(n_residue) if i not in truly_discarded}
+
+    if adopted:
+        st.caption(
+            f"ヘッダー行を統合しました（赤色 {len(truly_discarded)} 行は破棄、"
+            f"黄色 {len(adopted)} 行は列名として採用）"
+        )
+    else:
+        st.caption(
+            f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました"
+        )
 
     before_cols = list(raw.columns)
     after_cols = list(fmt.columns)
@@ -201,9 +233,17 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
     }
     col_b, col_a = st.columns(2)
     with col_b:
-        st.markdown(f"**整形前**（全件 / 赤色 {n_residue} 行が除去対象）")
+        _before_title = f"**整形前**（全件 / 赤色 {len(truly_discarded)} 行が破棄対象"
+        _before_title += f" / 黄色 {len(adopted)} 行が列名採用" if adopted else ""
+        _before_title += "）"
+        st.markdown(_before_title)
         st.markdown(
-            _df_to_html(raw.astype(str), max_height=340, highlight_row_count=n_residue),
+            _df_to_html(
+                raw.astype(str),
+                max_height=340,
+                highlight_row_indices=truly_discarded,
+                amber_row_indices=adopted,
+            ),
             unsafe_allow_html=True,
         )
     with col_a:
@@ -233,6 +273,13 @@ def _merge_detail_body_html(t: "DetectedTable") -> str:
         )
     )
     n_residue = len(raw) - len(fmt)
+    discarded_idx = t.header_merge_discarded_row_indices
+    if discarded_idx is None:
+        truly_discarded = set(range(n_residue))
+        adopted = set()
+    else:
+        truly_discarded = {i for i in discarded_idx if i < n_residue}
+        adopted = {i for i in range(n_residue) if i not in truly_discarded}
 
     before_cols = list(raw.columns)
     after_cols = list(fmt.columns)
@@ -257,20 +304,32 @@ def _merge_detail_body_html(t: "DetectedTable") -> str:
     )
 
     PREVIEW_ROWS = 10
-    hl = min(n_residue, PREVIEW_ROWS)
     raw_col_set = {str(c) for c in raw.columns}
     unit_cols = {
         str(c) for c in fmt.columns if "[" in str(c) and str(c) not in raw_col_set
     }
-    before_tbl = _df_to_html(raw.head(PREVIEW_ROWS).astype(str), highlight_row_count=hl)
+    before_tbl = _df_to_html(
+        raw.head(PREVIEW_ROWS).astype(str),
+        highlight_row_indices={i for i in truly_discarded if i < PREVIEW_ROWS},
+        amber_row_indices={i for i in adopted if i < PREVIEW_ROWS},
+    )
     after_tbl = _df_to_html(
         fmt.head(PREVIEW_ROWS).astype(str), unit_col_names=unit_cols or None
     )
     _after_hint = " / 紫列 = 単位付加" if unit_cols else ""
+    _before_caption = f"整形前（赤色 {len(truly_discarded)} 行が破棄対象"
+    _before_caption += f" / 黄色 {len(adopted)} 行が列名採用" if adopted else ""
+    _before_caption += f" / 先頭 {PREVIEW_ROWS} 行）"
+    _top_caption = (
+        f"ヘッダー行を統合しました（赤色 {len(truly_discarded)} 行は破棄、"
+        f"黄色 {len(adopted)} 行は列名として採用）"
+        if adopted
+        else f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました"
+    )
 
     return (
         f"<p style='font-size:0.83em;opacity:0.65;margin:0 0 0.6rem'>"
-        f"ヘッダー行を統合し、残留ヘッダー {n_residue} 行をデータから除去しました</p>"
+        f"{_html.escape(_top_caption)}</p>"
         f"<p style='font-weight:600;margin:0 0 0.3rem'>列名の変化</p>"
         f"<div style='overflow-x:auto'>"
         f"<table style='border-collapse:collapse'>"
@@ -279,7 +338,7 @@ def _merge_detail_body_html(t: "DetectedTable") -> str:
         f"</table></div>"
         f"<div style='display:flex;gap:1rem;flex-wrap:wrap;margin-top:0.8rem'>"
         f"<div style='flex:1;min-width:280px'>"
-        f"<p style='font-weight:600;margin:0 0 0.3rem'>整形前（赤色 {n_residue} 行が除去対象 / 先頭 {PREVIEW_ROWS} 行）</p>"
+        f"<p style='font-weight:600;margin:0 0 0.3rem'>{_html.escape(_before_caption)}</p>"
         f"{before_tbl}</div>"
         f"<div style='flex:1;min-width:280px'>"
         f"<p style='font-weight:600;margin:0 0 0.3rem'>整形後（先頭 {PREVIEW_ROWS} 行{_after_hint}）</p>"

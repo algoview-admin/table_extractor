@@ -35,12 +35,26 @@ from .models import DetectedTable, SheetGrid
 # 解決機能・単純統合／軸展開）は Step3 の step3_normalize_determ.py が行う。
 
 
+_UNIT_PERIOD_SUFFIX_RE = re.compile(
+    r"[／/](日|月|年|週|時|day|month|year|week|hour|hr)$", re.IGNORECASE
+)
+
+
+def _strip_unit_period_suffix(v: str) -> str:
+    """「立方メートル／日」「cubic meters/day」のような単位＋期間表記から
+    期間部分を取り除く（"立方メートル"/"cubic meters" を残す）。
+    UNIT_VOCAB には基本単位のみを登録すればよく、期間との組み合わせを
+    総当たりで列挙しなくても済むようにするための正規化。"""
+    return _UNIT_PERIOD_SUFFIX_RE.sub("", v)
+
+
 def _is_unit_row(row: List[Any]) -> bool:
     """行が単位ラベルのみで構成されているかを判定する。
 
     以下の条件をすべて満たす場合に True を返す:
       - 全ての非空セルが 25 文字以内（単位は必ず短い）
-      - 非空セルの 50% 以上が既知単位語彙に一致、
+      - 非空セルの 50% 以上が既知単位語彙に一致（「立方メートル／日」のような
+        期間サフィックス付きは基本単位部分で照合）、
         または全セルが 15 文字以内かつ繰り返し率が高い（同一単位が複数列に並ぶ）
     """
     vals = [
@@ -52,7 +66,12 @@ def _is_unit_row(row: List[Any]) -> bool:
         return False
     if any(len(v) > 25 for v in vals):
         return False
-    vocab_hits = sum(1 for v in vals if v.lower() in UNIT_VOCAB)
+    vocab_hits = sum(
+        1
+        for v in vals
+        if v.lower() in UNIT_VOCAB
+        or _strip_unit_period_suffix(v.lower()) in UNIT_VOCAB
+    )
     if vocab_hits / len(vals) >= 0.5:
         return True
     # 繰り返し率が高い場合の補助判定（「百万円」が複数列に並ぶケース等）。

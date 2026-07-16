@@ -47,6 +47,7 @@ class DetectedTable:
     is_step3_derived: bool = False  # Step3整形処理中に新規生成されたテーブルか（Step2の検出結果表示から除外するためのフラグ）
     raw_header_rows: Optional[List[List[Any]]] = field(default=None, repr=False)  # 多段ヘッダーの検出と解決機能（Step3）が列名統合に使う生ヘッダー行（結合前、2行以上の場合のみ。df は暫定的に先頭行のみの列名）
     raw_header_roles: Optional[List[str]] = field(default=None)  # raw_header_rows の各行の役割（"name"/"unit"）。単純統合のペアリングと、unit行を軸候補と誤認しないための判定の両方に使う
+    header_merge_discarded_row_indices: Optional[set] = field(default=None)  # 単純統合で本当に破棄された raw_df 行インデックス（列名に反映された行は含まない。UI表示の色分け用）
     pre_multi_axis_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 多段ヘッダーの検出と解決機能（軸展開）適用前 DataFrame（展開適用時のみ）
     multi_axis_info: Optional[Dict[str, Any]] = field(default=None)  # 多段ヘッダーの検出と解決機能（軸展開）情報 {axis_names, value_name, dropped_labels, reasoning}
     multi_axis_candidates_declined: bool = False  # 軸候補は見つかったがLLMが妥当でないと判定した（またはLLM呼び出しが失敗した）か。Wide_to_long検出がTier2の閾値を緩和する判断材料に使う
