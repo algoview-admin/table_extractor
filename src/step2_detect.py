@@ -2,9 +2,10 @@
 ステップ2 テーブル検出モジュール。
 
 処理概要: 生グリッドまたは DataFrame を受け取り、行分類ステートマシンでテーブル領域を特定する。
-          ファイル読み込み・整形・分析は行わない（テーブル整形処理は
-          src/step3_normalize_determ.py の normalize_tables() が
-          Step3 側で別途適用する）。
+          ヘッダー行が何行あるか・どの行が name/unit かという構造の認識まではここで行うが、
+          複数ヘッダー行を1つの列名へ統合する・軸展開するといった列名の整形は一切行わない
+          （表を「表として認識する」ことと「表を整形する」ことを分離するため）。
+          整形は src/step3_normalize_determ.py の normalize_tables() が Step3 側で適用する。
 入力    : List[SheetGrid]（step1_upload が構築した生グリッド）/ pd.DataFrame（CSV の場合）、ファイル名
 出力    : List[DetectedTable]（検出されたテーブルごとの位置・DataFrame・タイトル・注記を含む。
           整形前の生 DataFrame のみを保持する）
@@ -20,9 +21,136 @@ import pandas as pd
 from .keywords import (
     NOTE_ROW_PREFIXES as _NOTE_PREFIXES,
     STAT_PLACEHOLDERS as _STAT_PLACEHOLDERS,
+    UNIT_VOCAB,
 )
 from .models import DetectedTable, SheetGrid
-from .step3_normalize_determ import detect_header_roles, merge_header_rows
+
+
+# ---------------------------------------------------------------------------
+# ヘッダー行の構造認識（name/unit の役割判定のみ。列名の統合は行わない）
+# ---------------------------------------------------------------------------
+# ここではテーブル領域のうち何行がヘッダーで何行からがデータかを判定する
+# ためだけに name/unit の役割を使う（構造認識であり、値の意味理解は不要）。
+# 複数ヘッダー行を実際に1つの列名へ統合する処理（多段ヘッダーの検出と
+# 解決機能・単純統合／軸展開）は Step3 の step3_normalize_determ.py が行う。
+
+
+def _is_unit_row(row: List[Any]) -> bool:
+    """行が単位ラベルのみで構成されているかを判定する。
+
+    以下の条件をすべて満たす場合に True を返す:
+      - 全ての非空セルが 25 文字以内（単位は必ず短い）
+      - 非空セルの 50% 以上が既知単位語彙に一致、
+        または全セルが 15 文字以内かつ繰り返し率が高い（同一単位が複数列に並ぶ）
+    """
+    vals = [
+        str(v).strip()
+        for v in row
+        if v is not None and str(v).strip() and str(v).strip().lower() != "nan"
+    ]
+    if not vals:
+        return False
+    if any(len(v) > 25 for v in vals):
+        return False
+    vocab_hits = sum(1 for v in vals if v.lower() in UNIT_VOCAB)
+    if vocab_hits / len(vals) >= 0.5:
+        return True
+    # 繰り返し率が高い場合の補助判定（「百万円」が複数列に並ぶケース等）。
+    # ただし語彙ヒットが 0 件の場合は「年初在庫額」「土地以外のもの」のような
+    # サブカラム名と区別できないため除外する。
+    unique_ratio = len({v.lower() for v in vals}) / len(vals)
+    return vocab_hits > 0 and unique_ratio <= 0.4 and all(len(v) <= 15 for v in vals)
+
+
+def detect_header_roles(rows: List[List[Any]]) -> Tuple[int, List[str]]:
+    """先頭のタイトル行と列ヘッダー行を検出する。
+
+    Returns (n_title, header_roles):
+      n_title      — 先頭にあるセクションタイトルの行数。
+      header_roles — ヘッダー行ごとの役割リスト（"name" または "unit"）。
+                     空リストはヘッダー行なし。
+
+    連続するヘッダー行を最大 _MAX_HEADER_ROWS 行まで検出し、各行を分類する:
+      "name" — 列ラベル行（日本語名、英語名など）
+      "unit" — 単位ラベル行（人、百万円、mil. yen など）
+
+    2 番目以降の "name" 行を受け入れる条件:
+      - 直前が "unit" 行（別言語の名前層）、または
+      - 最初の行に重複値がある（結合セルスパン型の多段ヘッダー）
+    """
+    if not rows:
+        return 0, []
+
+    def _nn(row: List[Any]) -> List[Any]:
+        return [v for v in row if v is not None]
+
+    def _str_count(vals: List[Any]) -> int:
+        return sum(1 for v in vals if isinstance(v, str))
+
+    def _num_count(vals: List[Any]) -> int:
+        return sum(
+            1 for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)
+        )
+
+    # --- ステップ1: 先頭のタイトル行をスキップ ---
+    n_title = 0
+    while n_title < len(rows) - 1:
+        nn_curr = _nn(rows[n_title])
+        if not nn_curr:
+            has_wider_below = any(
+                len(_nn(rows[j])) >= 2 for j in range(n_title + 1, len(rows))
+            )
+            if has_wider_below:
+                n_title += 1
+                continue
+            else:
+                break
+        if not (len(nn_curr) == 1 and isinstance(nn_curr[0], str)):
+            break
+        has_wider_below = any(
+            len(_nn(rows[j])) >= 2 for j in range(n_title + 1, len(rows))
+        )
+        if has_wider_below:
+            n_title += 1
+        else:
+            break
+
+    remaining = rows[n_title:]
+    if not remaining:
+        return n_title, []
+
+    # --- ステップ2: 最初の行がヘッダーか確認（文字列比率 50% 以上）---
+    nn_first = _nn(remaining[0])
+    if not nn_first or _str_count(nn_first) / len(nn_first) < 0.5:
+        return n_title, []
+
+    # 1 行目に重複値があるか（結合セルスパン型の判定）
+    first_strs = [str(v) for v in nn_first]
+    first_has_dups = len(first_strs) != len(set(first_strs))
+
+    # --- ステップ3: 連続するヘッダー行を検出 ---
+    # 日本語5段＋英語5段のような深いヘッダー（10行）に対応するため余裕をもたせる
+    _MAX_HEADER_ROWS = 12
+    roles: List[str] = []
+
+    for i, row in enumerate(remaining[:_MAX_HEADER_ROWS]):
+        nn = _nn(row)
+        if not nn:
+            break
+        num_cnt = _num_count(nn)
+        if num_cnt / len(nn) >= 0.40:
+            break
+        role = "unit" if _is_unit_row(row) else "name"
+        if i > 0 and role == "name":
+            # 2 番目以降の name 行: 直前が unit か、または結合セルスパン型のみ受け入れる
+            if roles[-1] != "unit" and not first_has_dups:
+                break
+        roles.append(role)
+
+    if not roles or roles[0] != "name":
+        return n_title, []
+
+    return n_title, roles
 
 
 # ---------------------------------------------------------------------------
@@ -454,16 +582,24 @@ def _extract_dataframe(
     end_row: int,
     start_col: int,
     end_col: int,
-) -> Tuple[pd.DataFrame, Optional[str], Optional[pd.DataFrame], Optional[List[List[Any]]]]:
+) -> Tuple[
+    pd.DataFrame,
+    Optional[str],
+    Optional[pd.DataFrame],
+    Optional[List[List[Any]]],
+    Optional[List[str]],
+]:
     """矩形領域を DataFrame として抽出する。
 
-    Returns (df, title, raw_df, raw_header_rows)
+    Returns (df, title, raw_df, raw_header_rows, raw_header_roles)
 
-    raw_header_rows は、全ヘッダー行が "name" 役割（結合セルスパン型の多段ヘッダー）
-    の場合のみ結合前の生データを保持する（Step3 の多軸ヘッダー展開検出用）。
+    ヘッダー行が2行以上ある場合、df の列名は暫定的に先頭ヘッダー行のみを
+    使う（列名の統合という整形判断はStep2では行わないため）。実際の列名
+    統合（単純統合／軸展開）は raw_header_rows/raw_header_roles を使って
+    Step3 の多段ヘッダーの検出と解決機能（step3_normalize_determ.py）が行う。
     """
     if start_row > end_row or start_col > end_col:
-        return pd.DataFrame(), None, None, None
+        return pd.DataFrame(), None, None, None, None
 
     rows = [
         [grid[r][c] for c in range(start_col, end_col + 1)]
@@ -471,7 +607,7 @@ def _extract_dataframe(
     ]
 
     if not rows:
-        return pd.DataFrame(), None, None, None
+        return pd.DataFrame(), None, None, None, None
 
     n_title, header_roles = detect_header_roles(rows)
     num_cols = end_col - start_col + 1
@@ -491,14 +627,14 @@ def _extract_dataframe(
     if n_header == 0:
         columns = [f"列{i + 1}" for i in range(num_cols)]
         df = pd.DataFrame(remaining, columns=columns)
-        return df.dropna(how="all").reset_index(drop=True), title, None, None
+        return df.dropna(how="all").reset_index(drop=True), title, None, None, None
 
     if n_header == 1:
         header = _make_unique_columns(
             [str(v) if v is not None else "" for v in remaining[0]]
         )
         df = pd.DataFrame(remaining[1:], columns=header)
-        return df.dropna(how="all").reset_index(drop=True), title, None, None
+        return df.dropna(how="all").reset_index(drop=True), title, None, None, None
 
     raw_header = _make_unique_columns(
         [str(v) if v is not None else "" for v in remaining[0]]
@@ -506,17 +642,22 @@ def _extract_dataframe(
     raw_df = pd.DataFrame(remaining[1:], columns=raw_header).dropna(how="all").reset_index(drop=True)
 
     header_data = [remaining[i] for i in range(n_header)]
-    merged = merge_header_rows(header_data, header_roles, num_cols)
-    header = _make_unique_columns(merged)
+    # 列名統合はStep3の仕事なので、ここでは先頭ヘッダー行のみを暫定列名にする
+    # （n_header==1 の場合と同じ扱い）。データ開始位置はヘッダー行数を正しく
+    # 反映する（先頭行以外のヘッダー行をデータに混入させないため）。
+    header = raw_header
     df = pd.DataFrame(remaining[n_header:], columns=header)
 
-    raw_header_rows = (
-        [list(row) for row in header_data]
-        if n_header >= 2 and all(r == "name" for r in header_roles)
-        else None
-    )
+    raw_header_rows = [list(row) for row in header_data] if n_header >= 2 else None
+    raw_header_roles = list(header_roles) if n_header >= 2 else None
 
-    return df.dropna(how="all").reset_index(drop=True), title, raw_df, raw_header_rows
+    return (
+        df.dropna(how="all").reset_index(drop=True),
+        title,
+        raw_df,
+        raw_header_rows,
+        raw_header_roles,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -591,7 +732,7 @@ def _detect_tables_in_grid(
             if (band_end - first_header_row + 1) < 2:
                 continue
 
-            df, inner_title, raw_df, raw_header_rows = _extract_dataframe(
+            df, inner_title, raw_df, raw_header_rows, raw_header_roles = _extract_dataframe(
                 grid, first_header_row, band_end, col_start, col_end
             )
             if df.empty or len(df) == 0:
@@ -624,6 +765,7 @@ def _detect_tables_in_grid(
                     notes=reg.get("trailing_notes", []),
                     raw_df=raw_df,
                     raw_header_rows=raw_header_rows,
+                    raw_header_roles=raw_header_roles,
                 )
             )
 

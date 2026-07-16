@@ -1,8 +1,8 @@
 """
 ステップ3 テーブル正規化モジュール（LLM使用処理）。
 
-処理概要: Transpose（行列逆転）の検出と変換、多軸ヘッダー展開（多段ヘッダーが
-          独立した複数カテゴリ軸の交差かどうかの判定・軸命名）、
+処理概要: Transpose（行列逆転）の検出と変換、多段ヘッダーの検出と解決機能（軸展開。
+          多段ヘッダーが独立した複数カテゴリ軸の交差かどうかの判定・軸命名）、
           Wide_to_long Tier3（区切り文字のない複合列名から決定論的に発見した
           軸候補が本当に均質な1つのカテゴリ軸かどうかの確認・命名）など、
           意味判定にLLMが必要なテーブル整形処理を扱う。
@@ -14,7 +14,7 @@
           src/step3_normalize_determ.py を参照。
 入力    : DetectedTable.df（step2_detect が構築した生 DataFrame）
 出力    : 変換済み DataFrame、transpose_info（{entity_axis_name, reasoning}）、
-          多軸ヘッダー展開情報（{axis_names, value_name, reasoning}）、
+          多段ヘッダーの検出と解決機能（軸展開）情報（{axis_names, value_name, reasoning}）、
           カテゴリ軸確認情報（{axis_name, reasoning}）
 """
 
@@ -184,7 +184,7 @@ def detect_transpose(df: Any, client: Any, model: str) -> Optional[Dict[str, Any
 
 
 # ---------------------------------------------------------------------------
-# 多軸ヘッダー展開（多段ヘッダーの検出と解決機能）
+# 多段ヘッダーの検出と解決機能（軸展開）
 # ---------------------------------------------------------------------------
 #
 # src/step3_normalize_determ.py の detect_multi_axis_header が構造的に
@@ -212,8 +212,18 @@ _MULTI_AXIS_USER_PROMPT = """以下は、表の多段ヘッダーのうち、単
 - axis_names は入力された行の順序と対応する配列にしてください（行数と同じ長さ）。
 - 少しでも判断に迷う場合は is_valid=false としてよい。
 
+【indicator_axis_index について】
+- 軸候補の中に、「売上」「原価」「利益」のように**異なる指標・メトリクスの名称**を
+  表す行が含まれる場合、その行は他の軸（支店・年度など）と違い、縦持ちの1つの
+  値列に統合するより、指標ごとに別々の列として残した方が扱いやすいことが多いです。
+  該当する行がある場合はその行番号（0始まり、axis_namesの配列位置と対応）を
+  indicator_axis_index に設定してください。
+- 該当する行がない場合（すべての軸が支店・年度・性別など、同じ1つの値を
+  分類するだけの軸である場合）は indicator_axis_index=null としてください。
+- 少しでも判断に迷う場合は null としてよい。
+
 JSON形式で回答してください:
-{{"is_valid": true または false, "axis_names": ["各行に対応する軸名（日本語、例: 科目、支店）", "..."], "value_name": "値列の名称（日本語、例: 金額、数量）。文脈から判断できない場合は「値」", "reasoning": "判断理由（日本語、1〜2文）"}}"""
+{{"is_valid": true または false, "axis_names": ["各行に対応する軸名（日本語、例: 科目、支店）", "..."], "value_name": "値列の名称（日本語、例: 金額、数量）。文脈から判断できない場合は「値」", "indicator_axis_index": 指標軸の行番号（0始まり）または null, "reasoning": "判断理由（日本語、1〜2文）"}}"""
 
 
 def detect_dimension_axes(
@@ -231,7 +241,10 @@ def detect_dimension_axes(
     1テーブルの失敗が検出処理全体を落とさないようにする。
 
     Returns:
-      有効と判定された場合: {"axis_names": [...], "value_name": str, "reasoning": str}
+      有効と判定された場合: {"axis_names": [...], "value_name": str,
+        "indicator_axis_index": Optional[int]（axis_candidatesの何番目が指標軸か。
+        該当なしなら None。Wide_to_long同様、指標軸は縦持ちにせず列として残す
+        ための情報として apply_multi_axis_header が使う）, "reasoning": str}
       無効 / 判定不能な場合: None
     """
     if not axis_candidates:
@@ -266,9 +279,15 @@ def detect_dimension_axes(
 
     value_name = str(raw.get("value_name") or "").strip() or "値"
 
+    indicator_axis_index: Optional[int] = None
+    raw_idx = raw.get("indicator_axis_index")
+    if isinstance(raw_idx, int) and not isinstance(raw_idx, bool) and 0 <= raw_idx < len(axis_candidates):
+        indicator_axis_index = raw_idx
+
     return {
         "axis_names": axis_names,
         "value_name": value_name,
+        "indicator_axis_index": indicator_axis_index,
         "reasoning": str(raw.get("reasoning") or ""),
     }
 

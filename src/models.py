@@ -45,9 +45,11 @@ class DetectedTable:
     uchi_split_info: Optional[Dict[str, Any]] = field(default=None)  # うち分離情報 {label_col, parent_col_name, child_col_name, rows, match_count}
     uchi_breakdown_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 生成された内訳テーブル DataFrame（親子列＋値列）
     is_step3_derived: bool = False  # Step3整形処理中に新規生成されたテーブルか（Step2の検出結果表示から除外するためのフラグ）
-    raw_header_rows: Optional[List[List[Any]]] = field(default=None, repr=False)  # 多段ヘッダー展開判定用の生ヘッダー行（結合前、全て"name"役割の2行以上の場合のみ）
-    pre_multi_axis_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 多軸ヘッダー展開前 DataFrame（展開適用時のみ）
-    multi_axis_info: Optional[Dict[str, Any]] = field(default=None)  # 多軸ヘッダー展開情報 {axis_names, value_name, dropped_labels, reasoning}
+    raw_header_rows: Optional[List[List[Any]]] = field(default=None, repr=False)  # 多段ヘッダーの検出と解決機能（Step3）が列名統合に使う生ヘッダー行（結合前、2行以上の場合のみ。df は暫定的に先頭行のみの列名）
+    raw_header_roles: Optional[List[str]] = field(default=None)  # raw_header_rows の各行の役割（"name"/"unit"）。単純統合のペアリングと、unit行を軸候補と誤認しないための判定の両方に使う
+    pre_multi_axis_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 多段ヘッダーの検出と解決機能（軸展開）適用前 DataFrame（展開適用時のみ）
+    multi_axis_info: Optional[Dict[str, Any]] = field(default=None)  # 多段ヘッダーの検出と解決機能（軸展開）情報 {axis_names, value_name, dropped_labels, reasoning}
+    multi_axis_candidates_declined: bool = False  # 軸候補は見つかったがLLMが妥当でないと判定した（またはLLM呼び出しが失敗した）か。Wide_to_long検出がTier2の閾値を緩和する判断材料に使う
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

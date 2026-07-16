@@ -685,8 +685,8 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
 
 
 def _render_multi_axis_body(t: "DetectedTable") -> None:
-    """多軸ヘッダー展開（独立した複数カテゴリ軸の交差を縦持ちに展開）の
-    詳細（Streamlit ウィジェット版）。"""
+    """多段ヘッダーの検出と解決機能（軸展開。独立した複数カテゴリ軸の交差を
+    縦持ちに展開）の詳細（Streamlit ウィジェット版）。"""
     info = t.multi_axis_info
     wide = t.pre_multi_axis_df
     long_df = t.df
@@ -733,7 +733,7 @@ def _render_multi_axis_body(t: "DetectedTable") -> None:
 
 
 def _render_multi_axis_body_html(t: "DetectedTable") -> str:
-    """多軸ヘッダー展開の詳細（HTML 文字列版）。"""
+    """多段ヘッダーの検出と解決機能（軸展開）の詳細（HTML 文字列版）。"""
     info = t.multi_axis_info
     wide = t.pre_multi_axis_df
     long_df = t.df
@@ -1435,13 +1435,13 @@ def step_format():
             rest = formatted[1:] if len(formatted) > 1 else None
             _render_header_merge_detail(formatted[0], rest=rest)
 
-        # ── 多軸ヘッダー展開機能 ─────────────────────────────────
+        # ── 多段ヘッダーの検出と解決機能（軸展開） ─────────────────────
         if multi_axis_applied:
             if not first_section:
                 st.divider()
             first_section = False
             st.subheader(
-                f"🧩 多軸ヘッダー展開機能（対象：{len(multi_axis_applied)}テーブル）"
+                f"🧩 多段ヘッダーの検出と解決機能（軸展開）（対象：{len(multi_axis_applied)}テーブル）"
             )
             st.success(
                 f"**{len(multi_axis_applied)}** テーブルで多段ヘッダーが独立した"
