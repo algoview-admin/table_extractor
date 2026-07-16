@@ -149,18 +149,22 @@ def _df_to_html(
 def _render_merge_detail_body(t: "DetectedTable") -> None:
     """列名対応表 + before/after プレビュー（expander なし）。"""
     raw = t.raw_df
-    # 集計行除去の前段階（ヘッダー統合直後）と比較することで、
-    # 集計行を「残留ヘッダー除去対象」として誤表示しないようにする。
-    # Transpose・うち分離は行数・列数をここで変えるため、pre_agg_df/df より先に
-    # パイプライン順（Transpose→うち分離→集計除去）で最も早く捕捉された
-    # スナップショットを優先する。
+    # ①単純統合"自身"の結果と比較するため、後続処理（②軸展開・Transpose・
+    # うち分離・集計除去）でそれぞれ上書きされる直前のスナップショットのうち、
+    # パイプライン順（①→Transpose→②軸展開→うち分離→集計除去）で最も早く
+    # 捕捉されたものを優先する。これを誤ると②軸展開後の最終結果が「①の
+    # 整形後」として二重表示されてしまう。
     fmt = (
         t.pre_transpose_df
         if t.pre_transpose_df is not None
         else (
-            t.pre_uchi_split_df
-            if t.pre_uchi_split_df is not None
-            else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+            t.pre_multi_axis_df
+            if t.pre_multi_axis_df is not None
+            else (
+                t.pre_uchi_split_df
+                if t.pre_uchi_split_df is not None
+                else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+            )
         )
     )
     n_residue = len(raw) - len(fmt)
@@ -260,16 +264,20 @@ def _render_merge_detail_body(t: "DetectedTable") -> None:
 def _merge_detail_body_html(t: "DetectedTable") -> str:
     """列名対応表 + before/after プレビューをHTML文字列で返す（ネスト details 用）。"""
     raw = t.raw_df
-    # 集計行除去の前段階と比較し、集計行を残留ヘッダー除去対象として誤表示しない。
-    # Transpose・うち分離は行数・列数を変えるため、パイプライン順で最も早く
-    # 捕捉されたスナップショットを優先する。
+    # ①単純統合"自身"の結果と比較するため、パイプライン順（①→Transpose→
+    # ②軸展開→うち分離→集計除去）で最も早く捕捉されたスナップショットを
+    # 優先する（②軸展開後の最終結果が「①の整形後」として二重表示されるのを防ぐ）。
     fmt = (
         t.pre_transpose_df
         if t.pre_transpose_df is not None
         else (
-            t.pre_uchi_split_df
-            if t.pre_uchi_split_df is not None
-            else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+            t.pre_multi_axis_df
+            if t.pre_multi_axis_df is not None
+            else (
+                t.pre_uchi_split_df
+                if t.pre_uchi_split_df is not None
+                else (t.pre_agg_df if t.pre_agg_df is not None else t.df)
+            )
         )
     )
     n_residue = len(raw) - len(fmt)
