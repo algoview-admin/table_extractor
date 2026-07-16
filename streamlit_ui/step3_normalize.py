@@ -774,7 +774,7 @@ def _render_multi_axis_body_html(t: "DetectedTable") -> str:
 
 
 def _render_wide_to_long_body(t: "DetectedTable") -> None:
-    """Wide_to_long（時系列×複数指標の複合列名）変換の詳細（Streamlit ウィジェット版）。"""
+    """Wide_to_long（軸×複数指標の複合列名）変換の詳細（Streamlit ウィジェット版）。"""
     info = t.wide_to_long_info
     wide = t.pre_wide_to_long_df
     long_df = t.stacked_df
@@ -782,7 +782,7 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
         return
 
     label_cols = info.get("label_cols", [])
-    time_var_name = info.get("time_var_name", "期間")
+    axis_var_name = info.get("axis_var_name", "区分")
     indicators = info.get("indicators", [])
     parsed_cols = info.get("parsed_cols", {})
 
@@ -796,20 +796,20 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
 
     label_html = " ".join(_badge(c, "156,163,175") for c in label_cols) or "（なし）"
     indicator_html = " ".join(_badge(c, "251,191,36") for c in indicators) or "（なし）"
-    time_tokens = info.get("time_tokens", [])
-    shown_tokens = time_tokens[:6]
-    rest_count = len(time_tokens) - len(shown_tokens)
-    time_html = " ".join(_badge(c, "56,189,248") for c in shown_tokens)
+    axis_tokens = info.get("axis_tokens", [])
+    shown_tokens = axis_tokens[:6]
+    rest_count = len(axis_tokens) - len(shown_tokens)
+    axis_html = " ".join(_badge(c, "56,189,248") for c in shown_tokens)
     if rest_count > 0:
-        time_html += (
+        axis_html += (
             f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 件</span>"
         )
 
     meta_lines = [
         f"ラベル列: {label_html}",
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）",
-        f"時系列トークン: {time_html}（計 {len(time_tokens)} 件）",
-        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(time_var_name)}</b> → 指標列（{len(indicators)} 列に分離）",
+        f"軸トークン（{_html.escape(axis_var_name)}）: {axis_html}（計 {len(axis_tokens)} 件）",
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(axis_var_name)}</b> → 指標列（{len(indicators)} 列に分離）",
     ]
 
     st.markdown(
@@ -820,12 +820,12 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
     )
 
     compound_col_set = set(parsed_cols.keys())
-    new_col_set = {time_var_name} | set(indicators)
+    new_col_set = {axis_var_name} | set(indicators)
 
     col_a, col_b = st.columns(2)
     with col_a:
         st.markdown(
-            f"**変換前**（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列+指標の複合列）"
+            f"**変換前**（横持ち / {len(wide.columns)} 列 / オレンジ列 = 軸+指標の複合列）"
         )
         st.markdown(
             _df_to_html(wide, max_height=340, highlight_col_names=compound_col_set),
@@ -842,7 +842,7 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
 
 
 def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
-    """Wide_to_long（時系列×複数指標の複合列名）変換の詳細（HTML 文字列版）。"""
+    """Wide_to_long（軸×複数指標の複合列名）変換の詳細（HTML 文字列版）。"""
     info = t.wide_to_long_info
     wide = t.pre_wide_to_long_df
     long_df = t.stacked_df
@@ -850,7 +850,7 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
         return ""
 
     label_cols = info.get("label_cols", [])
-    time_var_name = info.get("time_var_name", "期間")
+    axis_var_name = info.get("axis_var_name", "区分")
     indicators = info.get("indicators", [])
     parsed_cols = info.get("parsed_cols", {})
 
@@ -864,12 +864,12 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
 
     label_html = " ".join(_badge(c, "156,163,175") for c in label_cols) or "（なし）"
     indicator_html = " ".join(_badge(c, "251,191,36") for c in indicators) or "（なし）"
-    time_tokens = info.get("time_tokens", [])
-    shown_tokens = time_tokens[:6]
-    rest_count = len(time_tokens) - len(shown_tokens)
-    time_html = " ".join(_badge(c, "56,189,248") for c in shown_tokens)
+    axis_tokens = info.get("axis_tokens", [])
+    shown_tokens = axis_tokens[:6]
+    rest_count = len(axis_tokens) - len(shown_tokens)
+    axis_html = " ".join(_badge(c, "56,189,248") for c in shown_tokens)
     if rest_count > 0:
-        time_html += (
+        axis_html += (
             f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 件</span>"
         )
 
@@ -877,19 +877,19 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"ラベル列: {label_html}<br>"
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）<br>"
-        f"時系列トークン: {time_html}（計 {len(time_tokens)} 件）<br>"
-        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(time_var_name)}</b> → 指標列（{len(indicators)} 列に分離）"
+        f"軸トークン（{_html.escape(axis_var_name)}）: {axis_html}（計 {len(axis_tokens)} 件）<br>"
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(axis_var_name)}</b> → 指標列（{len(indicators)} 列に分離）"
         f"</div>"
     )
 
     compound_col_set = set(parsed_cols.keys())
-    new_col_set = {time_var_name} | set(indicators)
+    new_col_set = {axis_var_name} | set(indicators)
 
     pre_html = _df_to_html(wide, max_height=340, highlight_col_names=compound_col_set)
     post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
-        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列+指標の複合列）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 軸+指標の複合列）</p>{pre_html}</div>"
         f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
         "</div>"
     )
@@ -1701,8 +1701,8 @@ def step_format():
                 f"🔀 Wide_to_long検出と変換機能（対象：{len(wide_to_long_applied)}テーブル）"
             )
             st.success(
-                f"**{len(wide_to_long_applied)}** テーブルで時系列×複数指標の複合列名を検出し、"
-                f"時系列軸を縦持ちに変換しました  "
+                f"**{len(wide_to_long_applied)}** テーブルで軸×複数指標の複合列名を検出し、"
+                f"軸を縦持ちに変換しました  "
                 f"（検出指標: 計 {total_indicators} 種類）"
             )
             rep_w = wide_to_long_applied[0]

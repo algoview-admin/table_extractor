@@ -2,7 +2,9 @@
 ステップ3 テーブル正規化モジュール（LLM使用処理）。
 
 処理概要: Transpose（行列逆転）の検出と変換、多軸ヘッダー展開（多段ヘッダーが
-          独立した複数カテゴリ軸の交差かどうかの判定・軸命名）など、
+          独立した複数カテゴリ軸の交差かどうかの判定・軸命名）、
+          Wide_to_long Tier3（区切り文字のない複合列名から決定論的に発見した
+          軸候補が本当に均質な1つのカテゴリ軸かどうかの確認・命名）など、
           意味判定にLLMが必要なテーブル整形処理を扱う。
           Step3 と Step4（src/step4_analyze.py）は処理の性質が異なり
           （Step3 の出力が Step4 の入力になる関係）依存を持たせたくない
@@ -12,7 +14,8 @@
           src/step3_normalize_determ.py を参照。
 入力    : DetectedTable.df（step2_detect が構築した生 DataFrame）
 出力    : 変換済み DataFrame、transpose_info（{entity_axis_name, reasoning}）、
-          多軸ヘッダー展開情報（{axis_names, value_name, reasoning}）
+          多軸ヘッダー展開情報（{axis_names, value_name, reasoning}）、
+          カテゴリ軸確認情報（{axis_name, reasoning}）
 """
 
 import json
@@ -266,6 +269,99 @@ def detect_dimension_axes(
     return {
         "axis_names": axis_names,
         "value_name": value_name,
+        "reasoning": str(raw.get("reasoning") or ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# カテゴリ軸の確認（Wide_to_long Tier3: 区切り文字のない複合列名向け）
+# ---------------------------------------------------------------------------
+#
+# src/step3_normalize_determ.py の _find_concatenated_axis_candidates が、
+# 区切り文字のない複合列名（例: "東京支店売上"）から頻度ベース（語彙を使わない
+# 構造シグナルのみ）で「軸トークン候補」を発見済みの場合に呼ばれる。
+# その候補群が本当に均質な1つのカテゴリ軸（支店・性別・年代など）として
+# 意味を持つかどうかは値の意味理解が必要なため、ここのみ LLM を用いる。
+# detect_dimension_axes と異なり、LLM は分割点そのものを発見するのではなく、
+# 既に決定論的に発見された候補を検証・命名するだけに役割を限定する。
+
+_CATEGORY_AXIS_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
+列名の分解によって発見された「軸候補」の値一覧が、意味のある1つの均質な
+カテゴリ軸として成立するかどうかを判定し、指定された JSON 形式のみで
+回答してください（説明文は不要）。"""
+
+_CATEGORY_AXIS_USER_PROMPT = """以下は、横持ち表の列名を分解した結果、発見された
+「軸候補」の値一覧です。
+
+軸候補: {candidate_values}
+{other_axis_line}{title_line}
+
+【判定基準】
+- 軸候補が、互いに独立した1つの均質なカテゴリ軸（例: 支店、性別、年代、
+  商品カテゴリなど）として意味を持つ場合のみ is_valid=true としてください。
+- 単なる偶然の部分文字列一致（無関係な語が同じ接頭辞・接尾辞を共有している
+  だけ）、あるいは列名の衝突回避のための連番等の場合は is_valid=false と
+  してください。
+- 少しでも判断に迷う場合は is_valid=false としてよい。
+
+JSON形式で回答してください:
+{{"is_valid": true または false, "axis_name": "軸の名称（日本語、例: 支店）。is_valid=falseの場合はnull", "reasoning": "判断理由（日本語、1〜2文）"}}"""
+
+
+def detect_category_axis(
+    candidate_values: List[str],
+    other_axis_hint: Optional[List[str]],
+    title: Optional[str],
+    client: Any,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """決定論的に発見済みの軸トークン候補が、本当に均質な1つのカテゴリ軸として
+    意味を持つかを LLM に確認・命名させる（構造の発見自体はさせない）。
+
+    candidate_values: 発見済みの軸トークン候補（重複排除済み）。空リストの場合は
+    LLM を呼ばず None を返す。
+    other_axis_hint: 参考情報として渡す、組み合わさる指標候補（あれば）。
+
+    ネットワークエラー・JSON パース失敗等は握りつぶして None を返し、
+    1テーブルの失敗が検出処理全体を落とさないようにする。
+
+    Returns:
+      有効と判定された場合: {"axis_name": str, "reasoning": str}
+      無効 / 判定不能な場合: None
+    """
+    if not candidate_values:
+        return None
+
+    other_axis_line = (
+        f"（参考）これらと組み合わさる指標候補: {other_axis_hint}\n"
+        if other_axis_hint
+        else ""
+    )
+    title_line = f"表タイトル: {title}" if title else ""
+    messages = [
+        {"role": "system", "content": _CATEGORY_AXIS_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _CATEGORY_AXIS_USER_PROMPT.format(
+                candidate_values=candidate_values,
+                other_axis_line=other_axis_line,
+                title_line=title_line,
+            ),
+        },
+    ]
+    try:
+        content = _call_transpose_api(client, model, messages)
+        raw = json.loads(content)
+    except Exception:
+        return None
+
+    if not isinstance(raw, dict) or not raw.get("is_valid"):
+        return None
+
+    axis_name = str(raw.get("axis_name") or "").strip() or "区分"
+
+    return {
+        "axis_name": axis_name,
         "reasoning": str(raw.get("reasoning") or ""),
     }
 

@@ -8,7 +8,7 @@
 出力    : UNIT_VOCAB, AGG_KEYWORDS, UCHI_PREFIXES, NOTE_ROW_PREFIXES,
           TIME_PATTERNS, VAR_NAME_MAP, VALUE_KEYWORDS, NOTE_AGG_KEYWORDS,
           NOTE_EXCL_KEYWORDS, NOTE_REF_KEYWORDS, STAT_PLACEHOLDERS,
-          STAT_NA_MARKERS
+          STAT_NA_MARKERS, AXIS_DELIMITERS
 """
 
 from __future__ import annotations
@@ -39,6 +39,9 @@ AGG_KEYWORDS: FrozenSet[str] = frozenset(_load("agg_keywords.yaml"))
 
 # ── 内訳接頭辞 (step3 / stage2.5) ──────────────────────────────────────────
 UCHI_PREFIXES: Tuple[str, ...] = tuple(_load("uchi_prefixes.yaml"))
+
+# ── Wide_to_long軸区切り文字 (step3 / Wide_to_long Tier2) ──────────────────
+AXIS_DELIMITERS: Tuple[str, ...] = tuple(_load("axis_delimiters.yaml"))
 
 # ── タイトル候補行の注記判定接頭辞 (step2 / 行分類) ────────────────────────
 NOTE_ROW_PREFIXES: Tuple[str, ...] = tuple(_load("note_row_prefixes.yaml"))

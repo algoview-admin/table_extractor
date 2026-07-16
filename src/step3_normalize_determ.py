@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .keywords import (
     AGG_KEYWORDS,
+    AXIS_DELIMITERS,
     STAT_NA_MARKERS as _STAT_NA_MARKERS,
     TIME_PATTERNS as _TIME_PATTERNS,
     UCHI_PREFIXES,
@@ -30,6 +31,7 @@ from .keywords import (
 )
 from .step3_normalize_llm import (
     apply_transpose,
+    detect_category_axis,
     detect_dimension_axes,
     detect_transpose,
     make_transpose_client,
@@ -1465,24 +1467,44 @@ def stack_cross_table(df: Any, stack_info: Dict[str, Any]) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Wide_to_long（時系列×複数指標の複合列名）検出と変換
+# Wide_to_long（多次元の同質軸×複数指標の複合列名）検出と変換
 # ---------------------------------------------------------------------------
 #
-# detect_cross_table は「列名が時系列トークンそのもの」（例: 2023年）である
-# 横持ち表しか検出できない。ここでは「支店,2023売上,2023原価」のように
-# 時系列と指標名が1つの列名に合成された複合表記の横持ち表を検出し、
-# 時系列軸のみを縦持ちに変換する（指標は列として維持する）。
+# detect_cross_table は「列名が軸トークンそのもの」（例: 2023年）である
+# 横持ち表しか検出できない。ここでは「支店,2023年売上,2023年原価」のように
+# 軸（時系列に限らない同質な繰り返し軸。支店・性別・年代等も対象）と指標名が
+# 1つの列名に合成された複合表記の横持ち表を検出し、軸のみを縦持ちに変換する
+# （指標は列として維持する）。
 #
-# 列名の意味（指標名が何を表すか）を理解する必要はなく、既存の
-# _classify_col_time（完全一致の時系列パターン判定）をあらゆる分割点で
-# 適用するだけで判定できるため、LLM を使わず決定論的に実装する。
+# 3段階（Tier）で分類器を切り替える。いずれも「列名→(axis_token, indicator,
+# kind)」への分類だけが異なり、その後のグリッド検証（_build_grid_info）は
+# 全Tier共通（語彙非依存）。
+#   Tier1: 時系列語彙（_classify_col_time、閉じた正規表現語彙）による分類。
+#          曖昧さがなく最も信頼できるため常に最優先・決定論的に試す。
+#   Tier2: 区切り文字（AXIS_DELIMITERS）による分類。時系列以外の軸も、
+#          "東京支社_売上" のように区切り文字があれば意味理解なしに
+#          決定論的に分割できる（merge_header_rows がこの "_" 連結規約で
+#          複合列名を生成しているため実利が大きい）。
+#   Tier3: 区切り文字のない完全連結列名（例: "東京支店売上"）向け。頻度ベースで
+#          （語彙もLLMも使わず）2列以上にまたがる反復部分文字列を発見できた
+#          場合のみ、LLM にその候補群が本当に均質な1つのカテゴリ軸として
+#          意味を持つかを確認・命名させる（LLMは分割点を発見しない）。
+# Tier2/3 は語彙による裏付けがない分、Tier1より厳しい閾値でグリッドを検証する
+# （_AXIS_SPLIT_* 定数、詳細は _build_grid_info を参照）。
 
-_WIDE_TO_LONG_MATCH_RATIO = 0.8  # 時系列+指標に分解できる列が占めるべき最低割合
-_WIDE_TO_LONG_COMPLETENESS = 0.6  # 想定グリッド（時系列数×指標数）に対する実列数の最低割合
+_WIDE_TO_LONG_MATCH_RATIO = 0.8  # Tier1: 軸+指標に分解できる列が占めるべき最低割合
+_WIDE_TO_LONG_COMPLETENESS = 0.6  # Tier1: 想定グリッド（軸数×指標数）に対する実列数の最低割合
+
+_AXIS_SPLIT_MATCH_RATIO = 0.9  # Tier2/3: 語彙の裏付けがない分、一致率で厳しく補う
+_AXIS_SPLIT_COMPLETENESS = 0.75  # Tier2/3: 同上、グリッド完全性も厳しく
+_AXIS_MIN_TABLE_COLS = 6  # Tier2/3 を試す最低列数（Tier1の4列よりも厳しくし偶然の一致を抑制）
+_AXIS_MIN_DOMINANT_CARDINALITY = 3  # Tier2/3: 軸・指標の少なくとも一方は3種類以上を要求
+_AXIS_GENERIC_VAR_NAME = "区分"  # Tier2で軸の意味的名称が推定できない場合のフォールバック
+_CONCAT_MIN_TOKEN_LEN = 2  # Tier3: 反復候補として採用する最小文字数（1文字は偶然一致が多すぎる）
 
 
 def _split_time_indicator(col_name: str) -> Optional[Tuple[str, str, str]]:
-    """列名を (time_token, indicator_name, time_kind) に分解する。
+    """列名を (time_token, indicator_name, time_kind) に分解する（Tier1）。
 
     列名のあらゆる分割点でプレフィックス／サフィックスが _classify_col_time
     （完全一致の時系列パターン判定）にマッチするかを試す。複数の分割点が
@@ -1510,94 +1532,280 @@ def _split_time_indicator(col_name: str) -> Optional[Tuple[str, str, str]]:
     return max(candidates, key=lambda c: len(c[0]))
 
 
+def _classify_columns_by_delimiter(
+    candidate_cols: List[str],
+) -> Optional[Dict[str, Tuple[str, str, str]]]:
+    """列名を区切り文字で (axis_token, indicator, kind) に分解する（Tier2）。
+
+    AXIS_DELIMITERS を優先順に試し、各区切り文字について「軸_指標」
+    「指標_軸」の両方向を試す。区切り文字を複数含む列（分割位置が曖昧）は
+    除外する。テーブル全体で最も一致率の高い (区切り文字, 向き) の組を
+    採用する（列ごとに向きが混在しないようにするため）。一致率が同じ場合は
+    AXIS_DELIMITERS の優先順、および「軸_指標」の向きを優先する
+    （merge_header_rows の連結規約に合わせる）。
+
+    分解できない場合は None。
+    """
+    if not candidate_cols:
+        return None
+
+    best_parsed: Optional[Dict[str, Tuple[str, str, str]]] = None
+    best_ratio = 0.0
+
+    for delim in AXIS_DELIMITERS:
+        splittable = [c for c in candidate_cols if c.count(delim) == 1]
+        if len(splittable) < 2:
+            continue
+        kind = f"delim:{delim}"
+        for axis_first in (True, False):
+            parsed: Dict[str, Tuple[str, str, str]] = {}
+            for c in splittable:
+                left, right = c.split(delim, 1)
+                left, right = left.strip(), right.strip()
+                if not left or not right:
+                    continue
+                parsed[c] = (left, right, kind) if axis_first else (right, left, kind)
+            if not parsed:
+                continue
+            ratio = len(parsed) / len(candidate_cols)
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_parsed = parsed
+
+    return best_parsed
+
+
+def _cluster_by_recurring_segment(
+    candidate_cols: List[str], anchor: str
+) -> Optional[Dict[str, Tuple[str, str]]]:
+    """anchor="prefix" なら列名の先頭側、"suffix" なら末尾側で、2列以上に
+    またがって繰り返し出現する部分文字列（語彙照合なしの純粋な頻度シグナル）を
+    軸トークン候補として (axis_token, indicator) に分解する（Tier3の一部）。
+
+    1回の呼び出し内では全列が同じ側（prefix または suffix）で分解される
+    （列ごとに向きが混在しない）。見つからなければ None。
+    """
+    s_list = [str(c).strip() for c in candidate_cols]
+
+    segment_counts: Dict[str, int] = {}
+    for s in s_list:
+        seen = set()
+        for cut in range(_CONCAT_MIN_TOKEN_LEN, len(s) - _CONCAT_MIN_TOKEN_LEN + 1):
+            seen.add(s[:cut] if anchor == "prefix" else s[cut:])
+        for seg in seen:
+            segment_counts[seg] = segment_counts.get(seg, 0) + 1
+
+    recurring = {seg for seg, n in segment_counts.items() if n >= 2}
+    if not recurring:
+        return None
+
+    parsed: Dict[str, Tuple[str, str]] = {}
+    for c, s in zip(candidate_cols, s_list):
+        best_seg: Optional[str] = None
+        for seg in recurring:
+            matches = s.startswith(seg) if anchor == "prefix" else s.endswith(seg)
+            if matches and (best_seg is None or len(seg) > len(best_seg)):
+                best_seg = seg
+        if best_seg is None:
+            continue
+        if anchor == "prefix":
+            remainder = s[len(best_seg):].strip("_- 　")
+        else:
+            remainder = s[: len(s) - len(best_seg)].strip("_- 　")
+        if remainder:
+            parsed[c] = (best_seg, remainder)
+
+    return parsed if len(parsed) >= 2 else None
+
+
+def _find_concatenated_axis_candidates(
+    candidate_cols: List[str],
+) -> Optional[Dict[str, Tuple[str, str, str]]]:
+    """区切り文字のない完全連結列名から、2列以上にまたがって繰り返し出現する
+    接頭辞・接尾辞を頻度ベースで検出する（Tier3の決定論的事前フィルタ。語彙も
+    LLMも使わない純粋な構造シグナル）。見つからなければ None を返し、
+    LLM呼び出しをスキップする（コスト制御）。
+
+    prefix方向・suffix方向のどちらか一貫した側で、より多くの列を説明できる
+    方を採用する。
+    """
+    if len(candidate_cols) < 2:
+        return None
+
+    prefix_parsed = _cluster_by_recurring_segment(candidate_cols, "prefix")
+    suffix_parsed = _cluster_by_recurring_segment(candidate_cols, "suffix")
+
+    best: Optional[Dict[str, Tuple[str, str]]] = None
+    for cand in (prefix_parsed, suffix_parsed):
+        if cand and (best is None or len(cand) > len(best)):
+            best = cand
+    if not best:
+        return None
+
+    return {c: (tok, ind, "concat") for c, (tok, ind) in best.items()}
+
+
+def _build_grid_info(
+    parsed: Dict[str, Tuple[str, str, str]],
+    candidate_cols: List[str],
+    col_names: List[str],
+    match_ratio_threshold: float,
+    completeness_threshold: float,
+    min_dominant_cardinality: int = 2,
+    reject_pure_digit_side: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """分類済みの parsed（列名→(axis_token, indicator, kind)）からグリッド
+    （軸数×指標数）としての妥当性を検証し、Wide_to_long の検出結果を組み立てる。
+    Tier1〜3のいずれの分類器から呼ばれても共通のロジック（語彙非依存）。
+
+    reject_pure_digit_side: True の場合、軸トークン・指標名のいずれかが
+    「数字のみの文字列」だけで構成されるグリッドを却下する
+    （_dedup_columns/_make_unique_columns が列名衝突解消で付与する "_1","_2"
+    のような連番接尾辞を軸と誤認しないためのガード。時系列の年数字
+    （例: "2020","2021"）は正当な軸トークンのため Tier1 では False にする）。
+    """
+    if not candidate_cols:
+        return None
+    if len(parsed) / len(candidate_cols) < match_ratio_threshold:
+        return None
+
+    axis_tokens = sorted({t for t, _, _ in parsed.values()})
+    indicators: List[str] = []
+    for _, ind, _ in parsed.values():
+        if ind not in indicators:
+            indicators.append(ind)
+
+    if len(axis_tokens) < 2 or len(indicators) < 2:
+        return None
+    if max(len(axis_tokens), len(indicators)) < min_dominant_cardinality:
+        return None
+    if reject_pure_digit_side:
+        if all(t.isdigit() for t in axis_tokens) or all(i.isdigit() for i in indicators):
+            return None
+
+    expected = len(axis_tokens) * len(indicators)
+    if len(parsed) / expected < completeness_threshold:
+        return None
+
+    label_cols = [c for c in col_names if c not in parsed]
+    axis_kind = next(iter(parsed.values()))[2]
+
+    return {
+        "label_cols": label_cols,
+        "axis_kind": axis_kind,
+        "axis_tokens": axis_tokens,
+        "indicators": indicators,
+        "parsed_cols": parsed,
+    }
+
+
 def detect_wide_to_long(
     df: Any,
     title: Optional[str] = None,
     filename: Optional[str] = None,
+    client: Any = None,
+    model: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    DataFrame が「時系列×複数指標」の複合列名を持つ横持ち表かを検出する。
+    DataFrame が「軸×複数指標」の複合列名を持つ横持ち表かを検出する
+    （軸は時系列に限らない。支店・性別・年代等の同質な繰り返し軸も対象）。
 
-    判定条件（すべて必須）:
-      - 列名が時系列トークン単体（_classify_col_time が非Noneを返す）の列は
+    Tier1（時系列語彙）→Tier2（区切り文字）→Tier3（LLM確認、client指定時のみ）
+    の順に試し、最初にグリッド検証（_build_grid_info）を通過した結果を返す。
+
+    共通の判定条件（いずれのTierも必須）:
+      - 列名が軸トークン単体（時系列なら _classify_col_time が非None）の列は
         対象外とする（detect_cross_table の担当領域と重複させない）
-      - 残りの列のうち、時系列+指標に分解できる列が全体の
-        _WIDE_TO_LONG_MATCH_RATIO（既定0.8）以上
-      - 検出された時系列トークンが2種類以上、かつ指標名が2種類以上
+      - 検出された軸トークンが2種類以上、かつ指標名が2種類以上
         （指標が1種類のみなら detect_cross_table の担当。この条件により
         両検出は互いに排他になる）
-      - 想定グリッド（時系列数×指標数）に対する実列数の割合が
-        _WIDE_TO_LONG_COMPLETENESS（既定0.6）以上（歯抜けが多すぎる場合は
-        誤検出とみなす）
+      - 一致率・グリッド完全性が閾値以上（Tier2/3はTier1より厳しい閾値）
 
     Returns:
-      検出された場合: {"label_cols", "time_var_name", "time_kind",
-                       "time_tokens", "indicators", "parsed_cols"}
+      検出された場合: {"label_cols", "axis_var_name", "axis_kind",
+                       "axis_tokens", "indicators", "parsed_cols"}
       検出されなかった場合: None
     """
     if df is None or df.empty or len(df.columns) < 4:
         return None
 
     col_names = [str(c) for c in df.columns]
-
-    parsed: Dict[str, Tuple[str, str, str]] = {}
     candidate_cols = [c for c in col_names if _classify_col_time(c) is None]
     if not candidate_cols:
         return None
+
+    # ── Tier1: 時系列語彙 ────────────────────────────────────────
+    parsed: Dict[str, Tuple[str, str, str]] = {}
     for c in candidate_cols:
         result = _split_time_indicator(c)
         if result:
             parsed[c] = result
+    grid = _build_grid_info(
+        parsed, candidate_cols, col_names,
+        _WIDE_TO_LONG_MATCH_RATIO, _WIDE_TO_LONG_COMPLETENESS,
+    )
+    if grid:
+        grid["axis_var_name"] = _VAR_NAME_MAP.get(grid["axis_kind"], _VAR_NAME_FALLBACK)
+        return grid
 
-    if len(parsed) / len(candidate_cols) < _WIDE_TO_LONG_MATCH_RATIO:
+    if len(col_names) < _AXIS_MIN_TABLE_COLS:
         return None
 
-    time_tokens = sorted({t for t, _, _ in parsed.values()})
-    indicators: List[str] = []
-    for _, ind, _ in parsed.values():
-        if ind not in indicators:
-            indicators.append(ind)
+    # ── Tier2: 区切り文字ベースの汎用軸分類（決定論的、LLM不使用） ──────
+    delim_parsed = _classify_columns_by_delimiter(candidate_cols)
+    if delim_parsed:
+        grid = _build_grid_info(
+            delim_parsed, candidate_cols, col_names,
+            _AXIS_SPLIT_MATCH_RATIO, _AXIS_SPLIT_COMPLETENESS,
+            _AXIS_MIN_DOMINANT_CARDINALITY, reject_pure_digit_side=True,
+        )
+        if grid:
+            grid["axis_var_name"] = _AXIS_GENERIC_VAR_NAME
+            return grid
 
-    if len(time_tokens) < 2 or len(indicators) < 2:
-        return None  # 指標が1種類のみなら detect_cross_table の担当
-
-    expected = len(time_tokens) * len(indicators)
-    if len(parsed) / expected < _WIDE_TO_LONG_COMPLETENESS:
+    # ── Tier3: 区切り文字なし複合列名 + LLM確認（clientが渡された場合のみ）──
+    if client is None:
         return None
 
-    label_cols = [c for c in col_names if c not in parsed]
-    time_kind = next(iter(parsed.values()))[2]
-    time_var_name = _VAR_NAME_MAP.get(time_kind, _VAR_NAME_FALLBACK)
+    concat_parsed = _find_concatenated_axis_candidates(candidate_cols)
+    if not concat_parsed:
+        return None
+    grid = _build_grid_info(
+        concat_parsed, candidate_cols, col_names,
+        _AXIS_SPLIT_MATCH_RATIO, _AXIS_SPLIT_COMPLETENESS,
+        _AXIS_MIN_DOMINANT_CARDINALITY, reject_pure_digit_side=True,
+    )
+    if not grid:
+        return None
 
-    return {
-        "label_cols": label_cols,
-        "time_var_name": time_var_name,
-        "time_kind": time_kind,
-        "time_tokens": time_tokens,
-        "indicators": indicators,
-        "parsed_cols": parsed,
-    }
+    axis_result = detect_category_axis(
+        grid["axis_tokens"], grid["indicators"], title, client, model
+    )
+    if not axis_result:
+        return None
+    grid["axis_var_name"] = axis_result["axis_name"]
+    return grid
 
 
 def stack_wide_to_long(df: Any, info: Dict[str, Any]) -> Any:
     """detect_wide_to_long の検出結果を使って横持ち→縦持ち変換する。
 
-    時系列トークンごとにサブフレームを作り（指標列は元の列出現順を維持し、
+    軸トークンごとにサブフレームを作り（指標列は元の列出現順を維持し、
     該当する元列が存在しない組み合わせは NaN で埋めてグリッドの歯抜けを
     許容する）、縦に連結する。
     """
     import pandas as pd
 
     label_cols = info["label_cols"]
-    time_var_name = info["time_var_name"]
-    time_tokens = info["time_tokens"]
+    axis_var_name = info["axis_var_name"]
+    axis_tokens = info["axis_tokens"]
     indicators = info["indicators"]
     parsed_cols = info["parsed_cols"]
 
     frames = []
-    for token in time_tokens:
+    for token in axis_tokens:
         sub = df[label_cols].copy()
-        sub.insert(len(label_cols), time_var_name, token)
+        sub.insert(len(label_cols), axis_var_name, token)
         for ind in indicators:
             src_col = next(
                 (c for c, (t, i, _k) in parsed_cols.items() if t == token and i == ind),
@@ -1908,18 +2116,26 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
     tables.extend(new_tables)
 
     # ── クロス集計検出（テーブル間で独立、全テーブル走査後に一括適用）────
-    # Wide_to_long（時系列×複数指標の複合列名）を先に試す。指標が1種類のみの
-    # 場合は None を返す設計のため、detect_cross_table（単一指標）とは
-    # 互いに排他的に発火する。
+    # Wide_to_long（軸×複数指標の複合列名。軸は時系列に限らない）を先に試す。
+    # 指標が1種類のみの場合は None を返す設計のため、detect_cross_table
+    # （単一指標）とは互いに排他的に発火する。
     for t in tables:
         if t.df is None or t.df.empty:
             continue
 
-        wtl_info = detect_wide_to_long(t.df, title=t.title, filename=filename)
+        wtl_info = detect_wide_to_long(
+            t.df, title=t.title, filename=filename, client=llm_client, model=llm_model
+        )
         if wtl_info:
             t.pre_wide_to_long_df = t.df
             t.wide_to_long_info = wtl_info
-            t.stacked_df = stack_wide_to_long(t.df, wtl_info)
+            stacked = stack_wide_to_long(t.df, wtl_info)
+            axis_var_name = wtl_info.get("axis_var_name", "")
+            if axis_var_name and axis_var_name in stacked.columns:
+                agg_mask = stacked[axis_var_name].astype(str).apply(_is_agg_label)
+                if agg_mask.any():
+                    stacked = stacked[~agg_mask].reset_index(drop=True)
+            t.stacked_df = stacked
             continue
 
         info = detect_cross_table(t.df, title=t.title, filename=filename)
