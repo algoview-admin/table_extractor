@@ -732,6 +732,7 @@ def _is_column_sum_verified(
 
 def remove_aggregates(
     df: Any,  # pd.DataFrame
+    protected_indices: Optional[Any] = None,
 ) -> Tuple[
     Any,
     List[Dict[str, Any]],
@@ -751,6 +752,11 @@ def remove_aggregates(
     集計行: dtype==object の列（ラベル列）に集計ラベルを持ち、かつその集計が「冗長」
             （同じ文脈で個別データが存在する）場合のみ除去する。
             個別データが存在しない場合（例: 全行が同一の集計ラベルのみの区分）は除去しない。
+
+    protected_indices: 冗長と判定されても除去してはいけない行の df 上のインデックス
+            集合（例:「うち」書き内訳分離（B-15）で内訳テーブルの親として参照
+            済みの合計行。この行を削除すると内訳テーブルが参照する親が本体側から
+            消え、対応関係が追えなくなるため保護する）。
 
     Returns:
         cleaned_df               — 集計行・集計列を除去した DataFrame（index リセット済み）
@@ -775,6 +781,8 @@ def remove_aggregates(
                                     後から参照できるよう全行分を記録する。
     """
     import pandas as pd
+
+    protected_set = set(protected_indices) if protected_indices else set()
 
     # ── ラベル列の特定（文字列型の列）────────────────────────────
     """
@@ -897,6 +905,8 @@ def remove_aggregates(
     _exact_agg_set: frozenset = frozenset(kw.lower() for kw in AGG_KEYWORDS)
 
     for idx in df.index:
+        if idx in protected_set:
+            continue
         for col in label_cols:
             val = df.at[idx, col]
             if _is_null_scalar(val):
@@ -1111,8 +1121,9 @@ def fill_grouping_cols(df: Any) -> Tuple[Any, List[str]]:  # noqa: C901
 #
 # remove_aggregates（「計」「合計」等の冗長な集計行を削除する）は、この機能が
 # 親として参照する「合計」行そのものを削除対象とみなす場合があるため、
-# 必ず remove_aggregates より前に実行し、合計行が消える前に親情報を
-# 確定させる（詳細は normalize_tables 内のコメントを参照）。
+# 必ず remove_aggregates より前に実行した上で、親として使われた行の
+# インデックスを remove_aggregates に保護対象として渡し、本体テーブルから
+# 消えないようにする（詳細は normalize_tables 内のコメントを参照）。
 
 
 _UCHI_OPEN_BRACKETS = "（("
@@ -1176,7 +1187,10 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
 
     Returns:
       検出された場合: {"label_col", "parent_col_name", "child_col_name",
-                       "rows"（{idx: (parent_value, child_label)}）, "match_count"}
+                       "rows"（{idx: (parent_value, child_label)}）, "match_count",
+                       "parent_indices"（親として参照された df 上のインデックス集合。
+                       remove_aggregates に保護対象として渡し、内訳テーブルが
+                       参照する親行が本体側から消えないようにするために使う）}
       検出されなかった場合: None
     """
     import pandas as pd
@@ -1236,9 +1250,11 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
         return True
 
     resolved: Dict[Any, Tuple[Any, str]] = {}
+    parent_indices: set = set()
     for idx, child_label in best_matches.items():
         pos = pos_of[idx]
         parent_value = None
+        parent_idx = None
 
         # 1. 直近の「合計」ラベル行を優先して探す
         for p in range(pos - 1, -1, -1):
@@ -1250,6 +1266,7 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
                 continue
             if _is_agg_label(str(pval)):
                 parent_value = pval
+                parent_idx = pidx
                 break
 
         # 2. 見つからなければ直近の非「うち」行にフォールバック
@@ -1262,10 +1279,13 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
                 if _is_null_scalar(pval) or pidx in best_matches:
                     continue
                 parent_value = pval
+                parent_idx = pidx
                 break
 
         if parent_value is not None:
             resolved[idx] = (parent_value, child_label)
+            if parent_idx is not None:
+                parent_indices.add(parent_idx)
 
     if not resolved:
         return None
@@ -1276,14 +1296,18 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
         "child_col_name": f"子{best_col}",
         "rows": resolved,
         "match_count": len(resolved),
+        "parent_indices": parent_indices,
     }
 
 
-def apply_uchi_split(df: Any, info: Dict[str, Any]) -> Tuple[Any, Any]:
+def apply_uchi_split(df: Any, info: Dict[str, Any]) -> Tuple[Any, Any, set]:
     """detect_uchi_breakdown の検出結果を使って、うち内訳行をメインテーブルから
     除去し、親子関係を保った内訳テーブルを生成する。
 
-    Returns: (main_df, breakdown_df)
+    Returns: (main_df, breakdown_df, protected_indices)
+      protected_indices — main_df（reset_index 後）上で、内訳テーブルが親として
+      参照している行の新インデックス集合。remove_aggregates にそのまま渡すと、
+      これらの行が「冗長な合計行」として誤って削除されるのを防げる。
     """
     import pandas as pd
 
@@ -1291,8 +1315,14 @@ def apply_uchi_split(df: Any, info: Dict[str, Any]) -> Tuple[Any, Any]:
     parent_col_name = info["parent_col_name"]
     child_col_name = info["child_col_name"]
     rows: Dict[Any, Tuple[Any, str]] = info["rows"]
+    parent_indices = info.get("parent_indices", set())
 
-    main_df = df.drop(index=list(rows.keys())).reset_index(drop=True)
+    dropped = set(rows.keys())
+    remaining_index_order = [i for i in df.index if i not in dropped]
+    new_pos = {old: new for new, old in enumerate(remaining_index_order)}
+    protected_indices = {new_pos[p] for p in parent_indices if p in new_pos}
+
+    main_df = df.drop(index=list(dropped)).reset_index(drop=True)
 
     other_cols = [c for c in df.columns if c != label_col]
     breakdown_rows = []
@@ -1313,7 +1343,7 @@ def apply_uchi_split(df: Any, info: Dict[str, Any]) -> Tuple[Any, Any]:
     )
     breakdown_df = breakdown_df[ordered_cols].reset_index(drop=True)
 
-    return main_df, breakdown_df
+    return main_df, breakdown_df, protected_indices
 
 
 # ---------------------------------------------------------------------------
@@ -1702,11 +1732,17 @@ def detect_and_split_units(df: Any) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _apply_agg_and_unit_split(t: Any, df: Any) -> Any:
+def _apply_agg_and_unit_split(
+    t: Any, df: Any, protected_indices: Optional[Any] = None
+) -> Any:
     """集計行・集計列の除去、単位混在の分離を1テーブルに適用し、結果の df を返す。
 
     normalize_tables() のメインループと、うち分離で新規生成された内訳テーブルの
     両方から呼ばれる共通処理（DetectedTable の該当フィールドを in-place 更新する）。
+
+    protected_indices: 「うち」書き分離（B-15）が内訳テーブルの親として参照済みの
+    合計行インデックス（apply_uchi_split が返すもの）。remove_aggregates に
+    そのまま渡し、冗長行として誤って削除されないようにする。
     """
     (
         cleaned_df,
@@ -1715,7 +1751,7 @@ def _apply_agg_and_unit_split(t: Any, df: Any) -> Any:
         agg_row_positions,
         agg_row_meta,
         agg_col_meta,
-    ) = remove_aggregates(df)
+    ) = remove_aggregates(df, protected_indices=protected_indices)
     t.pre_agg_df = df if (agg_rows or agg_cols) else None
     t.agg_rows_removed = agg_rows
     t.agg_cols_removed = agg_cols
@@ -1748,9 +1784,13 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          列構造を確定させる処理のため、他の整形より前に行う（Transpose適用時は
          raw_header_rows が転置前の構造を指すため対象外）
       3. グルーピング列の前方補完
-      4. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates が親として
-         参照される「合計」行自体を冗長行として削除してしまう場合があるため、
-         合計行が消える前に親情報を確定させる必要があり、必ず5.より前に行う。
+      4. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
+         親として参照される「合計」行も冗長行とみなして削除してしまうため、
+         うち分離を必ず5.より前に行った上で、親として使われた行の
+         インデックス（apply_uchi_split が返す protected_indices）を
+         remove_aggregates に渡し、その行が本体テーブルから消えないよう
+         保護する（内訳テーブル側は親の値を保持しているだけなので、本体
+         からも合計行自体が消えると対応関係を追えなくなるため）。
          分離結果は独立した新規 DetectedTable として tables に追加し、以降の
          整形処理（5〜6）の対象にする（メインテーブルと同じ「実テーブル」として
          Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
@@ -1834,9 +1874,10 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         t.pre_fill_df = pre_fill_df_candidate if filled_cols else None
 
         uchi_info = detect_uchi_breakdown(df)
+        uchi_protected_indices: set = set()
         if uchi_info:
             t.pre_uchi_split_df = df
-            df, breakdown_df = apply_uchi_split(df, uchi_info)
+            df, breakdown_df, uchi_protected_indices = apply_uchi_split(df, uchi_info)
             t.uchi_split_info = uchi_info
             t.uchi_breakdown_df = breakdown_df
 
@@ -1856,7 +1897,7 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
                 )
             )
 
-        t.df = _apply_agg_and_unit_split(t, df)
+        t.df = _apply_agg_and_unit_split(t, df, protected_indices=uchi_protected_indices)
 
     # ── うち内訳テーブルにも集計除去・単位分離を適用する ────────────
     # Transpose・グルーピング列前方補完・うち検出自身は対象外（既に整形済みの
