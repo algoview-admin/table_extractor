@@ -900,7 +900,10 @@ def _render_uchi_split_body(t: "DetectedTable") -> None:
     """「うち」書きの内訳を別テーブルへ分離した詳細（Streamlit ウィジェット版）。"""
     info = t.uchi_split_info
     before = t.pre_uchi_split_df
-    after = t.df
+    # 変換後は「このうち分離処理」の結果のみを示す（後続の集計行除去まで
+    # 進んだ t.df を使うと、無関係な他区分の合計行除去まで「うち分離が
+    # 消した」ように誤表示されるため、集計行除去の直前スナップショットを使う）。
+    after = t.pre_agg_df if t.pre_agg_df is not None else t.df
     breakdown = t.uchi_breakdown_df
     if not info or before is None or after is None or breakdown is None:
         return
@@ -957,7 +960,8 @@ def _render_uchi_split_body_html(t: "DetectedTable") -> str:
     """「うち」書きの内訳を別テーブルへ分離した詳細（HTML 文字列版）。"""
     info = t.uchi_split_info
     before = t.pre_uchi_split_df
-    after = t.df
+    # 変換後は「このうち分離処理」の結果のみを示す（理由は Streamlit 版と同じ）。
+    after = t.pre_agg_df if t.pre_agg_df is not None else t.df
     breakdown = t.uchi_breakdown_df
     if not info or before is None or after is None or breakdown is None:
         return ""
