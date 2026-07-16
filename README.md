@@ -22,24 +22,26 @@ ExcelファイルからLLMを活用してテーブルを自動検出・整形・
 
 ```
 table_extractor/
-├── app.py                       # Streamlit メインアプリ（ページ設定・CSS・ステップルーティング）
+├── app.py                          # Streamlit メインアプリ（ページ設定・CSS・ステップルーティング）
 ├── src/
-│   ├── step1_upload.py          # Step1: ファイル読込
-│   ├── step2_detect.py          # Step2: テーブル検出
-│   ├── step3_normalize.py       # Step3: テーブル構造正規化
-│   ├── step4_analyze.py         # Step4: LLMによるテーブル関係分析
-│   ├── step5_suggest.py         # Step5: 新規テーブル提案の集約
-│   ├── step6_select.py          # Step6: エクスポート対象の選択・グルーピング
-│   ├── step7_export.py          # Step7: CSV / ZIP エクスポート
-│   ├── keywords.py              # dictionaries/*.yaml のローダー
-│   ├── models.py                # データクラス定義
-│   └── dictionaries/            # 単位・集計語・時間パターン等のYAML辞書
+│   ├── step1_upload.py             # Step1: ファイル読込
+│   ├── step2_detect.py             # Step2: テーブル検出
+│   ├── step3_normalize_determ.py   # Step3: テーブル整形（決定論的処理）
+│   ├── step3_normalize_llm.py      # Step3: テーブル整形（LLM処理）
+│   ├── step4_analyze.py            # Step4: LLMによるテーブル関係分析
+│   ├── step5_suggest.py            # Step5: 新規テーブル提案の集約
+│   ├── step6_select.py             # Step6: エクスポート対象の選択・グルーピング
+│   ├── step7_export.py             # Step7: CSV / ZIP エクスポート
+│   ├── keywords.py                 # dictionaries/*.yaml のローダー
+│   ├── models.py                   # データクラス定義
+│   └── dictionaries/               # 単位・集計語・時間パターン等のYAML辞書
 ├── streamlit_ui/
-│   ├── shared.py                 # 共通UI（ヘッダー・ステップ遷移・プロジェクト保存/復元）
-│   └── step1〜7_*.py             # 各ステップの画面表示ロジック（src/ の処理結果を描画）
-├── docs/                         # 各ステップ・全体の処理フロー図（HTML）
-├── input_data/                   # 動作確認用サンプルExcelファイル
-├── project/                      # 保存されたプロジェクト（.tep）ファイル
+│   ├── shared.py                    # 共通UI（ヘッダー・ステップ遷移・プロジェクト保存/復元）
+│   └── step1〜7_*.py                # 各ステップの画面表示ロジック（src/ の処理結果を描画）
+├── docs/                            # 各ステップ・全体の処理フロー図（HTML）
+│   └── essential/                   # Step3整形処理の業務向けフローチャート
+├── input_data/                      # 動作確認用サンプルExcelファイル
+├── project/                         # 保存されたプロジェクト（.tep）ファイル
 ├── requirements.txt
 └── env.example
 ```
