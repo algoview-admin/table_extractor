@@ -311,19 +311,48 @@ def _find_column_groups(
     end_row: int,
     max_col: int,
     gap_threshold: int = 2,
+    row_widths: Optional[List[int]] = None,
 ) -> List[Tuple[int, int]]:
-    """行スパン内で列の空白を境に (start_col, end_col) のペアを返す。"""
+    """行スパン内で列の空白を境に (start_col, end_col) のペアを返す。
+
+    末尾の空列（この行スパン内で最後にデータがある列より右側）は、この
+    テーブル自身の行が本来持っていた幅までは無条件に最後のグループへ含める
+    （黙って切り捨てると、不可逆な列削除がユーザー確認なしに Step2 で
+    行われてしまい、Step3 の無効カラム検出・削除機能（ユーザー確認必須）を
+    経由できなくなるため）。実際に削除するかどうかの判断は Step3 側の
+    ユーザー確認に委ねる。
+
+    ここでの max_col はシート全体で共有される絶対列位置の上限であり、
+    シート内の別の行帯（別テーブル）がたまたま広い場合にそこまで含めて
+    しまうと、無関係な列を巻き込んでしまう（列は全テーブルで共通の絶対
+    座標のため）。row_widths（CSV由来。行ごとの本来のフィールド数）が
+    渡された場合は、この行帯自身の行が実際に持っていた最大幅までしか
+    拡張しない。row_widths が無い場合（Excel。行ごとの「本来の幅」という
+    概念がない）は、内側の空列と同じ許容量（gap_threshold 未満）だけ
+    保守的に末尾へ残す。
+
+    内側の空列は、従来通り gap_threshold 以上連続した場合のみ別テーブル
+    領域として分割する（側並びの複数テーブルを区別するため）。
+    """
     col_has_content = [False] * (max_col + 1)
     for r in range(start_row, end_row + 1):
         for c in range(1, max_col + 1):
             if _is_filled(grid[r][c]):
                 col_has_content[c] = True
 
+    last_content_col = max(
+        (c for c in range(1, max_col + 1) if col_has_content[c]), default=0
+    )
+    if last_content_col == 0:
+        return []
+
     groups: List[Tuple[int, int]] = []
     group_start: Optional[int] = None
     empty_streak = 0
 
-    for c in range(1, max_col + 1):
+    # 末尾の空列は区切りになり得ないため、実データがある最後の列までのみを
+    # 対象に gap_threshold 判定を行う（それより右は下記で個別に処理する）。
+    for c in range(1, last_content_col + 1):
         if col_has_content[c]:
             if group_start is None:
                 group_start = c
@@ -337,11 +366,19 @@ def _find_column_groups(
                     empty_streak = 0
 
     if group_start is not None:
-        last_filled = max(
-            (c for c in range(group_start, max_col + 1) if col_has_content[c]),
-            default=group_start,
-        )
-        groups.append((group_start, last_filled))
+        groups.append((group_start, last_content_col))
+
+    if groups and last_content_col < max_col:
+        if row_widths is not None:
+            local_max_col = max(
+                (row_widths[r] for r in range(start_row, min(end_row, len(row_widths) - 1) + 1)),
+                default=last_content_col,
+            )
+        else:
+            local_max_col = last_content_col + (gap_threshold - 1)
+        trailing_end = max(last_content_col, min(local_max_col, max_col))
+        gs, _ge = groups[-1]
+        groups[-1] = (gs, trailing_end)
 
     return groups
 
@@ -750,6 +787,7 @@ def _detect_tables_in_grid(
     max_col: int,
     sheet_name: str,
     table_counter: Dict[str, int],
+    row_widths: Optional[List[int]] = None,
 ) -> List[DetectedTable]:
     """グリッドからテーブルを検出して DetectedTable のリストを返す。"""
     if max_row == 0 or max_col == 0:
@@ -763,7 +801,7 @@ def _detect_tables_in_grid(
         band_end = reg["band_end"]
 
         col_groups = _find_column_groups(
-            grid, band_start, band_end, max_col, gap_threshold=2
+            grid, band_start, band_end, max_col, gap_threshold=2, row_widths=row_widths
         )
 
         first_header_row = min(reg["header_rows"]) if reg["header_rows"] else band_start
@@ -828,6 +866,7 @@ def detect_tables(
         tables = _detect_tables_in_grid(
             sheet.grid, sheet.max_row, sheet.max_col,
             sheet.sheet_name, table_counter,
+            row_widths=sheet.row_widths,
         )
         all_tables.extend(tables)
 

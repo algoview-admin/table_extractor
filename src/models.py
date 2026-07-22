@@ -10,6 +10,7 @@ class SheetGrid:
     grid: List[List[Any]]
     max_row: int
     max_col: int
+    row_widths: Optional[List[int]] = None  # 1-indexed。CSV各行の実際のフィールド数（パディング前）。行ごとに幅が異なるCSVで、末尾の空列がどこまで「その行本来の範囲」かを判定するために使う（Excelはmax_col一律のためNone）。
 
 
 @dataclass

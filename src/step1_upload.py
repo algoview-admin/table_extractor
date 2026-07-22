@@ -260,9 +260,21 @@ def _parse_csv_cell(raw: str) -> Any:
     return s
 
 
-def _build_grid_from_csv(content: bytes) -> Tuple[List[List[Any]], int, int]:
+def _build_grid_from_csv(
+    content: bytes,
+) -> Tuple[List[List[Any]], int, int, List[int]]:
     """CSV バイト列から 1-indexed の2次元 grid を構築する（Excel の
-    _build_value_grid と同じ形の出力。行数・列数が不揃いな行は右側を None 埋めする）。"""
+    _build_value_grid と同じ形の出力。行数・列数が不揃いな行は右側を None 埋めする）。
+
+    行ごとの実際のフィールド数（パディング前、末尾の明示的な空フィールドは
+    含む）も row_widths として返す。1つの CSV ファイル内に幅の異なる複数の
+    テーブルが含まれる場合、grid 自体はファイル全体で共通の max_col に
+    揃えて右側を None 埋めするため、grid の値だけでは「その行の表が本来
+    どこまでの幅を持つか」と「たまたま他の行のせいで grid 上は列が
+    存在するが、この行にとっては無関係な padding か」を区別できない。
+    row_widths は Step2 側でこの区別に使う（末尾の空列をどこまで
+    そのテーブル自身の列として扱ってよいかの判定）。
+    """
     import csv as _csv
 
     text: Optional[str] = None
@@ -282,16 +294,18 @@ def _build_grid_from_csv(content: bytes) -> Tuple[List[List[Any]], int, int]:
         rows.pop()
 
     if not rows:
-        return [[]], 0, 0
+        return [[]], 0, 0, []
 
     max_row = len(rows)
     max_col = max(len(r) for r in rows)
     grid: List[List[Any]] = [[None] * (max_col + 1) for _ in range(max_row + 1)]
+    row_widths: List[int] = [0] * (max_row + 1)
     for i, row in enumerate(rows, start=1):
+        row_widths[i] = len(row)
         for j, v in enumerate(row, start=1):
             grid[i][j] = v
 
-    return grid, max_row, max_col
+    return grid, max_row, max_col, row_widths
 
 
 def load_csv(content: bytes) -> Tuple[List[SheetGrid], List[str]]:
@@ -300,6 +314,12 @@ def load_csv(content: bytes) -> Tuple[List[SheetGrid], List[str]]:
     Step2 のテーブル検出（タイトル行・ヘッダー行の認識）が Excel と共通の
     grid ベースパイプライン（detect_tables）で処理できるようにするため、
     pandas の header=0 決め打ちでは表現できない grid 形式で返す。"""
-    grid, max_row, max_col = _build_grid_from_csv(content)
-    sheet = SheetGrid(sheet_name="CSV", grid=grid, max_row=max_row, max_col=max_col)
+    grid, max_row, max_col, row_widths = _build_grid_from_csv(content)
+    sheet = SheetGrid(
+        sheet_name="CSV",
+        grid=grid,
+        max_row=max_row,
+        max_col=max_col,
+        row_widths=row_widths,
+    )
     return [sheet], ["CSV"]

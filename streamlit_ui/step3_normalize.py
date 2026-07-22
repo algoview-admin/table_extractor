@@ -735,6 +735,12 @@ def _render_invalid_col_confirm(t: "DetectedTable") -> None:
     removed = t.invalid_cols_removed
     if not removed:
         st.caption("無効カラム候補はありましたが、削除は選択されませんでした。")
+        if st.button(
+            "↩️ 選び直す", key=f"invcol_undo_{t.table_id}"
+        ):
+            t.pre_invalid_col_df = None
+            t.invalid_col_applied = False
+            st.rerun()
         return
 
     st.caption(f"無効カラム **{len(removed)}** 列を削除しました")
@@ -762,6 +768,15 @@ def _render_invalid_col_confirm(t: "DetectedTable") -> None:
         st.markdown(
             _df_to_html(t.df.astype(str), max_height=340), unsafe_allow_html=True
         )
+
+    if st.button(
+        "↩️ 削除を取り消す（列構成を元に戻す）", key=f"invcol_undo_{t.table_id}"
+    ):
+        t.df = t.pre_invalid_col_df
+        t.pre_invalid_col_df = None
+        t.invalid_cols_removed = []
+        t.invalid_col_applied = False
+        st.rerun()
 
 
 def _render_fill_cols_body(t: "DetectedTable") -> None:
