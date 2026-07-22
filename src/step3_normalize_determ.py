@@ -281,6 +281,156 @@ def _dedup_columns(columns: List[str]) -> List[str]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Pivot 検出と変換（(属性, 値) ペアが繰り返される縦持ち表 → 横持ち昇格）
+# ---------------------------------------------------------------------------
+# 行が (属性名, 値) のペアで繰り返されているケースを検出し、属性名を列見出しに
+# 昇格する（Huang & Wu の Pivot 操作、pandas の df.pivot() 相当）。列名判断が
+# 不要（属性名をそのまま列名に採用するだけ）な純構造変換のため、LLMは使わない。
+# Transpose・軸展開より前（normalize_tables 内）で適用する。
+
+
+def detect_pivot_kv(df: Any) -> Optional[Dict[str, Any]]:
+    """DataFrame が (属性名, 値) のペアで繰り返される縦持ち表であるかを検出する。
+
+    末尾2列を (属性列, 値列) とみなし、先頭列（0列以上）はキー/グルーピング列
+    として扱う。キー列がある場合は同一キーが連続する範囲を1レコードとし、
+    キー列がない場合は属性列の値が現レコード内で既出になった時点を次レコードの
+    境界とみなす。レコードによって属性の一部が欠落していても許容する
+    （属性集合の和を列にし、欠落セルは空欄）。
+
+    Returns:
+        検出された場合は {key_cols, attr_col, value_col, attributes, record_count}、
+        検出されなかった場合は None
+    """
+    import pandas as pd
+    import pandas.api.types as _pat
+
+    if df is None or df.empty or len(df.columns) < 2:
+        return None
+
+    col_names = list(df.columns)
+    attr_col = col_names[-2]
+    value_col = col_names[-1]
+    key_cols = col_names[:-2]
+
+    attr_series = df[attr_col]
+    if (
+        _pat.is_numeric_dtype(attr_series)
+        or _pat.is_bool_dtype(attr_series)
+        or _pat.is_datetime64_any_dtype(attr_series)
+    ):
+        return None
+
+    attr_values = [None if pd.isna(v) else str(v).strip() for v in attr_series]
+    if any(not v for v in attr_values):
+        return None
+
+    distinct_attrs = list(dict.fromkeys(attr_values))
+    n_attrs = len(distinct_attrs)
+    if n_attrs < 2:
+        return None
+
+    if key_cols:
+        key_str_values = [
+            tuple(str(x) for x in k)
+            for k in df[key_cols].itertuples(index=False, name=None)
+        ]
+    else:
+        key_str_values = [None] * len(attr_values)
+        # キー列がない場合、属性が全行数の半分以下（＝各属性が最低2回は
+        # 繰り返される見込み）でなければ「繰り返しペア構造」とは言えない
+        # （キー列がある場合はキー単位でレコードが確定するため、この比率
+        # 制約は不要かつ不揃いレコードを誤って弾いてしまう）
+        if n_attrs > len(attr_values) / 2:
+            return None
+
+    records: List[List[str]] = []
+    seen_in_current: set = set()
+    last_key = None
+    for i, a in enumerate(attr_values):
+        new_record = (
+            (i == 0 or key_str_values[i] != last_key)
+            if key_cols
+            else (i == 0 or a in seen_in_current)
+        )
+        if new_record:
+            records.append([])
+            seen_in_current = set()
+        if a in seen_in_current:
+            # 同一レコード内で属性が重複＝KVペア構造として不正（誤検出防止）
+            return None
+        records[-1].append(a)
+        seen_in_current.add(a)
+        last_key = key_str_values[i]
+
+    if len(records) < 2:
+        return None
+
+    # 過半数のレコードが全属性を含む「完全なレコード」であることを要求する
+    # （誤検出防止。属性の一部欠落は許容するが、大半が不完全ならKV構造ではない）
+    complete_records = sum(1 for r in records if len(set(r)) == n_attrs)
+    if complete_records < max(1, len(records) // 2):
+        return None
+
+    return {
+        "key_cols": list(key_cols),
+        "attr_col": attr_col,
+        "value_col": value_col,
+        "attributes": distinct_attrs,
+        "record_count": len(records),
+    }
+
+
+def apply_pivot_kv(df: Any, info: Dict[str, Any]) -> Any:
+    """detect_pivot_kv が検出した (属性, 値) ペアの繰り返し構造を横持ちに変換する。
+
+    detect_pivot_kv と同一のレコード境界判定ロジックを用いる。欠落している
+    属性セルは空文字とする（不揃いレコードを許容）。"""
+    import pandas as pd
+
+    key_cols = info["key_cols"]
+    attr_col = info["attr_col"]
+    value_col = info["value_col"]
+    attributes = info["attributes"]
+
+    attr_values = [str(v).strip() for v in df[attr_col]]
+    values = list(df[value_col])
+    if key_cols:
+        key_values = list(df[key_cols].itertuples(index=False, name=None))
+        key_str_values = [tuple(str(x) for x in k) for k in key_values]
+    else:
+        key_values = [None] * len(df)
+        key_str_values = [None] * len(df)
+
+    records: List[Dict[str, Any]] = []
+    record_keys: List[Any] = []
+    seen_in_current: set = set()
+    last_key = None
+    for i, a in enumerate(attr_values):
+        new_record = (
+            (i == 0 or key_str_values[i] != last_key)
+            if key_cols
+            else (i == 0 or a in seen_in_current)
+        )
+        if new_record:
+            records.append({})
+            record_keys.append(key_values[i])
+            seen_in_current = set()
+        records[-1][a] = values[i]
+        seen_in_current.add(a)
+        last_key = key_str_values[i]
+
+    out_rows = []
+    for rk, attrs in zip(record_keys, records):
+        row_vals = list(rk) if key_cols else []
+        row_vals += [attrs.get(a, "") for a in attributes]
+        out_rows.append(row_vals)
+
+    out_cols = _dedup_columns([str(c) for c in list(key_cols) + list(attributes)])
+    return pd.DataFrame(out_rows, columns=out_cols).reset_index(drop=True)
+
+
 def detect_multi_axis_header(
     raw_header_rows: List[List[Any]], roles: Optional[List[str]] = None
 ) -> Optional[Dict[str, Any]]:
@@ -2017,34 +2167,40 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          全テーブルに無条件で適用するベースライン。name/unit の役割に応じて
          複数ヘッダー行を1行の列名に統合する（Step2は行数・役割の構造認識
          のみで、統合結果は一切生成しないため、Step3側で必ず適用する）
-      2. Transpose検出・変換（LLM、step3_normalize_llm）— 他の処理はこの表が
+      2. Pivot検出と変換（決定論的・LLM不使用） — 行が (属性名,値) のペアで
+         繰り返される縦持ち表を検出し、属性名を列見出しに昇格する。属性名を
+         そのまま列名に採用するだけで命名判断が不要なためLLMは使わない。
+         1.が確定させた列構造を作り変える純構造変換のため、3./4.より前に行う。
+         発火した表は軸構造を持たないため、以降の軸展開・Transpose判定は
+         対象外になる
+      3. Transpose検出・変換（LLM、step3_normalize_llm）— 他の処理はこの表が
          正しい向き（エンティティ＝行、属性＝列）であることを前提とするため
-         1.の直後に行う。ただし、3.の構造判定（決定論的・LLM不使用）を
+         1.・2.の直後に行う。ただし、4.の構造判定（決定論的・LLM不使用）を
          先に行い、軸候補が構造的に見つかった表は Transpose 判定自体を
          スキップする（1.が書いた"_"連結済みの列名を Transpose 判定用LLMが
-         単一エンティティ名と誤読し「向きが逆」と誤判定すると、3.が
+         単一エンティティ名と誤読し「向きが逆」と誤判定すると、4.が
          Transpose適用時は対象外になる仕様のため永久に軸展開の機会を
          失ってしまうのを防ぐため）
-      3. 多段ヘッダーの検出と解決機能（軸展開。決定論的分類＋必要時のみLLM） —
+      4. 多段ヘッダーの検出と解決機能（軸展開。決定論的分類＋必要時のみLLM） —
          1.のベースラインが「独立した複数カテゴリ軸の交差」と判定できる場合、
          縦持ち展開でその結果を上書きする
          （Transpose適用時は raw_header_rows が転置前の構造を指すため対象外。
          ただし上記の理由により軸候補がある表ではTransposeは適用されない）
-      4. グルーピング列の前方補完
-      5. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
+      5. グルーピング列の前方補完
+      6. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
          親として参照される「合計」行も冗長行とみなして削除してしまうため、
-         うち分離を必ず6.より前に行った上で、親として使われた行の
+         うち分離を必ず7.より前に行った上で、親として使われた行の
          インデックス（apply_uchi_split が返す protected_indices）を
          remove_aggregates に渡し、その行が本体テーブルから消えないよう
          保護する（内訳テーブル側は親の値を保持しているだけなので、本体
          からも合計行自体が消えると対応関係を追えなくなるため）。
          分離結果は独立した新規 DetectedTable として tables に追加し、以降の
-         整形処理（6〜7）の対象にする（メインテーブルと同じ「実テーブル」として
+         整形処理（7〜8）の対象にする（メインテーブルと同じ「実テーブル」として
          Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
-      6. 集計行・集計列の除去
-      7. 単位混在の分離（指標マスタ生成）
+      7. 集計行・集計列の除去
+      8. 単位混在の分離（指標マスタ生成）
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
-      8. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
+      9. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
 
     DetectedTable の各フィールドを in-place で書き換え、tables 自体にも
     うち内訳テーブルを追加する（呼び出し元が持つ同一リストへの参照を
@@ -2080,6 +2236,17 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
                 i - 1 for i in range(1, len(t.raw_header_rows)) if i not in used_idx
             }
 
+        # Pivot 検出と変換（(属性,値) ペアが繰り返される縦持ち表 → 横持ち昇格）:
+        # 決定論的な純構造変換で、①が確定させた列構造そのものを作り変える
+        # ため、軸展開判定・Transpose判定より前に行う。発火した表は KV ペア
+        # 表（2列 or キー列+2列）であり多段ヘッダー軸構造を持たないため、
+        # 以降の軸展開・Transpose判定は対象外にする。
+        pivot_result = detect_pivot_kv(df)
+        if pivot_result:
+            t.pre_pivot_df = df
+            df = apply_pivot_kv(df, pivot_result)
+            t.pivot_info = pivot_result
+
         # 多段ヘッダーの検出と解決機能（軸展開）の構造判定は決定論的でLLMを
         # 使わないため、Transposeより先に（無条件で）行っておく。①が書いた
         # "_"連結済みの列名（例: "東京_売上"）は単一のエンティティ名のように
@@ -2088,10 +2255,11 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         # transpose_result が真になり、以降②が対象外になって軸展開の
         # 機会を永久に失ってしまうため、構造的に軸候補がある（＝すでに
         # 多段ヘッダーとして解決すべき対象だと分かっている）表は
-        # Transpose判定そのものをスキップする。
+        # Transpose判定そのものをスキップする。Pivot発火時も同様の理由で
+        # スキップする。
         axis_info = (
             detect_multi_axis_header(t.raw_header_rows, roles=t.raw_header_roles)
-            if t.raw_header_rows
+            if t.raw_header_rows and not pivot_result
             else None
         )
         has_axis_structure = axis_info is not None and (
@@ -2099,7 +2267,7 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         )
 
         transpose_result = None
-        if not has_axis_structure:
+        if not pivot_result and not has_axis_structure:
             transpose_result = detect_transpose(df, llm_client, llm_model)
             if transpose_result:
                 t.pre_transpose_df = df

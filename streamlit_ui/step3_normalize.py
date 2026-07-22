@@ -557,6 +557,114 @@ def _render_transpose_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
+def _render_pivot_body(t: "DetectedTable") -> None:
+    """Pivot検出と変換（(属性,値)ペアの横持ち昇格）の詳細（Streamlit ウィジェット版）。"""
+    before = t.pre_pivot_df
+    after = t.df
+    info = t.pivot_info
+    if not info or before is None or after is None:
+        return
+
+    key_cols = info.get("key_cols", [])
+    attr_col = info.get("attr_col", "")
+    value_col = info.get("value_col", "")
+    attributes = info.get("attributes", [])
+    record_count = info.get("record_count", 0)
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    key_html = " ".join(_badge(c, "156,163,175") for c in key_cols) or "（なし）"
+    attr_html = " ".join(_badge(c, "156,163,175") for c in [attr_col, value_col])
+    new_col_html = " ".join(_badge(c, "52,211,153") for c in attributes)
+
+    st.markdown(
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"キー列: {key_html}<br>"
+        f"属性列/値列: {attr_html}<br>"
+        f"列見出しに昇格した属性: {new_col_html}（{len(attributes)} 種類）<br>"
+        f"生成されたレコード数: <b>{record_count}</b>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    new_col_set = set(attributes)
+    col_b, col_a = st.columns(2)
+    with col_b:
+        st.markdown(
+            f"**変換前**（{len(before.columns)} 列 × {len(before)} 行 / "
+            f"オレンジ列 = 属性列・値列）"
+        )
+        st.markdown(
+            _df_to_html(
+                before, max_height=340, highlight_col_names={attr_col, value_col}
+            ),
+            unsafe_allow_html=True,
+        )
+    with col_a:
+        st.markdown(
+            f"**変換後**（{len(after.columns)} 列 × {len(after)} 行 / "
+            f"緑列 = 昇格で生まれた列）"
+        )
+        st.markdown(
+            _df_to_html(after, max_height=340, green_col_names=new_col_set),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_pivot_body_html(t: "DetectedTable") -> str:
+    """Pivot検出と変換（(属性,値)ペアの横持ち昇格）の詳細（HTML 文字列版）。"""
+    before = t.pre_pivot_df
+    after = t.df
+    info = t.pivot_info
+    if not info or before is None or after is None:
+        return ""
+
+    key_cols = info.get("key_cols", [])
+    attr_col = info.get("attr_col", "")
+    value_col = info.get("value_col", "")
+    attributes = info.get("attributes", [])
+    record_count = info.get("record_count", 0)
+
+    def _badge(text: str, color: str) -> str:
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+            f"{_html.escape(text)}</span>"
+        )
+
+    key_html = " ".join(_badge(c, "156,163,175") for c in key_cols) or "（なし）"
+    attr_html = " ".join(_badge(c, "156,163,175") for c in [attr_col, value_col])
+    new_col_html = " ".join(_badge(c, "52,211,153") for c in attributes)
+    meta_html = (
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"キー列: {key_html}<br>"
+        f"属性列/値列: {attr_html}<br>"
+        f"列見出しに昇格した属性: {new_col_html}（{len(attributes)} 種類）<br>"
+        f"生成されたレコード数: <b>{record_count}</b>"
+        "</div>"
+    )
+
+    new_col_set = set(attributes)
+    pre_html = _df_to_html(
+        before, max_height=340, highlight_col_names={attr_col, value_col}
+    )
+    post_html = _df_to_html(after, max_height=340, green_col_names=new_col_set)
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before.columns)} 列 × {len(before)} 行 / オレンジ列 = 属性列・値列）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 昇格で生まれた列）</p>{post_html}</div>"
+        "</div>"
+    )
+    return meta_html + grid_html
+
+
 def _render_fill_cols_body(t: "DetectedTable") -> None:
     """グルーピング列 ffill の詳細（Streamlit ウィジェット版）。"""
     pre = t.pre_fill_df
@@ -1469,6 +1577,7 @@ def step_format():
     stacked_all = [t for t in tables if getattr(t, "stacked_df", None) is not None]
     unit_split_applied = [t for t in tables if getattr(t, "unit_split_info", None)]
     transpose_applied = [t for t in tables if getattr(t, "transpose_info", None)]
+    pivot_applied = [t for t in tables if getattr(t, "pivot_info", None)]
     multi_axis_applied = [t for t in tables if getattr(t, "multi_axis_info", None)]
     wide_to_long_applied = [t for t in tables if getattr(t, "wide_to_long_info", None)]
     uchi_split_applied = [t for t in tables if getattr(t, "uchi_split_info", None)]
@@ -1479,6 +1588,7 @@ def step_format():
         and not stacked_all
         and not unit_split_applied
         and not transpose_applied
+        and not pivot_applied
         and not multi_axis_applied
         and not uchi_split_applied
     )
@@ -1536,6 +1646,50 @@ def step_format():
                         )
                     outer_html = _MHD_CSS + _make_details_html(
                         f"その他の同様処理（{len(rest_multi_axis)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
+
+        # ── Pivot 検出と変換機能 ─────────────────────────────────
+        if pivot_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            total_attrs = sum(
+                len((t.pivot_info or {}).get("attributes", [])) for t in pivot_applied
+            )
+            st.subheader(
+                f"🔃 Pivot 検出と変換機能（対象：{len(pivot_applied)}テーブル）"
+            )
+            st.success(
+                f"**{len(pivot_applied)}** テーブルで行が (属性名, 値) のペアで"
+                f"繰り返されている構造を検出し、属性名を列見出しに昇格しました  "
+                f"（生成列: 計 {total_attrs} 種類）"
+            )
+            rep_p = pivot_applied[0]
+            rep_p_title = f"  🏷️ `{rep_p.title}`" if rep_p.title else ""
+            with st.expander(
+                f"**`{rep_p.table_id}`**{rep_p_title}  —  シート: {rep_p.sheet_name}",
+                expanded=True,
+            ):
+                _render_pivot_body(rep_p)
+
+                rest_pivot = pivot_applied[1:]
+                if rest_pivot:
+                    inner_html = ""
+                    for r in rest_pivot:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_pivot_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_pivot)} 件）",
                         inner_html,
                         open=False,
                         level=2,
