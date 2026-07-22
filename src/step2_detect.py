@@ -14,7 +14,7 @@
 
 import re
 from itertools import groupby
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -312,6 +312,7 @@ def _find_column_groups(
     max_col: int,
     gap_threshold: int = 2,
     row_widths: Optional[List[int]] = None,
+    content_rows: Optional[Set[int]] = None,
 ) -> List[Tuple[int, int]]:
     """行スパン内で列の空白を境に (start_col, end_col) のペアを返す。
 
@@ -333,9 +334,20 @@ def _find_column_groups(
 
     内側の空列は、従来通り gap_threshold 以上連続した場合のみ別テーブル
     領域として分割する（側並びの複数テーブルを区別するため）。
+
+    content_rows が指定された場合、列の充填有無はこの行集合（通常は
+    ヘッダー行＋データ行）のみで判定する。タイトル行・注記行は結合セルの
+    複製で行全体（本来のテーブル幅より広い範囲）に同一テキストが埋まる
+    ことがあり、これを列充填の根拠にすると実データの無い列（例:
+    タイトルのマージ範囲がテーブル本体より1列広いだけの列）が本物の列と
+    誤認識され、後続処理で存在しない列名（例: 重複列名への連番付与）が
+    生成されてしまう。指定がない場合は従来通り行帯全体を対象にする。
     """
     col_has_content = [False] * (max_col + 1)
-    for r in range(start_row, end_row + 1):
+    scan_rows = content_rows if content_rows is not None else range(start_row, end_row + 1)
+    for r in scan_rows:
+        if r < start_row or r > end_row:
+            continue
         for c in range(1, max_col + 1):
             if _is_filled(grid[r][c]):
                 col_has_content[c] = True
@@ -368,14 +380,18 @@ def _find_column_groups(
     if group_start is not None:
         groups.append((group_start, last_content_col))
 
-    if groups and last_content_col < max_col:
-        if row_widths is not None:
-            local_max_col = max(
-                (row_widths[r] for r in range(start_row, min(end_row, len(row_widths) - 1) + 1)),
-                default=last_content_col,
-            )
-        else:
-            local_max_col = last_content_col + (gap_threshold - 1)
+    if groups and row_widths is not None and last_content_col < max_col:
+        # CSV: 行が実際に持っていたフィールド数という実証拠があるためのみ延長する。
+        # Excel はこの根拠を持たない（末尾列が content_rows で無内容と判定された
+        # 時点で、ヘッダー文字列すら存在しない = 延長を正当化する材料が原理的に
+        # 存在しない）ため、以前あった「保守的に1列だけ延長する」処理は行わない。
+        # この延長は、タイトル行の結合セルがテーブル本体より広い場合に
+        # 実データのない列（例: 存在しない列名 "○○_1"）を生んでいた
+        # （sheet全体の max_col がタイトル行の結合範囲だけで押し上げられるため）。
+        local_max_col = max(
+            (row_widths[r] for r in range(start_row, min(end_row, len(row_widths) - 1) + 1)),
+            default=last_content_col,
+        )
         trailing_end = max(last_content_col, min(local_max_col, max_col))
         gs, _ge = groups[-1]
         groups[-1] = (gs, trailing_end)
@@ -800,8 +816,15 @@ def _detect_tables_in_grid(
         band_start = reg["band_start"]
         band_end = reg["band_end"]
 
+        content_rows = set(reg["header_rows"]) | set(reg["data_rows"])
         col_groups = _find_column_groups(
-            grid, band_start, band_end, max_col, gap_threshold=2, row_widths=row_widths
+            grid,
+            band_start,
+            band_end,
+            max_col,
+            gap_threshold=2,
+            row_widths=row_widths,
+            content_rows=content_rows,
         )
 
         first_header_row = min(reg["header_rows"]) if reg["header_rows"] else band_start
