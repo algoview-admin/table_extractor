@@ -1,19 +1,19 @@
 """
 ステップ2 テーブル検出モジュール。
 
-処理概要: 生グリッドまたは DataFrame を受け取り、行分類ステートマシンでテーブル領域を特定する。
+処理概要: 生グリッド（List[SheetGrid]。Excel も CSV も step1_upload が同じ grid 形式で
+          返す）を受け取り、行分類ステートマシンでテーブル領域を特定する。
           ヘッダー行が何行あるか・どの行が name/unit かという構造の認識まではここで行うが、
           複数ヘッダー行を1つの列名へ統合する・軸展開するといった列名の整形は一切行わない
           （表を「表として認識する」ことと「表を整形する」ことを分離するため）。
           整形は src/step3_normalize_determ.py の normalize_tables() が Step3 側で適用する。
-入力    : List[SheetGrid]（step1_upload が構築した生グリッド）/ pd.DataFrame（CSV の場合）、ファイル名
+入力    : List[SheetGrid]（step1_upload が構築した生グリッド）
 出力    : List[DetectedTable]（検出されたテーブルごとの位置・DataFrame・タイトル・注記を含む。
           整形前の生 DataFrame のみを保持する）
 """
 
 import re
 from itertools import groupby
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -444,8 +444,21 @@ def _detect_table_regions(
                 )
                 fill_density = filled_in_span / tbl_width if tbl_width > 0 else 0
 
+                # 既存の救済条件（row_width/tbl_width<0.5 or fill_density<0.30）は
+                # 「表の一部だけを埋める疎な副見出し行」を想定している。だが
+                # (キー列,属性名,値) のような狭い縦持ち表では、値が非数値
+                # （区分名・評点・月表記等）の行は毎回 filled_in_span=tbl_width の
+                # 全列充填になり、この救済条件に一切引っかからず、データ行が
+                # 次々と新規ヘッダーとして誤検出され表が細切れになる。
+                # 表幅が狭く（tbl_width<=4）候補行が確立済みの表幅を過不足なく
+                # 満たしている場合は、疎な副見出しとは逆の「既存データ行と同じ
+                # 形状」を示す強いシグナルのため、データ行として救済する。
+                is_narrow_full_row = tbl_width <= 4 and fill_density >= 0.9
+
                 if tbl_width > 0 and (
-                    row_width / tbl_width < 0.5 or fill_density < 0.30
+                    row_width / tbl_width < 0.5
+                    or fill_density < 0.30
+                    or is_narrow_full_row
                 ):
                     cur["data_rows"].append(r)
                     _upd_cols(cur, r)
@@ -475,6 +488,14 @@ def _detect_table_regions(
                         regions[-1]["trailing_notes"].append(note_text)
                     cur = _mk()
                     pending_titles = []
+                elif pending_titles:
+                    # 直前に検出済みのタイトル行に続く説明的な注記行（例:「※CRM
+                    # システムからエクスポート」）。まだ次のテーブルのヘッダー/
+                    # データ行が始まっていない段階なので、これは直前に完了した
+                    # 別テーブルの末尾注記ではなく、これから始まるテーブルの
+                    # タイトルに付随する説明文である。複数行タイトルの結合と
+                    # 同様に pending_titles に連結し、正しいテーブルに帰属させる。
+                    pending_titles.append((r, note_text))
                 elif cur["band_start"] is None and regions:
                     regions[-1]["trailing_notes"].append(note_text)
             continue
@@ -812,22 +833,6 @@ def detect_tables(
 
     sheet_names = [s.sheet_name for s in sheets]
     return all_tables, sheet_names
-
-
-def detect_from_csv(df: pd.DataFrame, filename: str) -> Tuple[List[DetectedTable], List[str]]:
-    """DataFrame（CSV 読み込み済み）を単一テーブルとして検出する（整形処理は行わない）。"""
-    safe = Path(filename).stem.replace(" ", "_")
-
-    table = DetectedTable(
-        table_id=f"{safe}_T1",
-        sheet_name="CSV",
-        start_row=1,
-        end_row=len(df) + 1,
-        start_col=1,
-        end_col=len(df.columns),
-        df=df,
-    )
-    return [table], ["CSV"]
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,6 @@ from streamlit_ui.shared import _go_to
 from src.step1_upload import load_csv, load_excel
 from src.step2_detect import (
     detect_tables,
-    detect_from_csv,
     get_original_df,
     build_tree_text,
     group_tables_by_sheet,
@@ -23,13 +22,12 @@ def step2():
             try:
                 ext = st.session_state.file_ext
                 if ext == ".csv":
-                    df = load_csv(st.session_state.file_content)
-                    tables, sheets = detect_from_csv(df, st.session_state.filename)
+                    sheet_grids, sheets = load_csv(st.session_state.file_content)
                 else:
                     sheet_grids, sheets = load_excel(
                         st.session_state.file_content, st.session_state.filename
                     )
-                    tables, _ = detect_tables(sheet_grids)
+                tables, _ = detect_tables(sheet_grids)
                 st.session_state.detected_tables = tables
                 st.session_state.sheet_names = sheets
                 st.rerun()  # re-render header so Save button appears
