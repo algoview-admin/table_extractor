@@ -2532,17 +2532,23 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
     # ファイル外メタデータからの派生カラム生成機能（ファイル名・シート名にしか
     # 現れない付帯情報の抽出）は、縦持ち変換される表にのみ適用する（対象外の
     # 表にまで無条件で列を増やすのは過剰なため）。よってここで縦持ち検出
-    # （wtl_info/cross_info）が確定した後にのみ実行し、抽出結果を label_cols に
-    # 追加することで、既存の stack_wide_to_long/stack_cross_table がそのまま
-    # 派生列を縦持ち後まで保持する。LLM 呼び出しは (filename, sheet_name) 単位で
-    # キャッシュし、同一シート内の複数テーブルで使い回す。
-    external_meta_cache: Dict[Tuple[Optional[str], str], Optional[Dict[str, Any]]] = {}
+    # （wtl_info/cross_info）が確定した後にのみ実行する。各派生カラムは
+    # 既存の区分列・集計軸との包含関係（例: サービス名→帳票プランの前、
+    # 年度→月の前）に基づいて LLM が判定した位置（anchor/position）へ
+    # apply_external_metadata が差し込み、返る新しい区分列の並びを
+    # label_cols に反映することで、既存の stack_wide_to_long/stack_cross_table
+    # がそのまま縦持ち後もその並びを保持する。LLM 呼び出しは
+    # (filename, sheet_name, 区分列構成, 集計軸名) 単位でキャッシュし、
+    # 同一シート内で同じ表構造の複数テーブルは使い回す。
+    external_meta_cache: Dict[Tuple[Optional[str], str, Tuple[str, ...], str], Optional[Dict[str, Any]]] = {}
 
-    def _get_external_meta(t: Any) -> Optional[Dict[str, Any]]:
-        cache_key = (filename, t.sheet_name)
+    def _get_external_meta(
+        t: Any, dim_cols: List[str], axis_name: str, value_name: str
+    ) -> Optional[Dict[str, Any]]:
+        cache_key = (filename, t.sheet_name, tuple(dim_cols), axis_name)
         if cache_key not in external_meta_cache:
             external_meta_cache[cache_key] = extract_external_metadata(
-                filename, t.sheet_name, t.title, list(t.df.columns),
+                filename, t.sheet_name, t.title, dim_cols, axis_name, value_name,
                 llm_client, llm_model,
             )
         return external_meta_cache[cache_key]
@@ -2561,25 +2567,30 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         if wtl_info is None and cross_info is None:
             continue
 
-        meta_result = _get_external_meta(t)
+        target_info = wtl_info if wtl_info else cross_info
+        if wtl_info:
+            axis_name = wtl_info.get("axis_var_name") or "区分"
+            value_name = ", ".join(wtl_info.get("indicators", [])) or "値"
+        else:
+            axis_name = cross_info.get("var_name") or "区分"
+            value_name = cross_info.get("value_name") or "値"
+
+        meta_result = _get_external_meta(
+            t, list(target_info["label_cols"]), axis_name, value_name
+        )
         meta_items = meta_result.get("items") if meta_result else None
         if meta_items:
-            target_info = wtl_info if wtl_info else cross_info
-            # 既存のラベル列（縦持ち変換後も残るエンティティ識別列。例: 支店）の
-            # 直後・時系列/軸列より前に挿入する（例: 「支店, サービス名, 年月, 値」
-            # の並び。表全体に共通する文脈情報を先頭に丸ごと積むより、既存の
-            # 識別列との関係で自然な位置になる）。
-            insert_pos = len(target_info["label_cols"])
             t.pre_external_meta_df = t.df
-            t.df = apply_external_metadata(t.df, meta_items, insert_pos=insert_pos)
-            meta_cols = [m["column_name"] for m in meta_items]
+            t.df, ordered_label_cols = apply_external_metadata(
+                t.df, meta_items, target_info["label_cols"], axis_name
+            )
             t.external_meta_info = {
                 "columns": meta_items,
                 "filename": filename,
                 "sheet_name": t.sheet_name,
                 "reasoning": meta_result.get("reasoning", "") if meta_result else "",
             }
-            target_info["label_cols"] = target_info["label_cols"] + meta_cols
+            target_info["label_cols"] = ordered_label_cols
             # ファイル外メタデータから年度を抽出済みの場合、既存のクロス集計側の年補完
             # （_extract_year_context 由来の「年」列挿入）による二重付与を防ぐ。
             if cross_info is not None and any(m.get("is_year") for m in meta_items):

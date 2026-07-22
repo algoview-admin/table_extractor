@@ -401,15 +401,18 @@ def detect_category_axis(
 
 _EXTERNAL_META_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
 ファイル名・シート名に含まれる、表データ本体（列名・値）には現れない付帯情報
-（メタデータ）を抽出し、指定された JSON 形式のみで回答してください
-（説明文は不要）。"""
+（メタデータ）を抽出し、それぞれを表のどの位置に置くべきかを判定して、
+指定された JSON 形式のみで回答してください（説明文は不要）。"""
 
 _EXTERNAL_META_USER_PROMPT = """以下のファイル名・シート名から、表データ本体
-（列名・値）には現れていない付帯情報を抽出してください。
+（列名・値）には現れていない付帯情報を抽出し、それぞれを表のどの位置に
+挿入すべきかを判定してください。
 
 ファイル名: {filename}
 シート名: {sheet_name}
-{title_line}既存の列名: {existing_columns}
+{title_line}既存の区分列（左→右の順）: {dimension_columns}
+集計軸列（区分列より右側、値列より左側に来る列）: {axis_name}
+値列（集計された数値そのもの。最も右側に来る）: {value_name}
 
 【抽出対象の例（特定の語彙ではなく、一般的なパターンとして捉えてください。
 具体的な固有名詞例は挙げません。ファイル名・シート名の構造・位置関係と
@@ -436,10 +439,31 @@ _EXTERNAL_META_USER_PROMPT = """以下のファイル名・シート名から、
   "区分"のような曖昧な語を避け "指標名" としてください（例: シート名が
   「◯◯別（△△）」の形式で、末尾の括弧内 "△△" が集計対象の数値の種類を
   表している場合、column_name="指標名", value="△△" とする）
-- 既存の列名と重複しない名前にしてください
+- 既存の区分列名・他の抽出項目の column_name と重複しない名前にしてください
+
+【並び順（anchor / position）の決め方 ── 重要 ──】
+表の区分列は「粒度の階層」で左から右へ並べる。他を包含する広い区分ほど左、
+包含される狭い区分ほど右に来る。集計軸列は全区分列より右、値列は最も右。
+抽出した各項目についても、既存の区分列・集計軸列・他の抽出項目との
+「包含関係」だけを根拠に位置を決め、anchor（隣接させる列名）と
+position（"before"=その列の左 / "after"=その列の右）を指定すること:
+- 項目 X が既存の区分列（または他の抽出項目）Y を概念的に包含する
+  （X が Y の上位区分にあたる）場合 → anchor=Y, position="before"
+- 逆に X が Y に包含される（X が Y の下位区分にあたる）場合 →
+  anchor=Y, position="after"
+- 集計対象の数値そのものの種類・単位を表す項目（指標名に該当するもの）は、
+  既存区分列のうち最も細かい（最も右にある）区分の直後、つまり値に最も
+  近い位置に置く → anchor=既存区分列の最後の列名, position="after"
+- 集計軸列（{axis_name}）を時間的・階層的に包含する上位区分にあたる項目
+  （例: 集計軸が月なら、その年を表す項目）は、軸の直前に置く →
+  anchor="{axis_name}", position="before"
+- anchor には既存の区分列名・集計軸列名（"{axis_name}"）・他の抽出項目の
+  column_name のいずれかを指定できる。包含関係が判断できない場合は
+  anchor=null, position=null とする（この場合は集計軸の直前に置かれる）。
+- 具体的な語彙ではなく、列同士の意味的な包含関係だけで判断すること。
 
 JSON形式で回答してください:
-{{"items": [{{"column_name": "列名", "value": "抽出した値", "source": "filename" または "sheet_name", "is_year": true または false}}, ...], "reasoning": "判断理由（日本語、1〜2文）"}}
+{{"items": [{{"column_name": "列名", "value": "抽出した値", "source": "filename" または "sheet_name", "is_year": true または false, "anchor": "隣接させる列名または null", "position": "before または after または null"}}, ...], "reasoning": "判断理由（日本語、1〜2文）"}}
 抽出対象が無い場合は {{"items": [], "reasoning": "..."}} としてください。"""
 
 
@@ -447,21 +471,28 @@ def extract_external_metadata(
     filename: Optional[str],
     sheet_name: Optional[str],
     title: Optional[str],
-    existing_columns: List[str],
+    dimension_columns: List[str],
+    axis_name: str,
+    value_name: str,
     client: Any,
     model: str,
 ) -> Optional[Dict[str, Any]]:
-    """ファイル名・シート名から、表データ本体には現れない付帯メタデータを LLM で抽出する。
+    """ファイル名・シート名から、表データ本体には現れない付帯メタデータを LLM で抽出し、
+    各項目の挿入位置（anchor/position）も判定させる。
 
     filename・sheet_name のいずれも無い場合は LLM を呼ばず None を返す。
+    dimension_columns: 縦持ち変換後も残る既存の区分列（横持ち時の左→右の順）。
+    axis_name / value_name: 縦持ち変換後の集計軸列名・値列名（区分列より右に来る）。
+    位置判定のアンカー候補として、既存列との重複防止の参照としても使う。
 
     ネットワークエラー・JSON パース失敗等は握りつぶして None を返し、
     1テーブルの失敗が検出処理全体を落とさないようにする。
 
     Returns:
-      抽出された場合: {"items": [{"column_name", "value", "source", "is_year"}, ...],
-        "reasoning": str}（items が空リストの場合も含む。既存列名と重複する
-        column_name や不正な形式の項目は除去済み）
+      抽出された場合: {"items": [{"column_name", "value", "source", "is_year",
+        "anchor", "position"}, ...], "reasoning": str}（items が空リストの
+        場合も含む。既存列と重複する column_name や不正な形式の項目は除去済み。
+        anchor/position は解決できない場合 None）
       判定不能な場合: None
     """
     if not filename and not sheet_name:
@@ -476,7 +507,9 @@ def extract_external_metadata(
                 filename=filename or "（なし）",
                 sheet_name=sheet_name or "（なし）",
                 title_line=title_line,
-                existing_columns=[str(c) for c in existing_columns],
+                dimension_columns=[str(c) for c in dimension_columns],
+                axis_name=axis_name,
+                value_name=value_name,
             ),
         },
     ]
@@ -492,7 +525,10 @@ def extract_external_metadata(
     if not isinstance(items, list):
         return None
 
-    existing_lower = {str(c).strip().lower() for c in existing_columns}
+    existing_lower = {str(c).strip().lower() for c in dimension_columns} | {
+        axis_name.strip().lower(),
+        value_name.strip().lower(),
+    }
     cleaned: List[Dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict):
@@ -504,12 +540,19 @@ def extract_external_metadata(
             continue
         if column_name.lower() in existing_lower:
             continue
+        anchor_raw = item.get("anchor")
+        anchor = anchor_raw.strip() if isinstance(anchor_raw, str) and anchor_raw.strip() else None
+        position = item.get("position") if item.get("position") in ("before", "after") else None
+        if anchor is None or position is None:
+            anchor, position = None, None
         cleaned.append(
             {
                 "column_name": column_name,
                 "value": str(value).strip(),
                 "source": source,
                 "is_year": bool(item.get("is_year")),
+                "anchor": anchor,
+                "position": position,
             }
         )
 
@@ -517,36 +560,80 @@ def extract_external_metadata(
 
 
 def apply_external_metadata(
-    df: Any, items: List[Dict[str, Any]], insert_pos: int = 0
-) -> Any:
-    """extract_external_metadata が抽出したメタデータを、定数値の列として df の
-    指定位置に挿入する（決定論処理）。
+    df: Any, items: List[Dict[str, Any]], dim_cols: List[str], axis_name: str
+) -> Tuple[Any, List[str]]:
+    """extract_external_metadata が抽出したメタデータ列を、各項目の anchor/position
+    （既存区分列・集計軸・他項目との包含関係）に基づいて区分列の並びに差し込む
+    （決定論処理）。
 
-    insert_pos: 挿入開始位置（0 = 先頭）。呼び出し元（normalize_tables）が、
-    既存のラベル列（縦持ち変換後もそのまま残るエンティティ識別列。例: 支店）
-    の直後・時系列/軸列より前になるよう位置を計算して渡す。ファイル名・
-    シート名から抽出した情報はエンティティに紐づく属性というより表全体の
-    文脈情報のため、先頭のエンティティ識別列の直後にまとめて置くのが
-    最も自然な並びになる。
+    dim_cols: 縦持ち変換後もそのまま残る既存の区分列（横持ち時の左→右の順）。
+    axis_name: 集計軸列名（時系列等が畳まれる列。区分列より右に来る）。
+    anchor がその時点で未配置の他メタ項目を指している場合は複数パスで解決する
+    （チェーン解決）。anchor が無効・null・循環参照等でどうしても解決できない
+    場合は集計軸の直前（＝区分列の末尾）に置く（安全側のフォールバック）。
 
-    列名が既存列と衝突する場合は連番を付与して回避する。
+    Returns:
+      (派生列を挿入した df, 新しい区分列の並び順のリスト)
     """
     if not items:
-        return df
+        return df, list(dim_cols)
 
-    out = df.copy()
-    existing = {str(c) for c in out.columns}
-    pos = min(max(insert_pos, 0), len(out.columns))
-    for item in reversed(items):
+    # 1. 列名の重複回避（既存区分列・集計軸・相互）。anchor が他項目の
+    # （採番前の）column_name を指している場合に実際の名前へ引き直せるよう
+    # 対応表を作る。
+    used = set(dim_cols) | {axis_name}
+    name_map: Dict[str, str] = {}
+    resolved: List[Dict[str, Any]] = []
+    for item in items:
         base = item["column_name"]
         name = base
         n = 1
-        while name in existing:
+        while name in used:
             n += 1
             name = f"{base}_{n}"
-        existing.add(name)
-        out.insert(pos, name, item["value"])
-    return out
+        used.add(name)
+        name_map[base] = name
+        resolved.append({**item, "column_name": name})
+
+    # 2. anchor / position を解決し、区分列の並び順を決める（チェーン解決）。
+    ordered = list(dim_cols)
+    pending = list(resolved)
+    for _ in range(len(pending) + 1):
+        if not pending:
+            break
+        still_pending: List[Dict[str, Any]] = []
+        progressed = False
+        for item in pending:
+            raw_anchor = item.get("anchor")
+            anchor = name_map.get(raw_anchor, raw_anchor) if raw_anchor else None
+            position = item.get("position")
+            if not anchor or anchor == axis_name or position not in ("before", "after"):
+                ordered.append(item["column_name"])
+                progressed = True
+                continue
+            if anchor in ordered:
+                idx = ordered.index(anchor)
+                ordered.insert(idx if position == "before" else idx + 1, item["column_name"])
+                progressed = True
+                continue
+            # anchor が他の未配置メタ項目を指している → 次パスへ持ち越す
+            still_pending.append(item)
+        pending = still_pending
+        if not progressed:
+            break
+    # 循環参照等でどうしても解決できなかった残りは末尾（集計軸の直前）に追加
+    for item in pending:
+        ordered.append(item["column_name"])
+
+    # 3. 実データへ反映。新規列を追加してから、区分列を ordered の並びに
+    # 並べ替える（区分列以外の列は元の順序を保つ）。
+    out = df.copy()
+    for item in resolved:
+        out[item["column_name"]] = item["value"]
+    other_cols = [c for c in df.columns if c not in dim_cols]
+    out = out[ordered + other_cols]
+
+    return out, ordered
 
 
 def apply_transpose(df: Any, entity_axis_name: str) -> Any:
