@@ -41,6 +41,10 @@ class DetectedTable:
     transpose_info: Optional[Dict[str, Any]] = field(default=None)  # Transpose検出情報 {entity_axis_name, reasoning}
     pre_pivot_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Pivot変換前 DataFrame（(属性,値)ペア検出時のみ）
     pivot_info: Optional[Dict[str, Any]] = field(default=None)  # Pivot検出情報 {key_cols, attr_col, value_col, attributes, record_count}
+    invalid_col_candidates: Optional[List[Dict[str, Any]]] = field(default=None)  # 無効カラム候補 [{name, position, reason, nonnull_count, is_empty, is_unnamed, default_selected}]
+    pre_invalid_col_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 無効カラム削除前 DataFrame（ユーザーが削除を適用した場合のみ）
+    invalid_cols_removed: List[Dict[str, Any]] = field(default_factory=list)  # 実際に削除した無効カラム [{name, reason}]
+    invalid_col_applied: bool = False  # ユーザーが無効カラム削除を適用済みか（auto処理時は全欠損列のみ自動適用）
     pre_wide_to_long_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Wide_to_long前 DataFrame（複合列名検出時のみ）
     wide_to_long_info: Optional[Dict[str, Any]] = field(default=None)  # Wide_to_long検出情報 {label_cols, time_var_name, time_kind, time_tokens, indicators, parsed_cols}
     pre_uchi_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # うち分離前 DataFrame（内訳検出時のみ）

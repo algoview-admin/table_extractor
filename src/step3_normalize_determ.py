@@ -431,6 +431,97 @@ def apply_pivot_kv(df: Any, info: Dict[str, Any]) -> Any:
     return pd.DataFrame(out_rows, columns=out_cols).reset_index(drop=True)
 
 
+# ---------------------------------------------------------------------------
+# 無効カラムの検出（全欠損カラム・無名カラム）
+# ---------------------------------------------------------------------------
+# 分析に使えない無効カラム（全データが空の列、Unnamed: N・列/列N のような
+# プレースホルダ名の列）の候補を検出する。両者はしばしば同じ物理列で発生する
+# （Excel の余剰空列）。削除は不可逆操作のためここでは行わず、候補と既定選択
+# 状態のみを返す。実際の削除はユーザーが確認・選択した後にUI側で適用する。
+
+_PLACEHOLDER_COL_RE = _re.compile(r"^(unnamed:\s*\d+|列(_?\d+)?)$", _re.IGNORECASE)
+
+
+def _is_placeholder_col_name(name: Any) -> bool:
+    """列名が「無名」（空文字・Unnamed: N・列/列N/列_N プレースホルダ・nan文字列）かを判定する。"""
+    s = str(name).strip()
+    if s == "" or s.lower() in ("nan", "none"):
+        return True
+    return bool(_PLACEHOLDER_COL_RE.match(s))
+
+
+def detect_invalid_columns(df: Any) -> Optional[Dict[str, Any]]:
+    """無効カラム（全欠損列・無名列）の候補を検出する（削除はしない）。
+
+    ケース1: 全欠損列（df.isnull().all(axis=0) 相当。空白文字列も欠損扱い）。
+    ケース2: 無名列（列名がプレースホルダ）。無名でもデータがある場合は
+             データ損失防止のため既定では選択しない候補として提示する。
+    統計秘匿マーカー（'X'、'***' 等）は実データとして扱い、欠損扱いにしない
+    （空文字列でない限り non-null カウントに含まれるため、追加対応は不要）。
+
+    Returns:
+        候補がなければ None。あれば {"columns": [候補dict, ...]}。
+        候補dict: {name, position, reason, nonnull_count, is_empty, is_unnamed, default_selected}
+    """
+    import pandas as pd
+
+    if df is None or df.empty or len(df.columns) == 0:
+        return None
+
+    def _is_null_scalar(v: Any) -> bool:
+        if v is None:
+            return True
+        try:
+            r = pd.isna(v)
+            return bool(r)
+        except (TypeError, ValueError):
+            return False
+
+    candidates: List[Dict[str, Any]] = []
+    for pos, col in enumerate(df.columns):
+        nonnull = 0
+        for v in df[col]:
+            if _is_null_scalar(v):
+                continue
+            if str(v).strip() == "":
+                continue
+            nonnull += 1
+
+        is_empty = nonnull == 0
+        is_unnamed = _is_placeholder_col_name(col)
+        if not (is_empty or is_unnamed):
+            continue
+
+        if is_empty and is_unnamed:
+            reason = "無名＋全欠損"
+        elif is_empty:
+            reason = "全欠損"
+        else:
+            reason = "無名（データあり）"
+
+        candidates.append(
+            {
+                "name": str(col),
+                "position": pos,
+                "reason": reason,
+                "nonnull_count": nonnull,
+                "is_empty": is_empty,
+                "is_unnamed": is_unnamed,
+                "default_selected": is_empty,
+            }
+        )
+
+    if not candidates:
+        return None
+    if len(candidates) >= len(df.columns):
+        # 全列を候補にはしない（最低1列は残す誤検出防止の安全弁）
+        candidates = candidates[:-1]
+        if not candidates:
+            return None
+
+    return {"columns": candidates}
+
+
 def detect_multi_axis_header(
     raw_header_rows: List[List[Any]], roles: Optional[List[str]] = None
 ) -> Optional[Dict[str, Any]]:
@@ -2199,8 +2290,12 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
       7. 集計行・集計列の除去
       8. 単位混在の分離（指標マスタ生成）
+      9. 無効カラム（全欠損列・無名列）の検出 — 決定論的・LLM不使用。不可逆
+         操作のため削除はここでは行わず候補検出のみ行う。実際の削除は
+         ユーザーが確認・選択した後にUI側（streamlit_ui/step3_normalize.py）
+         で適用する
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
-      9. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
+      10. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
 
     DetectedTable の各フィールドを in-place で書き換え、tables 自体にも
     うち内訳テーブルを追加する（呼び出し元が持つ同一リストへの参照を
@@ -2370,11 +2465,18 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
 
         t.df = _apply_agg_and_unit_split(t, df, protected_indices=uchi_protected_indices)
 
+        # 無効カラム（全欠損列・無名列）は候補検出のみここで行う。不可逆操作
+        # のため実際の削除はユーザーが確認・選択した後にUI側で適用する。
+        invalid_result = detect_invalid_columns(t.df)
+        t.invalid_col_candidates = invalid_result.get("columns") if invalid_result else None
+
     # ── うち内訳テーブルにも集計除去・単位分離を適用する ────────────
     # Transpose・グルーピング列前方補完・うち検出自身は対象外（既に整形済みの
     # 派生テーブルであり、親の段階で確定した構造を再度崩す必要はないため）。
     for ct in new_tables:
         ct.df = _apply_agg_and_unit_split(ct, ct.df)
+        invalid_result = detect_invalid_columns(ct.df)
+        ct.invalid_col_candidates = invalid_result.get("columns") if invalid_result else None
 
     tables.extend(new_tables)
 
