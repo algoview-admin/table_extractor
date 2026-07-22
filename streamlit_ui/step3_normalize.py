@@ -483,7 +483,7 @@ def _render_header_merge_detail(
 def _render_transpose_body(t: "DetectedTable") -> None:
     """Transpose（行列逆転）変換の詳細（Streamlit ウィジェット版）。"""
     before = t.pre_transpose_df
-    after = t.df
+    after = t.post_transpose_df if t.post_transpose_df is not None else t.df
     info = t.transpose_info
     if not info or before is None or after is None:
         return
@@ -527,7 +527,7 @@ def _render_transpose_body(t: "DetectedTable") -> None:
 def _render_transpose_body_html(t: "DetectedTable") -> str:
     """Transpose（行列逆転）変換の詳細（HTML文字列版）。"""
     before = t.pre_transpose_df
-    after = t.df
+    after = t.post_transpose_df if t.post_transpose_df is not None else t.df
     info = t.transpose_info
     if not info or before is None or after is None:
         return ""
@@ -560,7 +560,7 @@ def _render_transpose_body_html(t: "DetectedTable") -> str:
 def _render_pivot_body(t: "DetectedTable") -> None:
     """Pivot検出と変換（(属性,値)ペアの横持ち昇格）の詳細（Streamlit ウィジェット版）。"""
     before = t.pre_pivot_df
-    after = t.df
+    after = t.post_pivot_df if t.post_pivot_df is not None else t.df
     info = t.pivot_info
     if not info or before is None or after is None:
         return
@@ -620,7 +620,7 @@ def _render_pivot_body(t: "DetectedTable") -> None:
 def _render_pivot_body_html(t: "DetectedTable") -> str:
     """Pivot検出と変換（(属性,値)ペアの横持ち昇格）の詳細（HTML 文字列版）。"""
     before = t.pre_pivot_df
-    after = t.df
+    after = t.post_pivot_df if t.post_pivot_df is not None else t.df
     info = t.pivot_info
     if not info or before is None or after is None:
         return ""
@@ -751,7 +751,7 @@ def _render_invalid_col_body(t: "DetectedTable") -> None:
 def _render_fill_cols_body(t: "DetectedTable") -> None:
     """グルーピング列 ffill の詳細（Streamlit ウィジェット版）。"""
     pre = t.pre_fill_df
-    post = t.df
+    post = t.post_fill_df if t.post_fill_df is not None else t.df
     cols = getattr(t, "filled_cols", [])
 
     badges = " ".join(
@@ -784,7 +784,7 @@ def _render_fill_cols_body(t: "DetectedTable") -> None:
 def _render_fill_cols_body_html(t: "DetectedTable") -> str:
     """グルーピング列 ffill の詳細（HTML 文字列版）。"""
     pre = t.pre_fill_df
-    post = t.df
+    post = t.post_fill_df if t.post_fill_df is not None else t.df
     cols = getattr(t, "filled_cols", [])
 
     badges = " ".join(
@@ -1366,7 +1366,7 @@ def _render_unit_split_body(t: "DetectedTable") -> None:
     """単位混在の分離（指標マスタ生成）の詳細（Streamlit ウィジェット版）。"""
     info = t.unit_split_info
     before = t.pre_unit_split_df
-    after = t.df
+    after = t.post_unit_split_df if t.post_unit_split_df is not None else t.df
     master = t.unit_master_df
     if not info or before is None or after is None or master is None:
         return
@@ -1424,7 +1424,7 @@ def _render_unit_split_body_html(t: "DetectedTable") -> str:
     """単位混在の分離（指標マスタ生成）の詳細（HTML 文字列版）。"""
     info = t.unit_split_info
     before = t.pre_unit_split_df
-    after = t.df
+    after = t.post_unit_split_df if t.post_unit_split_df is not None else t.df
     master = t.unit_master_df
     if not info or before is None or after is None or master is None:
         return ""
@@ -1521,7 +1521,7 @@ def _agg_meta_details_html(t: "DetectedTable") -> str:
 def _render_agg_removal_body(t: "DetectedTable") -> None:
     """集計除去の詳細（Streamlit ウィジェット版、expander なし）。"""
     pre = t.pre_agg_df
-    post = t.df
+    post = t.post_agg_df if t.post_agg_df is not None else t.df
 
     removed_rows = t.agg_rows_removed
     removed_cols = t.agg_cols_removed
@@ -1631,7 +1631,7 @@ def _render_agg_removal_body(t: "DetectedTable") -> None:
 def _render_agg_removal_body_html(t: "DetectedTable") -> str:
     """集計除去の詳細を HTML 文字列で返す（ネスト details 用）。"""
     pre = t.pre_agg_df
-    post = t.df
+    post = t.post_agg_df if t.post_agg_df is not None else t.df
     removed_rows = t.agg_rows_removed
     removed_cols = t.agg_cols_removed
 

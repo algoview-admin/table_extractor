@@ -2264,6 +2264,7 @@ def _apply_agg_and_unit_split(
         agg_col_meta,
     ) = remove_aggregates(df, protected_indices=protected_indices)
     t.pre_agg_df = df if (agg_rows or agg_cols) else None
+    t.post_agg_df = cleaned_df if (agg_rows or agg_cols) else None
     t.agg_rows_removed = agg_rows
     t.agg_cols_removed = agg_cols
     t.agg_rows_removed_positions = agg_row_positions
@@ -2274,6 +2275,7 @@ def _apply_agg_and_unit_split(
     if unit_split:
         t.pre_unit_split_df = cleaned_df
         cleaned_df = unit_split["cleaned_df"]
+        t.post_unit_split_df = cleaned_df
         t.unit_master_df = unit_split["master_df"]
         t.unit_split_info = {
             "label_col": unit_split["label_col"],
@@ -2381,6 +2383,7 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
             t.pre_pivot_df = df
             df = apply_pivot_kv(df, pivot_result)
             t.pivot_info = pivot_result
+            t.post_pivot_df = df
 
         # 多段ヘッダーの検出と解決機能（軸展開）の構造判定は決定論的でLLMを
         # 使わないため、Transposeより先に（無条件で）行っておく。①が書いた
@@ -2408,6 +2411,7 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
                 t.pre_transpose_df = df
                 df = apply_transpose(df, transpose_result["entity_axis_name"])
                 t.transpose_info = transpose_result
+                t.post_transpose_df = df
 
         # 多段ヘッダーの検出と解決機能（軸展開）: 単純統合の結果を、独立した
         # カテゴリ軸の交差と判定できた場合のみ縦持ち展開で上書きする。
@@ -2478,6 +2482,7 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         df, filled_cols = fill_grouping_cols(df)
         t.filled_cols = filled_cols
         t.pre_fill_df = pre_fill_df_candidate if filled_cols else None
+        t.post_fill_df = df if filled_cols else None
 
         uchi_info = detect_uchi_breakdown(df)
         uchi_protected_indices: set = set()

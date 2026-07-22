@@ -26,6 +26,7 @@ class DetectedTable:
     notes: List[str] = field(default_factory=list)  # テーブル末尾に続く注釈・脚注行
     raw_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 整形前 DataFrame（多段ヘッダー整形時のみ）
     pre_agg_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 集計除去前 DataFrame
+    post_agg_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 集計除去直後（単位分離適用前）の DataFrame スナップショット。UI表示が後続ステップ（単位分離・無効カラム・B-06等）の変更を巻き込まないようにするため
     agg_rows_removed: List[dict] = field(default_factory=list)          # 除去した行のラベル値 [{col: val, ...}, ...]
     agg_cols_removed: List[str] = field(default_factory=list)           # 除去した列名
     agg_rows_removed_positions: List[int] = field(default_factory=list) # 除去した行の元 DataFrame 上の整数インデックス
@@ -33,14 +34,18 @@ class DetectedTable:
     agg_removed_col_metadata: List[Dict[str, Any]] = field(default_factory=list)  # 除去列の監査用メタデータ [{removed_column, context, reported_value}, ...]
     filled_cols: List[str] = field(default_factory=list)                # ffill を適用したグルーピング列名
     pre_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 前 DataFrame（ffill 適用時のみ）
+    post_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 直後（後続ステップ適用前）の DataFrame スナップショット
     stack_info: Optional[Dict[str, Any]] = field(default=None)          # クロス集計検出情報
     stacked_df: Optional[pd.DataFrame] = field(default=None, repr=False)   # 縦持ち変換後 DataFrame
     pre_unit_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 単位分離前 DataFrame（単位混在検出時のみ）
+    post_unit_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 単位分離直後（後続ステップ適用前）の DataFrame スナップショット
     unit_split_info: Optional[Dict[str, Any]] = field(default=None)     # 単位分離情報 {label_col, master_col, mapping, match_count}
     unit_master_df: Optional[pd.DataFrame] = field(default=None, repr=False)     # 生成された指標マスタ DataFrame（指標列, 単位）
     pre_transpose_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Transpose前 DataFrame（行列逆転検出時のみ）
+    post_transpose_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Transpose直後（後続ステップ適用前）の DataFrame スナップショット
     transpose_info: Optional[Dict[str, Any]] = field(default=None)  # Transpose検出情報 {entity_axis_name, reasoning}
     pre_pivot_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Pivot変換前 DataFrame（(属性,値)ペア検出時のみ）
+    post_pivot_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Pivot変換直後（後続ステップ適用前）の DataFrame スナップショット
     pivot_info: Optional[Dict[str, Any]] = field(default=None)  # Pivot検出情報 {key_cols, attr_col, value_col, attributes, record_count}
     invalid_col_candidates: Optional[List[Dict[str, Any]]] = field(default=None)  # 無効カラム候補 [{name, position, reason, nonnull_count, is_empty, is_unnamed, default_selected}]（不変。検出時点のスナップショット）
     pre_invalid_col_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 無効カラム候補検出時点の全列を保持した DataFrame（不変。復元・再選択の基準）
