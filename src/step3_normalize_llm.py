@@ -411,12 +411,17 @@ _EXTERNAL_META_USER_PROMPT = """以下のファイル名・シート名から、
 シート名: {sheet_name}
 {title_line}既存の列名: {existing_columns}
 
-【抽出対象の例】
-- サービス名・製品名（例: "おまかせITマネージャー"）
-- オプション種別・分類（例: "拡張サポートオプション"）
-- 指標名（そのシート／表全体が集計対象とする数値の種類・単位。
-  例: "数量", "金額", "件数", "プラン数", "AP数"）
-- 年度（西暦4桁）
+【抽出対象の例（特定の語彙ではなく、一般的なパターンとして捉えてください。
+具体的な固有名詞例は挙げません。ファイル名・シート名の構造・位置関係と
+文脈から意味的に判断してください）】
+- サービス名・製品名: ファイル名や表タイトルに含まれる、対象サービス／
+  製品を指す固有名詞
+- オプション種別・機能区分: サービスの中でも特定の機能・オプションを
+  指す語（シート名に含まれることが多い）
+- 指標名: そのシート／表全体が集計対象とする数値の種類・単位を表す語。
+  シート名が「◯◯別（△△）」のような形式の場合、末尾の括弧内 "△△" が
+  該当することが多い
+- 年度: 西暦4桁の数字
 
 【抽出してはいけないもの】
 - 既存の列名に既に含まれる情報
@@ -428,9 +433,9 @@ _EXTERNAL_META_USER_PROMPT = """以下のファイル名・シート名から、
 【column_name について】
 - 日本語で簡潔な列名にしてください（例: "サービス名", "オプション種別", "年度"）
 - 抽出した値が「何を数えた／集計した数値か」を表す指標名の場合は、
-  "区分"のような曖昧な語を避け "指標名" としてください（例:
-  シート名の「(プラン数)」「(AP数)」→ column_name="指標名", value="プラン数"／"AP数"。
-  シート名の「（数量）」→ column_name="指標名", value="数量"）
+  "区分"のような曖昧な語を避け "指標名" としてください（例: シート名が
+  「◯◯別（△△）」の形式で、末尾の括弧内 "△△" が集計対象の数値の種類を
+  表している場合、column_name="指標名", value="△△" とする）
 - 既存の列名と重複しない名前にしてください
 
 JSON形式で回答してください:
@@ -511,19 +516,27 @@ def extract_external_metadata(
     return {"items": cleaned, "reasoning": str(raw.get("reasoning") or "")}
 
 
-def apply_external_metadata(df: Any, items: List[Dict[str, Any]]) -> Any:
+def apply_external_metadata(
+    df: Any, items: List[Dict[str, Any]], insert_pos: int = 0
+) -> Any:
     """extract_external_metadata が抽出したメタデータを、定数値の列として df の
-    先頭に挿入する（決定論処理）。
+    指定位置に挿入する（決定論処理）。
 
-    列名が既存列と衝突する場合は連番を付与して回避する。先頭に挿入することで、
-    後続のクロス集計判定（時系列列比率の計算は列名の並び順に依存しない先頭
-    ラベル列の切り出しを前提とする）に影響しない。
+    insert_pos: 挿入開始位置（0 = 先頭）。呼び出し元（normalize_tables）が、
+    既存のラベル列（縦持ち変換後もそのまま残るエンティティ識別列。例: 支店）
+    の直後・時系列/軸列より前になるよう位置を計算して渡す。ファイル名・
+    シート名から抽出した情報はエンティティに紐づく属性というより表全体の
+    文脈情報のため、先頭のエンティティ識別列の直後にまとめて置くのが
+    最も自然な並びになる。
+
+    列名が既存列と衝突する場合は連番を付与して回避する。
     """
     if not items:
         return df
 
     out = df.copy()
     existing = {str(c) for c in out.columns}
+    pos = min(max(insert_pos, 0), len(out.columns))
     for item in reversed(items):
         base = item["column_name"]
         name = base
@@ -532,7 +545,7 @@ def apply_external_metadata(df: Any, items: List[Dict[str, Any]]) -> Any:
             n += 1
             name = f"{base}_{n}"
         existing.add(name)
-        out.insert(0, name, item["value"])
+        out.insert(pos, name, item["value"])
     return out
 
 

@@ -431,6 +431,43 @@ details.mhd-l3 > .mhd-body {
 </style>
 """
 
+# 無効カラムの検出と削除機能: st.checkbox の視認性向上。アプリ内で st.checkbox
+# を使うのはこの機能のみ（他ウィジェットへの影響なし）。Streamlit の
+# チェックボックス視覚要素には安定した data-testid が無いため、ラベル内で
+# テキスト用 div（data-testid=stWidgetLabel）以外の div を対象にする
+# （チェック有無どちらの状態でも同じ位置に存在する）。チェック中は他処理の
+# 「補完済み」「昇格で生まれた列」等と同じ緑（16,185,129）で塗りつぶし、
+# 未チェック時も枠線をはっきり出して存在が分かるようにする。
+_INVCOL_CHECKBOX_CSS = """
+<style>
+div[data-testid="stCheckbox"] label > div:not([data-testid="stWidgetLabel"]) {
+    width: 22px !important;
+    height: 22px !important;
+    min-width: 22px !important;
+    border: 2px solid rgba(255,255,255,0.65) !important;
+    border-radius: 4px !important;
+    background: rgba(255,255,255,0.06) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: background 0.15s, border-color 0.15s;
+}
+div[data-testid="stCheckbox"] label:has(input:checked) > div:not([data-testid="stWidgetLabel"]) {
+    background: rgba(16,185,129,0.9) !important;
+    border-color: rgba(16,185,129,1) !important;
+}
+div[data-testid="stCheckbox"] label > div:not([data-testid="stWidgetLabel"]) svg {
+    stroke: #ffffff !important;
+    stroke-width: 3 !important;
+    width: 13px !important;
+    height: 13px !important;
+}
+div[data-testid="stCheckbox"] label > div[data-testid="stWidgetLabel"] p {
+    font-size: 14px !important;
+}
+</style>
+"""
+
 
 def _make_details_html(
     label: str, body_html: str, open: bool = False, level: int = 2
@@ -672,15 +709,26 @@ def _render_invalid_col_body(t: "DetectedTable") -> None:
     （無名でもデータがある列は既定では削除しない）。列を失う操作のため、
     検出時点の全列 DataFrame（pre_invalid_col_df）を保持しており、
     チェックボックスで現在の削除対象列を選び直せる（復元・追加削除の
-    両方に対応。反映すると常に pre_invalid_col_df から再計算するため
-    何度でも安全にやり直せる）。"""
+    両方に対応）。
+
+    表示用の「現在」は pre_invalid_col_df + 現在の選択状態のみから計算する
+    （この機能自身の結果だけを示し、後続のファイル外メタデータ生成機能等が
+    追加した列を巻き込まない）。一方、実データ t.df の更新は候補列の増減
+    のみを現在の t.df に対して行う（pre から丸ごと作り直すと、pre 取得後に
+    後続ステップが追加した列が失われてしまうため）。"""
     candidates = t.invalid_col_candidates
     if not candidates:
         return
 
+    st.markdown(_INVCOL_CHECKBOX_CSS, unsafe_allow_html=True)
+
     pre = t.pre_invalid_col_df
-    post = t.df
     removed_names = {c["name"] for c in t.invalid_cols_removed}
+    display_after = (
+        pre.drop(columns=[n for n in removed_names if n in pre.columns])
+        if removed_names
+        else pre.copy()
+    )
 
     def _badge(c: Dict) -> str:
         active = c["name"] in removed_names
@@ -721,9 +769,9 @@ def _render_invalid_col_body(t: "DetectedTable") -> None:
             unsafe_allow_html=True,
         )
     with col_a:
-        st.markdown(f"**現在**（{len(post.columns)} 列）")
+        st.markdown(f"**現在**（{len(display_after.columns)} 列）")
         st.markdown(
-            _df_to_html(post.astype(str), max_height=300), unsafe_allow_html=True
+            _df_to_html(display_after.astype(str), max_height=300), unsafe_allow_html=True
         )
 
     with st.form(key=f"invcol_form_{t.table_id}"):
@@ -738,8 +786,21 @@ def _render_invalid_col_body(t: "DetectedTable") -> None:
         submitted = st.form_submit_button("選択を反映")
 
     if submitted:
-        selected = [name for name, checked in checks.items() if checked]
-        t.df = pre.drop(columns=selected) if selected else pre.copy()
+        selected = {name for name, checked in checks.items() if checked}
+        # 候補列だけを現在の t.df に対して増減させる（pre からの丸ごと再構築は
+        # しない）。後続ステップ（ファイル外メタデータ生成等）が既に追加した
+        # 列を、無効カラムの選び直しで失わないようにするため。
+        to_drop = [
+            c["name"] for c in candidates if c["name"] in selected and c["name"] in t.df.columns
+        ]
+        new_df = t.df.drop(columns=to_drop) if to_drop else t.df.copy()
+        to_restore = [
+            c for c in candidates if c["name"] not in selected and c["name"] not in new_df.columns
+        ]
+        for c in sorted(to_restore, key=lambda c: c["position"]):
+            insert_pos = min(c["position"], len(new_df.columns))
+            new_df.insert(insert_pos, c["name"], pre[c["name"]])
+        t.df = new_df
         t.invalid_cols_removed = [
             {"name": c["name"], "reason": c["reason"]}
             for c in candidates

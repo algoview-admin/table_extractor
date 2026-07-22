@@ -1004,7 +1004,7 @@ def remove_aggregates(
             個別データが存在しない場合（例: 全行が同一の集計ラベルのみの区分）は除去しない。
 
     protected_indices: 冗長と判定されても除去してはいけない行の df 上のインデックス
-            集合（例:「うち」書き内訳分離（B-15）で内訳テーブルの親として参照
+            集合（例:「うち」書き内訳分離で内訳テーブルの親として参照
             済みの合計行。この行を削除すると内訳テーブルが参照する親が本体側から
             消え、対応関係が追えなくなるため保護する）。
 
@@ -2251,7 +2251,7 @@ def _apply_agg_and_unit_split(
     normalize_tables() のメインループと、うち分離で新規生成された内訳テーブルの
     両方から呼ばれる共通処理（DetectedTable の該当フィールドを in-place 更新する）。
 
-    protected_indices: 「うち」書き分離（B-15）が内訳テーブルの親として参照済みの
+    protected_indices: 「うち」書き分離が内訳テーブルの親として参照済みの
     合計行インデックス（apply_uchi_split が返すもの）。remove_aggregates に
     そのまま渡し、冗長行として誤って削除されないようにする。
     """
@@ -2564,18 +2564,23 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         meta_result = _get_external_meta(t)
         meta_items = meta_result.get("items") if meta_result else None
         if meta_items:
+            target_info = wtl_info if wtl_info else cross_info
+            # 既存のラベル列（縦持ち変換後も残るエンティティ識別列。例: 支店）の
+            # 直後・時系列/軸列より前に挿入する（例: 「支店, サービス名, 年月, 値」
+            # の並び。表全体に共通する文脈情報を先頭に丸ごと積むより、既存の
+            # 識別列との関係で自然な位置になる）。
+            insert_pos = len(target_info["label_cols"])
             t.pre_external_meta_df = t.df
-            t.df = apply_external_metadata(t.df, meta_items)
-            b06_cols = [m["column_name"] for m in meta_items]
+            t.df = apply_external_metadata(t.df, meta_items, insert_pos=insert_pos)
+            meta_cols = [m["column_name"] for m in meta_items]
             t.external_meta_info = {
                 "columns": meta_items,
                 "filename": filename,
                 "sheet_name": t.sheet_name,
                 "reasoning": meta_result.get("reasoning", "") if meta_result else "",
             }
-            target_info = wtl_info if wtl_info else cross_info
-            target_info["label_cols"] = b06_cols + target_info["label_cols"]
-            # B-06 が年度を抽出済みの場合、既存のクロス集計側の年補完
+            target_info["label_cols"] = target_info["label_cols"] + meta_cols
+            # ファイル外メタデータから年度を抽出済みの場合、既存のクロス集計側の年補完
             # （_extract_year_context 由来の「年」列挿入）による二重付与を防ぐ。
             if cross_info is not None and any(m.get("is_year") for m in meta_items):
                 cross_info["year_context"] = None
