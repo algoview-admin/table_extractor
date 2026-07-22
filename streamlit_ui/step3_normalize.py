@@ -433,17 +433,22 @@ details.mhd-l3 > .mhd-body {
 
 # 無効カラムの検出と削除機能: st.checkbox の視認性向上。アプリ内で st.checkbox
 # を使うのはこの機能のみ（他ウィジェットへの影響なし）。Streamlit の
-# チェックボックス視覚要素には安定した data-testid が無いため、ラベル内で
-# テキスト用 div（data-testid=stWidgetLabel）以外の div を対象にする
-# （チェック有無どちらの状態でも同じ位置に存在する）。チェック中は他処理の
+# チェックボックス視覚要素には安定した data-testid が無いため、ラベル直下で
+# 隠し input を包む <span> の直後の <div>（常にチェック視覚要素が入る唯一の
+# 位置）を隣接セレクタ（span + div）で厳密に対象にする。以前 :not([data-
+# testid="stWidgetLabel"]) で除外する方式にしていたが、ラベルのテキスト側
+# 要素の実際の構造次第では意図せず一致してしまう場合があったため、
+# テキスト側には一切触れない厳密な指定に変更した。チェック中は他処理の
 # 「補完済み」「昇格で生まれた列」等と同じ緑（16,185,129）で塗りつぶし、
 # 未チェック時も枠線をはっきり出して存在が分かるようにする。
 _INVCOL_CHECKBOX_CSS = """
 <style>
-div[data-testid="stCheckbox"] label > div:not([data-testid="stWidgetLabel"]) {
+div[data-testid="stCheckbox"] label > span + div {
     width: 22px !important;
     height: 22px !important;
     min-width: 22px !important;
+    max-width: 22px !important;
+    flex-shrink: 0 !important;
     border: 2px solid rgba(255,255,255,0.65) !important;
     border-radius: 4px !important;
     background: rgba(255,255,255,0.06) !important;
@@ -452,18 +457,15 @@ div[data-testid="stCheckbox"] label > div:not([data-testid="stWidgetLabel"]) {
     justify-content: center !important;
     transition: background 0.15s, border-color 0.15s;
 }
-div[data-testid="stCheckbox"] label:has(input:checked) > div:not([data-testid="stWidgetLabel"]) {
+div[data-testid="stCheckbox"] label:has(input:checked) > span + div {
     background: rgba(16,185,129,0.9) !important;
     border-color: rgba(16,185,129,1) !important;
 }
-div[data-testid="stCheckbox"] label > div:not([data-testid="stWidgetLabel"]) svg {
+div[data-testid="stCheckbox"] label > span + div svg {
     stroke: #ffffff !important;
     stroke-width: 3 !important;
     width: 13px !important;
     height: 13px !important;
-}
-div[data-testid="stCheckbox"] label > div[data-testid="stWidgetLabel"] p {
-    font-size: 14px !important;
 }
 </style>
 """
