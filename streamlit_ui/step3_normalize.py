@@ -1998,11 +1998,12 @@ def step_format():
 
         # ── 無効カラムの検出と削除機能 ────────────────────────────────
         # 他の整形処理と同様に既定（全欠損列）を自動適用済みの状態を表示する。
-        # 代表テーブルを展開表示し、残りは「その他の同様処理」としてまとめる
-        # （他処理と同じ体裁）。ただし列ごとに削除・復元を選び直せる調整
-        # フォームが必要なため、「その他の同様処理」も静的HTML <details> では
-        # なく実際の st.expander を使う（st.expander の直接ネストはできないが、
-        # 代表テーブルの expander とは兄弟関係の別 expander のため問題ない）。
+        # 代表テーブルの expander の中に「その他の同様処理」を入れ子で置く
+        # （他処理と同じ配置）。ただし他処理は静的HTML <details> で入れ子に
+        # しているのに対し、こちらは列ごとに削除・復元を選び直せる
+        # チェックボックス／フォームが必要（HTML静的表示には埋め込めない）。
+        # st.expander は入れ子にできないため、代表テーブルの expander 内では
+        # 個別の expander を作らず、見出し＋区切り線で直接連ねて表示する。
         if invalid_col_targets:
             if not first_section:
                 st.divider()
@@ -2025,12 +2026,12 @@ def step_format():
             ):
                 _render_invalid_col_body(rep_i)
 
-            rest_i = invalid_col_targets[1:]
-            if rest_i:
-                with st.expander(f"その他の同様処理（{len(rest_i)} 件）", expanded=False):
-                    for idx, r in enumerate(rest_i):
-                        if idx > 0:
-                            st.divider()
+                rest_i = invalid_col_targets[1:]
+                if rest_i:
+                    st.divider()
+                    st.markdown(f"**その他の同様処理（{len(rest_i)} 件）**")
+                    for r in rest_i:
+                        st.divider()
                         r_title = f"  🏷️ `{r.title}`" if r.title else ""
                         st.markdown(
                             f"**`{r.table_id}`**{r_title}  —  シート: {r.sheet_name}"
