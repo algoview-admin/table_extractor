@@ -31,10 +31,12 @@ from .keywords import (
     VAR_NAME_FALLBACK as _VAR_NAME_FALLBACK,
 )
 from .step3_normalize_llm import (
+    apply_external_metadata,
     apply_transpose,
     detect_category_axis,
     detect_dimension_axes,
     detect_transpose,
+    extract_external_metadata,
     make_transpose_client,
 )
 
@@ -2329,7 +2331,11 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          UI側（streamlit_ui/step3_normalize.py）でユーザーが列ごとに削除の
          復元・追加を選び直せる
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
-      10. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
+      10. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換。縦持ち変換
+          対象と確定した表にのみ、ファイル外メタデータからの派生カラム生成
+          機能（LLM、step3_normalize_llm）を適用する — ファイル名・シート名
+          にしか現れないサービス名・オプション種別・年度等を抽出し、
+          縦持ち後も保持される定数列としてデータに埋め込む
 
     DetectedTable の各フィールドを in-place で書き換え、tables 自体にも
     うち内訳テーブルを追加する（呼び出し元が持つ同一リストへの参照を
@@ -2517,6 +2523,25 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
     # Wide_to_long（軸×複数指標の複合列名。軸は時系列に限らない）を先に試す。
     # 指標が1種類のみの場合は None を返す設計のため、detect_cross_table
     # （単一指標）とは互いに排他的に発火する。
+    #
+    # ファイル外メタデータからの派生カラム生成機能（ファイル名・シート名にしか
+    # 現れない付帯情報の抽出）は、縦持ち変換される表にのみ適用する（対象外の
+    # 表にまで無条件で列を増やすのは過剰なため）。よってここで縦持ち検出
+    # （wtl_info/cross_info）が確定した後にのみ実行し、抽出結果を label_cols に
+    # 追加することで、既存の stack_wide_to_long/stack_cross_table がそのまま
+    # 派生列を縦持ち後まで保持する。LLM 呼び出しは (filename, sheet_name) 単位で
+    # キャッシュし、同一シート内の複数テーブルで使い回す。
+    external_meta_cache: Dict[Tuple[Optional[str], str], Optional[Dict[str, Any]]] = {}
+
+    def _get_external_meta(t: Any) -> Optional[Dict[str, Any]]:
+        cache_key = (filename, t.sheet_name)
+        if cache_key not in external_meta_cache:
+            external_meta_cache[cache_key] = extract_external_metadata(
+                filename, t.sheet_name, t.title, list(t.df.columns),
+                llm_client, llm_model,
+            )
+        return external_meta_cache[cache_key]
+
     for t in tables:
         if t.df is None or t.df.empty:
             continue
@@ -2525,6 +2550,31 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
             t.df, title=t.title, filename=filename, client=llm_client, model=llm_model,
             relaxed=t.multi_axis_candidates_declined,
         )
+        cross_info = (
+            None if wtl_info else detect_cross_table(t.df, title=t.title, filename=filename)
+        )
+        if wtl_info is None and cross_info is None:
+            continue
+
+        meta_result = _get_external_meta(t)
+        meta_items = meta_result.get("items") if meta_result else None
+        if meta_items:
+            t.pre_external_meta_df = t.df
+            t.df = apply_external_metadata(t.df, meta_items)
+            b06_cols = [m["column_name"] for m in meta_items]
+            t.external_meta_info = {
+                "columns": meta_items,
+                "filename": filename,
+                "sheet_name": t.sheet_name,
+                "reasoning": meta_result.get("reasoning", "") if meta_result else "",
+            }
+            target_info = wtl_info if wtl_info else cross_info
+            target_info["label_cols"] = b06_cols + target_info["label_cols"]
+            # B-06 が年度を抽出済みの場合、既存のクロス集計側の年補完
+            # （_extract_year_context 由来の「年」列挿入）による二重付与を防ぐ。
+            if cross_info is not None and any(m.get("is_year") for m in meta_items):
+                cross_info["year_context"] = None
+
         if wtl_info:
             t.pre_wide_to_long_df = t.df
             t.wide_to_long_info = wtl_info
@@ -2537,7 +2587,7 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
             t.stacked_df = stacked
             continue
 
-        info = detect_cross_table(t.df, title=t.title, filename=filename)
+        info = cross_info
         if info:
             t.stack_info = info
             stacked = stack_cross_table(t.df, info)

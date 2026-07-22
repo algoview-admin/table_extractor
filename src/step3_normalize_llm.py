@@ -4,8 +4,10 @@
 処理概要: Transpose（行列逆転）の検出と変換、多段ヘッダーの検出と解決機能（軸展開。
           多段ヘッダーが独立した複数カテゴリ軸の交差かどうかの判定・軸命名）、
           Wide_to_long Tier3（区切り文字のない複合列名から決定論的に発見した
-          軸候補が本当に均質な1つのカテゴリ軸かどうかの確認・命名）など、
-          意味判定にLLMが必要なテーブル整形処理を扱う。
+          軸候補が本当に均質な1つのカテゴリ軸かどうかの確認・命名）、
+          ファイル外メタデータからの派生カラム生成機能（ファイル名・シート名に
+          しか現れない付帯情報の抽出）など、意味判定にLLMが必要なテーブル
+          整形処理を扱う。
           Step3 と Step4（src/step4_analyze.py）は処理の性質が異なり
           （Step3 の出力が Step4 の入力になる関係）依存を持たせたくない
           ため、LLM クライアント生成・API 呼び出しは step4_analyze.py の
@@ -383,6 +385,150 @@ def detect_category_axis(
         "axis_name": axis_name,
         "reasoning": str(raw.get("reasoning") or ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# ファイル外メタデータからの派生カラム生成機能
+# ---------------------------------------------------------------------------
+#
+# ファイル名・シート名には、サービス名・オプション種別・シート区分・年度など、
+# 表データ本体（列名・値）には現れない付帯情報が含まれることがある。
+# どのトークンがそうした意味のあるメタデータで、どれが「販売月報」「一覧」の
+# ような単なる文書種別を表す定型語かは意味理解が必要なため LLM を用いる。
+# 抽出結果を定数列としてデータに埋め込む処理自体（apply_external_metadata）は
+# 決定論的な薄い処理のため、detect/apply の対を Transpose 等と同じくこの
+# ファイルにまとめて置く。
+
+_EXTERNAL_META_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
+ファイル名・シート名に含まれる、表データ本体（列名・値）には現れない付帯情報
+（メタデータ）を抽出し、指定された JSON 形式のみで回答してください
+（説明文は不要）。"""
+
+_EXTERNAL_META_USER_PROMPT = """以下のファイル名・シート名から、表データ本体
+（列名・値）には現れていない付帯情報を抽出してください。
+
+ファイル名: {filename}
+シート名: {sheet_name}
+{title_line}既存の列名: {existing_columns}
+
+【抽出対象の例】
+- サービス名・製品名（例: "おまかせITマネージャー"）
+- オプション種別・分類（例: "拡張サポートオプション"）
+- シート区分（例: "数量", "金額"）
+- 年度（西暦4桁）
+
+【抽出してはいけないもの】
+- 既存の列名に既に含まれる情報
+- 「販売月報」「エリア別」「一覧」のような、文書の種類・体裁を表すだけの汎用語
+- ファイル管理上の記号（バージョン番号、年度以外の連番など）で表の値として
+  意味を持たないもの
+- 少しでも判断に迷うものは抽出しない（抽出しすぎより、何も抽出しない方が安全）
+
+【column_name について】
+- 日本語で簡潔な列名にしてください（例: "サービス名", "オプション種別", "シート区分", "年度"）
+- 既存の列名と重複しない名前にしてください
+
+JSON形式で回答してください:
+{{"items": [{{"column_name": "列名", "value": "抽出した値", "source": "filename" または "sheet_name", "is_year": true または false}}, ...], "reasoning": "判断理由（日本語、1〜2文）"}}
+抽出対象が無い場合は {{"items": [], "reasoning": "..."}} としてください。"""
+
+
+def extract_external_metadata(
+    filename: Optional[str],
+    sheet_name: Optional[str],
+    title: Optional[str],
+    existing_columns: List[str],
+    client: Any,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """ファイル名・シート名から、表データ本体には現れない付帯メタデータを LLM で抽出する。
+
+    filename・sheet_name のいずれも無い場合は LLM を呼ばず None を返す。
+
+    ネットワークエラー・JSON パース失敗等は握りつぶして None を返し、
+    1テーブルの失敗が検出処理全体を落とさないようにする。
+
+    Returns:
+      抽出された場合: {"items": [{"column_name", "value", "source", "is_year"}, ...],
+        "reasoning": str}（items が空リストの場合も含む。既存列名と重複する
+        column_name や不正な形式の項目は除去済み）
+      判定不能な場合: None
+    """
+    if not filename and not sheet_name:
+        return None
+
+    title_line = f"表タイトル: {title}\n" if title else ""
+    messages = [
+        {"role": "system", "content": _EXTERNAL_META_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _EXTERNAL_META_USER_PROMPT.format(
+                filename=filename or "（なし）",
+                sheet_name=sheet_name or "（なし）",
+                title_line=title_line,
+                existing_columns=[str(c) for c in existing_columns],
+            ),
+        },
+    ]
+    try:
+        content = _call_transpose_api(client, model, messages)
+        raw = json.loads(content)
+    except Exception:
+        return None
+
+    if not isinstance(raw, dict):
+        return None
+    items = raw.get("items")
+    if not isinstance(items, list):
+        return None
+
+    existing_lower = {str(c).strip().lower() for c in existing_columns}
+    cleaned: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        column_name = str(item.get("column_name") or "").strip()
+        value = item.get("value")
+        source = item.get("source")
+        if not column_name or value is None or source not in ("filename", "sheet_name"):
+            continue
+        if column_name.lower() in existing_lower:
+            continue
+        cleaned.append(
+            {
+                "column_name": column_name,
+                "value": str(value).strip(),
+                "source": source,
+                "is_year": bool(item.get("is_year")),
+            }
+        )
+
+    return {"items": cleaned, "reasoning": str(raw.get("reasoning") or "")}
+
+
+def apply_external_metadata(df: Any, items: List[Dict[str, Any]]) -> Any:
+    """extract_external_metadata が抽出したメタデータを、定数値の列として df の
+    先頭に挿入する（決定論処理）。
+
+    列名が既存列と衝突する場合は連番を付与して回避する。先頭に挿入することで、
+    後続のクロス集計判定（時系列列比率の計算は列名の並び順に依存しない先頭
+    ラベル列の切り出しを前提とする）に影響しない。
+    """
+    if not items:
+        return df
+
+    out = df.copy()
+    existing = {str(c) for c in out.columns}
+    for item in reversed(items):
+        base = item["column_name"]
+        name = base
+        n = 1
+        while name in existing:
+            n += 1
+            name = f"{base}_{n}"
+        existing.add(name)
+        out.insert(0, name, item["value"])
+    return out
 
 
 def apply_transpose(df: Any, entity_axis_name: str) -> Any:

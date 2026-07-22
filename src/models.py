@@ -45,6 +45,8 @@ class DetectedTable:
     invalid_col_candidates: Optional[List[Dict[str, Any]]] = field(default=None)  # 無効カラム候補 [{name, position, reason, nonnull_count, is_empty, is_unnamed, default_selected}]（不変。検出時点のスナップショット）
     pre_invalid_col_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 無効カラム候補検出時点の全列を保持した DataFrame（不変。復元・再選択の基準）
     invalid_cols_removed: List[Dict[str, Any]] = field(default_factory=list)  # 現在削除されている無効カラム [{name, reason}]（既定は全欠損列を自動削除、ユーザーがチェックボックスで調整可能）
+    pre_external_meta_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ファイル外メタデータ派生カラム追加前 DataFrame（縦持ち変換対象の表でのみ）
+    external_meta_info: Optional[Dict[str, Any]] = field(default=None)  # ファイル外メタデータ検出情報 {columns:[{column_name,value,source,is_year}], filename, sheet_name, reasoning}
     pre_wide_to_long_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Wide_to_long前 DataFrame（複合列名検出時のみ）
     wide_to_long_info: Optional[Dict[str, Any]] = field(default=None)  # Wide_to_long検出情報 {label_cols, time_var_name, time_kind, time_tokens, indicators, parsed_cols}
     pre_uchi_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # うち分離前 DataFrame（内訳検出時のみ）

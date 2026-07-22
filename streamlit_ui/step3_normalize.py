@@ -814,6 +814,104 @@ def _render_fill_cols_body_html(t: "DetectedTable") -> str:
     )
 
 
+def _render_external_meta_body(t: "DetectedTable") -> None:
+    """ファイル外メタデータからの派生カラム生成機能の詳細（Streamlit ウィジェット版）。"""
+    info = t.external_meta_info
+    before = t.pre_external_meta_df
+    after = t.df
+    if not info or before is None or after is None:
+        return
+
+    columns = info.get("columns", [])
+    reasoning = info.get("reasoning", "")
+    filename = info.get("filename") or ""
+    sheet_name = info.get("sheet_name") or ""
+
+    def _badge(item: Dict) -> str:
+        color = "56,189,248" if item.get("source") == "filename" else "251,191,36"
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px;display:inline-block'>"
+            f"{_html.escape(str(item.get('column_name', '')))}="
+            f"{_html.escape(str(item.get('value', '')))}</span>"
+        )
+
+    cols_html = " ".join(_badge(c) for c in columns) or "（なし）"
+
+    st.markdown(
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"抽出元ファイル名: <code>{_html.escape(filename)}</code><br>"
+        f"抽出元シート名: <code>{_html.escape(sheet_name)}</code><br>"
+        f"抽出された列: {cols_html}<br>"
+        f"<span style='font-size:12px;opacity:0.75'>"
+        f"<span style='color:rgba(56,189,248,1)'>■</span> ファイル名由来　"
+        f"<span style='color:rgba(251,191,36,1)'>■</span> シート名由来</span><br>"
+        f"理由: {_html.escape(reasoning)}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    new_col_set = {str(c.get("column_name", "")) for c in columns}
+    col_b, col_a = st.columns(2)
+    with col_b:
+        st.markdown(f"**変換前**（{len(before.columns)} 列 × {len(before)} 行）")
+        st.markdown(_df_to_html(before, max_height=340), unsafe_allow_html=True)
+    with col_a:
+        st.markdown(
+            f"**変換後**（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 追加された派生列）"
+        )
+        st.markdown(
+            _df_to_html(after, max_height=340, green_col_names=new_col_set),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_external_meta_body_html(t: "DetectedTable") -> str:
+    """ファイル外メタデータからの派生カラム生成機能の詳細（HTML 文字列版）。"""
+    info = t.external_meta_info
+    before = t.pre_external_meta_df
+    after = t.df
+    if not info or before is None or after is None:
+        return ""
+
+    columns = info.get("columns", [])
+    reasoning = info.get("reasoning", "")
+    filename = info.get("filename") or ""
+    sheet_name = info.get("sheet_name") or ""
+
+    def _badge(item: Dict) -> str:
+        color = "56,189,248" if item.get("source") == "filename" else "251,191,36"
+        return (
+            f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px;display:inline-block'>"
+            f"{_html.escape(str(item.get('column_name', '')))}="
+            f"{_html.escape(str(item.get('value', '')))}</span>"
+        )
+
+    cols_html = " ".join(_badge(c) for c in columns) or "（なし）"
+    meta_html = (
+        "<div style='margin:4px 0 12px;line-height:2'>"
+        f"抽出元ファイル名: <code>{_html.escape(filename)}</code><br>"
+        f"抽出元シート名: <code>{_html.escape(sheet_name)}</code><br>"
+        f"抽出された列: {cols_html}<br>"
+        f"理由: {_html.escape(reasoning)}"
+        "</div>"
+    )
+
+    new_col_set = {str(c.get("column_name", "")) for c in columns}
+    pre_html = _df_to_html(before, max_height=340)
+    post_html = _df_to_html(after, max_height=340, green_col_names=new_col_set)
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before.columns)} 列 × {len(before)} 行）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 追加された派生列）</p>{post_html}</div>"
+        "</div>"
+    )
+    return meta_html + grid_html
+
+
 def _render_stack_body(t: "DetectedTable") -> None:
     """クロス集計→縦持ち変換の詳細（Streamlit ウィジェット版）。"""
     info = t.stack_info
@@ -1667,6 +1765,9 @@ def step_format():
     invalid_col_targets = [
         t for t in tables if getattr(t, "invalid_col_candidates", None)
     ]
+    external_meta_applied = [
+        t for t in tables if getattr(t, "external_meta_info", None)
+    ]
     nothing_done = (
         not formatted
         and not agg_removed
@@ -1678,6 +1779,7 @@ def step_format():
         and not multi_axis_applied
         and not uchi_split_applied
         and not invalid_col_targets
+        and not external_meta_applied
     )
     if nothing_done:
         st.info("全テーブルに対して整形処理はありませんでした。")
@@ -2039,6 +2141,51 @@ def step_format():
                                 f"**`{r.table_id}`**{r_title}  —  シート: {r.sheet_name}"
                             )
                             _render_invalid_col_body(r)
+
+        # ── ファイル外メタデータからの派生カラム生成機能 ──────────────────
+        if external_meta_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            total_cols = sum(
+                len((t.external_meta_info or {}).get("columns", []))
+                for t in external_meta_applied
+            )
+            st.subheader(
+                f"🏷️ ファイル外メタデータからの派生カラム生成機能（対象：{len(external_meta_applied)}テーブル）"
+            )
+            st.success(
+                f"**{len(external_meta_applied)}** テーブルでファイル名・シート名から"
+                f"データ本体にない付帯情報を抽出し、派生カラムとして追加しました  "
+                f"（追加列: 計 {total_cols} 件）"
+            )
+            rep_e = external_meta_applied[0]
+            rep_e_title = f"  🏷️ `{rep_e.title}`" if rep_e.title else ""
+            with st.expander(
+                f"**`{rep_e.table_id}`**{rep_e_title}  —  シート: {rep_e.sheet_name}",
+                expanded=True,
+            ):
+                _render_external_meta_body(rep_e)
+
+                rest_e = external_meta_applied[1:]
+                if rest_e:
+                    inner_html = ""
+                    for r in rest_e:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_external_meta_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_e)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
 
         # ── Wide_to_long検出と変換機能 ────────────────────────
         if wide_to_long_applied:
