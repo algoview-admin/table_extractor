@@ -522,6 +522,31 @@ def detect_invalid_columns(df: Any) -> Optional[Dict[str, Any]]:
     return {"columns": candidates}
 
 
+def _apply_invalid_col_defaults(t: Any, df: Any) -> Any:
+    """無効カラム候補を検出し、既定選択分（全欠損列）を自動削除して返す。
+
+    他の整形処理と同様に既定では自動適用する。ただし列を失う操作のため、
+    削除前の全列 DataFrame を t.pre_invalid_col_df として保持しておき、
+    UI側でユーザーが個々の候補列ごとに削除の適用・復元をチェックボックスで
+    調整できるようにする（t.invalid_cols_removed が現在の削除状態を表す）。
+    無名でもデータがある列は初期状態では削除しない（データ損失防止）。
+    """
+    invalid_result = detect_invalid_columns(df)
+    candidates = invalid_result.get("columns") if invalid_result else None
+    t.invalid_col_candidates = candidates
+    if not candidates:
+        return df
+
+    t.pre_invalid_col_df = df
+    default_remove = [c["name"] for c in candidates if c["default_selected"]]
+    t.invalid_cols_removed = [
+        {"name": c["name"], "reason": c["reason"]}
+        for c in candidates
+        if c["default_selected"]
+    ]
+    return df.drop(columns=default_remove) if default_remove else df
+
+
 def detect_multi_axis_header(
     raw_header_rows: List[List[Any]], roles: Optional[List[str]] = None
 ) -> Optional[Dict[str, Any]]:
@@ -2290,10 +2315,11 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
       7. 集計行・集計列の除去
       8. 単位混在の分離（指標マスタ生成）
-      9. 無効カラム（全欠損列・無名列）の検出 — 決定論的・LLM不使用。不可逆
-         操作のため削除はここでは行わず候補検出のみ行う。実際の削除は
-         ユーザーが確認・選択した後にUI側（streamlit_ui/step3_normalize.py）
-         で適用する
+      9. 無効カラム（全欠損列・無名列）の検出と既定削除 — 決定論的・LLM不使用。
+         他の整形処理と同様に既定では自動適用する（全欠損列を削除。無名でも
+         データがある列は削除しない）。削除前の全列 DataFrame を保持するため、
+         UI側（streamlit_ui/step3_normalize.py）でユーザーが列ごとに削除の
+         復元・追加を選び直せる
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
       10. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換
 
@@ -2465,18 +2491,17 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
 
         t.df = _apply_agg_and_unit_split(t, df, protected_indices=uchi_protected_indices)
 
-        # 無効カラム（全欠損列・無名列）は候補検出のみここで行う。不可逆操作
-        # のため実際の削除はユーザーが確認・選択した後にUI側で適用する。
-        invalid_result = detect_invalid_columns(t.df)
-        t.invalid_col_candidates = invalid_result.get("columns") if invalid_result else None
+        # 無効カラム（全欠損列・無名列）の検出・既定削除。他の整形処理と
+        # 同様に既定では自動適用し、UI側でユーザーが列ごとに調整できる
+        # （pre_invalid_col_df を保持するため不可逆にはならない）。
+        t.df = _apply_invalid_col_defaults(t, t.df)
 
     # ── うち内訳テーブルにも集計除去・単位分離を適用する ────────────
     # Transpose・グルーピング列前方補完・うち検出自身は対象外（既に整形済みの
     # 派生テーブルであり、親の段階で確定した構造を再度崩す必要はないため）。
     for ct in new_tables:
         ct.df = _apply_agg_and_unit_split(ct, ct.df)
-        invalid_result = detect_invalid_columns(ct.df)
-        ct.invalid_col_candidates = invalid_result.get("columns") if invalid_result else None
+        ct.df = _apply_invalid_col_defaults(ct, ct.df)
 
     tables.extend(new_tables)
 

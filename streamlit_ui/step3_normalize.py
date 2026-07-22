@@ -665,117 +665,86 @@ def _render_pivot_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
-def _render_invalid_col_confirm(t: "DetectedTable") -> None:
-    """無効カラム（全欠損列・無名列）の確認削除 UI（Streamlit ウィジェット版）。
+def _render_invalid_col_body(t: "DetectedTable") -> None:
+    """無効カラム（全欠損列・無名列）の検出結果と調整 UI（Streamlit ウィジェット版）。
 
-    不可逆操作のため、他の整形処理と異なり自動適用しない。ユーザーが
-    チェックボックスで選択した列のみ削除する（全欠損列は既定選択、無名でも
-    データがある列はデータ損失防止のため既定では未選択）。適用後は他処理と
-    同じ before/after 表示に切り替わる。"""
+    他の整形処理と同様に既定（全欠損列）を自動削除した状態を表示する
+    （無名でもデータがある列は既定では削除しない）。列を失う操作のため、
+    検出時点の全列 DataFrame（pre_invalid_col_df）を保持しており、
+    チェックボックスで現在の削除対象列を選び直せる（復元・追加削除の
+    両方に対応。反映すると常に pre_invalid_col_df から再計算するため
+    何度でも安全にやり直せる）。"""
     candidates = t.invalid_col_candidates
     if not candidates:
         return
 
+    pre = t.pre_invalid_col_df
+    post = t.df
+    removed_names = {c["name"] for c in t.invalid_cols_removed}
+
     def _badge(c: Dict) -> str:
+        active = c["name"] in removed_names
+        color = "255,180,100" if active else "107,114,128"
+        state = "削除中" if active else "保持中"
         return (
-            f"<code style='background:rgba(255,180,100,0.15);"
-            f"border:1px solid rgba(255,180,100,0.4);border-radius:4px;"
+            f"<code style='background:rgba({color},0.15);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
             f"padding:1px 6px;margin:2px;display:inline-block'>"
-            f"{_html.escape(c['name'])}（{_html.escape(c['reason'])}）</code>"
+            f"{_html.escape(c['name'])}（{_html.escape(c['reason'])} / {state}）</code>"
         )
 
-    if not t.invalid_col_applied:
-        st.markdown(
-            f"<p style='margin:4px 0 6px'>削除候補（{len(candidates)} 列）: "
-            + " ".join(_badge(c) for c in candidates)
-            + "</p>",
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            "不可逆操作のため、削除する列を選んで実行してください"
-            "（無名でもデータがある列は既定では未選択）"
-        )
-
-        st.markdown("**現在の列構成**（オレンジ列 = 削除候補）")
-        st.markdown(
-            _df_to_html(
-                t.df.astype(str),
-                max_height=300,
-                highlight_col_names={c["name"] for c in candidates},
-            ),
-            unsafe_allow_html=True,
-        )
-
-        with st.form(key=f"invcol_form_{t.table_id}"):
-            checks: Dict[str, bool] = {}
-            for c in candidates:
-                label = f"{c['name']}（{c['reason']} / 非空 {c['nonnull_count']} セル）"
-                checks[c["name"]] = st.checkbox(
-                    label,
-                    value=c["default_selected"],
-                    key=f"invcol_{t.table_id}_{c['position']}",
-                )
-            submitted = st.form_submit_button("選択した列を削除", type="primary")
-
-        if submitted:
-            selected = [name for name, checked in checks.items() if checked]
-            t.pre_invalid_col_df = t.df.copy()
-            if selected:
-                t.df = t.df.drop(columns=selected)
-            t.invalid_cols_removed = [
-                {"name": c["name"], "reason": c["reason"]}
-                for c in candidates
-                if c["name"] in selected
-            ]
-            t.invalid_col_applied = True
-            st.rerun()
-        return
-
-    # 適用済み: 他処理と同じ before/after 表示
-    removed = t.invalid_cols_removed
-    if not removed:
-        st.caption("無効カラム候補はありましたが、削除は選択されませんでした。")
-        if st.button(
-            "↩️ 選び直す", key=f"invcol_undo_{t.table_id}"
-        ):
-            t.pre_invalid_col_df = None
-            t.invalid_col_applied = False
-            st.rerun()
-        return
-
-    st.caption(f"無効カラム **{len(removed)}** 列を削除しました")
     st.markdown(
-        " ".join(_badge(c) for c in removed),
+        f"<p style='margin:4px 0 6px'>検出候補（{len(candidates)} 列）: "
+        + " ".join(_badge(c) for c in candidates)
+        + "</p>",
         unsafe_allow_html=True,
     )
+    if removed_names:
+        st.caption(
+            f"既定で **{len(removed_names)}** 列を削除しました。"
+            "不要な列はチェックを外すと復元できます"
+            "（無名でもデータがある列は既定では保持。必要なら追加でチェックして削除できます）"
+        )
+    else:
+        st.caption(
+            "既定で削除される列はありませんでした"
+            "（無名でもデータがある列は既定では保持。必要なら以下で選択して削除できます）"
+        )
 
-    removed_names = {c["name"] for c in removed}
     col_b, col_a = st.columns(2)
     with col_b:
         st.markdown(
-            f"**削除前**（{len(t.pre_invalid_col_df.columns)} 列 / オレンジ列 = 削除対象）"
+            f"**検出時点**（{len(pre.columns)} 列 / オレンジ列 = 現在削除中の列）"
         )
         st.markdown(
-            _df_to_html(
-                t.pre_invalid_col_df.astype(str),
-                max_height=340,
-                highlight_col_names=removed_names,
-            ),
+            _df_to_html(pre.astype(str), max_height=300, highlight_col_names=removed_names),
             unsafe_allow_html=True,
         )
     with col_a:
-        st.markdown(f"**削除後**（{len(t.df.columns)} 列）")
+        st.markdown(f"**現在**（{len(post.columns)} 列）")
         st.markdown(
-            _df_to_html(t.df.astype(str), max_height=340), unsafe_allow_html=True
+            _df_to_html(post.astype(str), max_height=300), unsafe_allow_html=True
         )
 
-    if st.button(
-        "↩️ 削除を取り消す（列構成を元に戻す）", key=f"invcol_undo_{t.table_id}"
-    ):
-        t.df = t.pre_invalid_col_df
-        t.pre_invalid_col_df = None
-        t.invalid_cols_removed = []
-        t.invalid_col_applied = False
+    with st.form(key=f"invcol_form_{t.table_id}"):
+        checks: Dict[str, bool] = {}
+        for c in candidates:
+            label = f"{c['name']}（{c['reason']} / 非空 {c['nonnull_count']} セル）を削除する"
+            checks[c["name"]] = st.checkbox(
+                label,
+                value=c["name"] in removed_names,
+                key=f"invcol_{t.table_id}_{c['position']}",
+            )
+        submitted = st.form_submit_button("選択を反映")
+
+    if submitted:
+        selected = [name for name, checked in checks.items() if checked]
+        t.df = pre.drop(columns=selected) if selected else pre.copy()
+        t.invalid_cols_removed = [
+            {"name": c["name"], "reason": c["reason"]}
+            for c in candidates
+            if c["name"] in selected
+        ]
         st.rerun()
 
 
@@ -1680,20 +1649,6 @@ def step_format():
                 return
 
     if st.session_state.auto_processing:
-        # 無効カラム削除は不可逆操作でユーザー確認が必須だが、自動処理モードでは
-        # 確認UIを出せないため、安全な部分集合（全欠損列のみ）だけを自動適用する。
-        # 無名でもデータがある列はデータ損失防止のため自動処理でも削除しない。
-        for t in tables:
-            candidates = getattr(t, "invalid_col_candidates", None)
-            if candidates and not t.invalid_col_applied:
-                auto_remove = [c for c in candidates if c["is_empty"]]
-                if auto_remove:
-                    t.pre_invalid_col_df = t.df.copy()
-                    t.df = t.df.drop(columns=[c["name"] for c in auto_remove])
-                    t.invalid_cols_removed = [
-                        {"name": c["name"], "reason": c["reason"]} for c in auto_remove
-                    ]
-                t.invalid_col_applied = True
         st.session_state.step = 4
         st.rerun()
 
@@ -2042,37 +1997,45 @@ def step_format():
                     st.markdown(outer_html, unsafe_allow_html=True)
 
         # ── 無効カラムの検出と削除機能 ────────────────────────────────
-        # 不可逆操作のためユーザー確認が必須。他処理と異なり自動適用せず、
-        # 対象テーブルごとに個別 expander でチェックボックス確認UIを表示する
-        # （確認フォームはウィジェットのため、静的HTML <details> でのネスト
-        # 表示はできない）。
+        # 他の整形処理と同様に既定（全欠損列）を自動適用済みの状態を表示する。
+        # 代表テーブルを展開表示し、残りは「その他の同様処理」としてまとめる
+        # （他処理と同じ体裁）。ただし列ごとに削除・復元を選び直せる調整
+        # フォームが必要なため、「その他の同様処理」も静的HTML <details> では
+        # なく実際の st.expander を使う（st.expander の直接ネストはできないが、
+        # 代表テーブルの expander とは兄弟関係の別 expander のため問題ない）。
         if invalid_col_targets:
             if not first_section:
                 st.divider()
             first_section = False
-            n_applied = sum(1 for t in invalid_col_targets if t.invalid_col_applied)
+            total_removed = sum(len(t.invalid_cols_removed) for t in invalid_col_targets)
             st.subheader(
                 f"🧹 無効カラムの検出と削除機能（対象：{len(invalid_col_targets)}テーブル）"
             )
-            if n_applied < len(invalid_col_targets):
-                st.warning(
-                    f"**{len(invalid_col_targets)}** テーブルで全欠損列・無名列の候補を検出しました。"
-                    f"不可逆操作のため、削除する列を確認・選択してください"
-                    f"（確認済み: {n_applied}/{len(invalid_col_targets)}）"
-                )
-            else:
-                st.success(
-                    f"**{len(invalid_col_targets)}** テーブルで無効カラムの確認が完了しました"
-                )
+            st.success(
+                f"**{len(invalid_col_targets)}** テーブルで全欠損列・無名列を検出し、"
+                f"既定で削除しました（削除列: 計 {total_removed} 件。"
+                f"不要な場合は各テーブルで復元・選び直しができます）"
+            )
 
-            for t in invalid_col_targets:
-                t_title = f"  🏷️ `{t.title}`" if t.title else ""
-                status = "✅ " if t.invalid_col_applied else "⚠️ "
-                with st.expander(
-                    f"{status}**`{t.table_id}`**{t_title}  —  シート: {t.sheet_name}",
-                    expanded=not t.invalid_col_applied,
-                ):
-                    _render_invalid_col_confirm(t)
+            rep_i = invalid_col_targets[0]
+            rep_i_title = f"  🏷️ `{rep_i.title}`" if rep_i.title else ""
+            with st.expander(
+                f"**`{rep_i.table_id}`**{rep_i_title}  —  シート: {rep_i.sheet_name}",
+                expanded=True,
+            ):
+                _render_invalid_col_body(rep_i)
+
+            rest_i = invalid_col_targets[1:]
+            if rest_i:
+                with st.expander(f"その他の同様処理（{len(rest_i)} 件）", expanded=False):
+                    for idx, r in enumerate(rest_i):
+                        if idx > 0:
+                            st.divider()
+                        r_title = f"  🏷️ `{r.title}`" if r.title else ""
+                        st.markdown(
+                            f"**`{r.table_id}`**{r_title}  —  シート: {r.sheet_name}"
+                        )
+                        _render_invalid_col_body(r)
 
         # ── Wide_to_long検出と変換機能 ────────────────────────
         if wide_to_long_applied:
