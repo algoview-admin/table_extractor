@@ -439,11 +439,19 @@ def apply_pivot_kv(df: Any, info: Dict[str, Any]) -> Any:
 # （Excel の余剰空列）。削除は不可逆操作のためここでは行わず、候補と既定選択
 # 状態のみを返す。実際の削除はユーザーが確認・選択した後にUI側で適用する。
 
-_PLACEHOLDER_COL_RE = _re.compile(r"^(unnamed:\s*\d+|列(_?\d+)?)$", _re.IGNORECASE)
+# "unnamed" 部分はコロン・空白・アンダースコアの区切りが表記揺れしても
+# （"Unnamed: 1" / "Unnamed_1" / "Unnamed 1" / "Unnamed1" 等）まとめて拾える
+# ように、区切り文字を [:\s_]* で任意個・任意組み合わせ許容する。末尾の
+# ".1" は pandas が重複列名を de-dup する際に付与するサフィックス
+# （例: "Unnamed: 1.1"）。
+_PLACEHOLDER_COL_RE = _re.compile(
+    r"^(unnamed[:\s_]*\d+(\.\d+)?|列(_?\d+)?)$", _re.IGNORECASE
+)
 
 
 def _is_placeholder_col_name(name: Any) -> bool:
-    """列名が「無名」（空文字・Unnamed: N・列/列N/列_N プレースホルダ・nan文字列）かを判定する。"""
+    """列名が「無名」（空文字・Unnamed: N とその表記揺れ・列/列N/列_N プレースホルダ・
+    nan文字列）かを判定する。"""
     s = str(name).strip()
     if s == "" or s.lower() in ("nan", "none"):
         return True
