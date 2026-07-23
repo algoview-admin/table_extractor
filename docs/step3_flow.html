@@ -18,7 +18,7 @@
   --sh:    0 2px 10px rgba(30,40,100,.09), 0 1px 3px rgba(30,40,100,.05);
 
   /* Stage accent — S1 sky, S2 violet, S3 fuchsia, S4 emerald, S5 rose,
-     S6 amber, S7 indigo, S8 cyan, S9 lime */
+     S6 amber, S7 indigo, S8 cyan, S9 lime, S10 teal, S11 pink, S12 slate */
   --s1:#0284C7; --s1-bg:#EFF9FF; --s1-lt:#BAE6FD;
   --s2:#6D28D9; --s2-bg:#F5F3FF; --s2-lt:#DDD6FE;
   --s3:#C026D3; --s3-bg:#FDF2FC; --s3-lt:#F5D0FE;
@@ -28,6 +28,9 @@
   --s7:#4338CA; --s7-bg:#F1F0FE; --s7-lt:#C7D2FE;
   --s8:#0891B2; --s8-bg:#ECFEFF; --s8-lt:#A5F3FC;
   --s9:#65A30D; --s9-bg:#F7FEE7; --s9-lt:#D9F99D;
+  --s10:#0D9488; --s10-bg:#F0FDFA; --s10-lt:#99F6E4;
+  --s11:#DB2777; --s11-bg:#FDF2F8; --s11-lt:#FBCFE8;
+  --s12:#475569; --s12-bg:#F8FAFC; --s12-lt:#CBD5E1;
 
   --fc-p: #475569; --fc-c: #B45309; --fc-r: #059669;
   --fc-ln: #CBD5E1;
@@ -51,6 +54,9 @@
   --s7:#818CF8; --s7-bg:#161233; --s7-lt:#312E81;
   --s8:#22D3EE; --s8-bg:#042F2E; --s8-lt:#164E63;
   --s9:#A3E635; --s9-bg:#0F1C04; --s9-lt:#3F6212;
+  --s10:#2DD4BF; --s10-bg:#042F2E; --s10-lt:#115E59;
+  --s11:#F472B6; --s11-bg:#500724; --s11-lt:#9D174D;
+  --s12:#94A3B8; --s12-bg:#1E1B4B; --s12-lt:#334155;
 }
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -381,19 +387,30 @@ const STAGES = [
       {k:'タイトル行',v:'先頭の単一文字列行をスキップ（例: シート名・ファイルタイトル）'},
       {k:'ヘッダー行',v:'文字列比率 ≥ 50% の連続行を最大12行検出'},
       {k:'マージ形式',v:'name のみ → "_" 連結 / name+unit → "名称 [単位]"'},
-      {k:'多軸展開用データ',v:'全行が name 役割かつ2行以上の場合、結合前の生ヘッダー行を raw_header_rows として保持（S3で使用）'},
+      {k:'多軸展開用データ',v:'全行が name 役割かつ2行以上の場合、結合前の生ヘッダー行を raw_header_rows として保持（S4で使用）'},
     ]},
   { id:2, k:'s2',
+    name:'Pivot検出と変換機能',
+    emoji:'🔀',
+    desc:'(属性名, 値) のペアが行として繰り返される縦持ち表を検出し、属性名を列見出しに昇格して横持ちに変換する。①単純統合が確定させた列構造をさらに作り変える決定論的な純構造変換のため、③Transpose・④軸展開より前に行う。発火した表はKVペア構造であり多段ヘッダー軸構造を持たないため、以降の軸展開・Transpose判定は対象外になる。',
+    fns:[{n:'detect_pivot_kv',pub:true},{n:'apply_pivot_kv',pub:true}],
+    rows:[
+      {k:'判定対象',v:'末尾2列を(属性列,値列)とみなし、先頭0列以上をキー/グルーピング列として扱う'},
+      {k:'レコード境界',v:'キー列があれば同一キーの連続範囲、無ければ属性値が現レコード内で既出になった時点を境界とする'},
+      {k:'欠落許容',v:'属性の一部が欠けたレコードも許容（属性集合の和を列にし欠落セルは空欄）。ただし過半数が完全なレコードであることは要求'},
+      {k:'誤検出防止',v:'同一レコード内で属性が重複する場合はKVペア構造として不正とみなし検出しない'},
+    ]},
+  { id:3, k:'s3',
     name:'Transpose検出と変換機能',
     emoji:'🔄',
-    desc:'表の行と列が意味的に逆転している（エンティティが列・属性が行）かをLLMで判定し、正しい向きに転置する。normalize_tables の最初に実行し、以降の全処理がこの表の向きを前提とする。',
+    desc:'Pivot検出でKVペア構造と判定されなかった表を対象に、行と列が意味的に逆転している（エンティティが列・属性が行）かをLLMで判定し、正しい向きに転置する。以降の全処理がこの表の向きを前提とする。',
     fns:[{n:'make_transpose_client',pub:true},{n:'detect_transpose',pub:true},{n:'_call_transpose_api',pub:false},{n:'_format_table_for_transpose_check',pub:false},{n:'apply_transpose',pub:true}],
     rows:[
       {k:'判定基準',v:'1列目が指標名リスト・2列目以降がエンティティ（個体識別子）リストに見える場合のみ true'},
       {k:'退化ケース除外',v:'列数 ≤ 1 の場合はLLMを呼ばず None（形状上自明なケースのみ）'},
       {k:'定義場所',v:'src/step3_normalize_llm.py（LLM使用処理を分離）'},
     ]},
-  { id:3, k:'s3',
+  { id:4, k:'s4',
     name:'多軸ヘッダー展開機能',
     emoji:'🧩',
     desc:'多段ヘッダーの各行を構造的に分類し、単一値の注記行・時系列の冗長な上位グルーピング行は決定論的に除去。独立した複数カテゴリ軸（例: 科目×支店）が残る場合のみLLMで軸名を判定し、tidy形式に展開する。',
@@ -402,9 +419,9 @@ const STAGES = [
       {k:'行分類',v:'constant（単一値）／ time（時系列パターン一致）／ candidate（軸候補）／ irregular（対象外）'},
       {k:'冗長グルーピング除去',v:'leaf時系列行より値の種類数が少ない候補行は上位区分とみなし除外（例: 上期/下期 が 4月〜3月 の上位区分）'},
       {k:'LLM要否',v:'候補行が0件なら決定論のみで列名を再構築。候補行が残る場合のみ detect_dimension_axes を呼ぶ'},
-      {k:'対象外条件',v:'Transpose適用済みテーブルは raw_header_rows が転置前構造を指すため対象外'},
+      {k:'対象外条件',v:'Transpose適用済み・Pivot発火済みのテーブルは対象外'},
     ]},
-  { id:4, k:'s4',
+  { id:5, k:'s5',
     name:'グルーピング列の前方補完機能',
     emoji:'↕️',
     desc:'Excel の視覚的セル結合で先頭セルにしか値がない列を ffill で補完する。集計ラベルへの過伝播を防止する。',
@@ -413,7 +430,7 @@ const STAGES = [
       {k:'対象条件',v:'文字列型 かつ 内部 None あり かつ ffill後ユニーク率 < 50%'},
       {k:'過伝播防止',v:'集計ラベルになったセルは None に戻す（_is_agg_label を再利用）'},
     ]},
-  { id:5, k:'s5',
+  { id:6, k:'s6',
     name:'「うち」書き識別と別テーブル分離機能',
     emoji:'📤',
     desc:'「うち男性」「内数」等の内訳ラベルを持つ行を検出し、親（直近の集計行、無ければ直近の非内訳行）との対応を解決した上でメインテーブルから分離し、親子関係を保った独立テーブルとして新規生成する。remove_aggregates が親の集計行自体を冗長行として削除するより前に実行する。',
@@ -421,9 +438,9 @@ const STAGES = [
     rows:[
       {k:'接頭辞',v:'UCHI_PREFIXES 辞書（うち／内数／内訳／再掲）、括弧で囲む2パターンにも対応'},
       {k:'親の解決順',v:'① 同一コンテキストの直近の集計ラベル行 → ② 直近の非内訳行 → ③ 両方見つからなければ分離対象から除外'},
-      {k:'新規テーブル',v:'is_step3_derived=True の DetectedTable として tables に追加し、以降の集計除去・単位分離・Wide_to_long/クロス集計の対象にする'},
+      {k:'新規テーブル',v:'is_step3_derived=True の DetectedTable として tables に追加し、以降の集計除去・単位分離・無効カラム削除・Wide_to_long/クロス集計の対象にする'},
     ]},
-  { id:6, k:'s6',
+  { id:7, k:'s7',
     name:'集計行の検出・削除・メタデータ保存機能',
     emoji:'🗑️',
     desc:'「計」「合計」等を持つ行・列を除去し、除去情報を監査用メタデータとして保存する。行・列いずれも、他の個別データ（列は内訳列、行は同一コンテキストの個別行）から実際に合計値を再現できると検証できた場合のみ除去する（無条件では除去しない）。',
@@ -435,7 +452,7 @@ const STAGES = [
       {k:'行メタデータ',v:'除去行 × 数値列ごとに {key, context, sum_column, reported_value} を記録'},
       {k:'列メタデータ',v:'列ごと削除される集計列は元の行ごとに {removed_column, context, reported_value} を記録'},
     ]},
-  { id:7, k:'s7',
+  { id:8, k:'s8',
     name:'単位混在の分離機能',
     emoji:'⚖️',
     desc:'「15歳以上人口(人)」のように指標名へ単位が埋め込まれた列を検出し、単位が異なる指標が同一テーブル内に混在している場合に指標マスタ（指標名→単位の対応表）へ分離する。remove_aggregates の直後に _apply_agg_and_unit_split から呼ばれる。',
@@ -445,24 +462,47 @@ const STAGES = [
       {k:'複数列該当時',v:'単位付きセルの比率が最も高い列を採用'},
       {k:'指標マスタ',v:'{指標名, 単位} の2列 DataFrame として生成し unit_master_df に保持'},
     ]},
-  { id:8, k:'s8',
+  { id:9, k:'s9',
+    name:'無効カラムの検出と削除機能',
+    emoji:'🧹',
+    desc:'全欠損列・無名列（プレースホルダ列名）を検出する。既定では全欠損列のみを自動削除し、無名でもデータがある列は既定では保持して候補提示に留める（データ損失防止）。集計行除去・単位混在の分離の直後、Wide_to_long/クロス集計による縦持ち変換より前に実行し、うち分離で新規生成された内訳テーブルにも同様に適用する。',
+    fns:[{n:'detect_invalid_columns',pub:true},{n:'_is_placeholder_col_name',pub:false},{n:'_apply_invalid_col_defaults',pub:false}],
+    rows:[
+      {k:'ケース1',v:'全欠損列（空白文字列も欠損扱い）。統計秘匿マーカー（"X","***"等）は実データとして扱う'},
+      {k:'ケース2',v:'無名列（列名がプレースホルダ: Unnamed: N・列/列N 等の表記揺れ）。無名でもデータがある場合は既定では削除しない'},
+      {k:'安全弁',v:'候補列が全列数と一致する場合は最低1列を残すため末尾の候補を除外'},
+      {k:'UI連携',v:'pre_invalid_col_df に削除前の全列を保持し、invalid_cols_removed で現在の削除状態を管理。不可逆にはならず、ユーザーが列ごとに復元・追加削除を選び直せる'},
+    ]},
+  { id:10, k:'s10',
     name:'Wide_to_long検出と変換機能',
     emoji:'📏',
-    desc:'「2023_売上」「2023_原価」のように時系列と指標名が1つの列名に合成された複合表記の横持ち表を検出し、時系列軸のみを縦持ちに変換する（指標は列として維持）。指標が2種類以上の場合のみ発火し、1種類なら detect_cross_table（S9）の担当として互いに排他的に動作する。全テーブル走査後に一括適用する。',
+    desc:'「2023_売上」「2023_原価」のように時系列と指標名が1つの列名に合成された複合表記の横持ち表を検出し、時系列軸のみを縦持ちに変換する（指標は列として維持）。指標が2種類以上の場合のみ発火し、1種類なら detect_cross_table（S11）の担当として互いに排他的に動作する。全テーブル走査後に一括適用する。',
     fns:[{n:'detect_wide_to_long',pub:true},{n:'_split_time_indicator',pub:false},{n:'stack_wide_to_long',pub:true}],
     rows:[
-      {k:'列名分解',v:'あらゆる分割点で _classify_col_time を試し、最長一致するトークンを時系列として採用（S9と時系列パターン辞書を共有）'},
+      {k:'列名分解',v:'あらゆる分割点で _classify_col_time を試し、最長一致するトークンを時系列として採用（S11と時系列パターン辞書を共有）'},
       {k:'発火条件',v:'分解できる列が候補列の80%以上 かつ 時系列トークン2種類以上 かつ 指標2種類以上 かつ 想定グリッドに対する実列数が60%以上'},
       {k:'歯抜け対応',v:'時系列×指標の組み合わせに対応する元列が無い場合は NaN で埋める'},
     ]},
-  { id:9, k:'s9',
+  { id:11, k:'s11',
     name:'クロス集計形式の検出と縦持ち変換機能',
     emoji:'📐',
-    desc:'月・四半期・年度等の時系列パターンそのものが列名になっている横持ち表（例: "2022年","2023年"）を検出し、pd.melt で long format に変換する。指標が単一のケースを担当し、複合列名（S8）とは互いに排他。',
+    desc:'月・四半期・年度等の時系列パターンそのものが列名になっている横持ち表（例: "2022年","2023年"）を検出し、pd.melt で long format に変換する。指標が単一のケースを担当し、複合列名（S10）とは互いに排他。',
     fns:[{n:'detect_cross_table',pub:true},{n:'stack_cross_table',pub:true},{n:'_classify_col_time',pub:false},{n:'_extract_year_context',pub:false}],
     rows:[
       {k:'検出条件',v:'時系列パターン列が2列以上 かつ 候補列の80%以上'},
       {k:'年補完',v:'月のみ列の場合、タイトル/ファイル名から西暦を抽出して付加'},
+    ]},
+  { id:12, k:'s12',
+    name:'ファイル外メタデータからの派生カラム生成機能',
+    emoji:'📎',
+    desc:'S10/S11でWide_to_long・クロス集計の縦持ち変換対象と確定した表を対象に、ファイル名・シート名など表データ本体には現れない付帯情報をLLMで抽出し、定数列として埋め込む。各項目は既存の区分列・集計軸・他の抽出項目との包含関係に基づき、挿入位置（anchor/position）をLLMが判定する。(filename, sheet_name, 区分列構成, 集計軸名) 単位でLLM呼び出し結果をキャッシュし、同一シート内の同構造テーブルで使い回す。',
+    fns:[{n:'extract_external_metadata',pub:true},{n:'apply_external_metadata',pub:true}],
+    rows:[
+      {k:'抽出対象の例',v:'サービス名・製品名／オプション種別・機能区分／指標名（シート名 "◯◯別（△△）" の△△等）／年度'},
+      {k:'抽出しないもの',v:'既存列に既に含まれる情報／文書の種類・体裁を表す汎用語／少しでも判断に迷うもの'},
+      {k:'並び順の決定',v:'包含関係だけを根拠にLLMがanchor（隣接列）とposition（前/後）を判定し、区分列の並びに差し込む（決定論的なチェーン解決はapply_external_metadata側）'},
+      {k:'先頭列固定',v:'既存区分列の先頭列（デフォルトの主軸）は常に一番左を維持し、抽出項目をその左には挿入しない（プロンプト指示＋コード側の安全網の両方で担保）'},
+      {k:'適用範囲',v:'縦持ち変換される表にのみ適用（対象外の表にまで無条件で列を増やさない）'},
     ]},
 ];
 
@@ -475,7 +515,16 @@ const FLOWS = {
         {fn:'merge_header_rows',pub:true,desc:'複数ヘッダー行を1行の列名にマージ',
          uses:[{fn:'_detect_row_language',note:'多言語混在時に主言語を特定'}],ret:'List[str]（列名リスト）'},
       ]},
-  2:{ overview:'make_transpose_client でLLMクライアントを生成し、全テーブルで使い回す。各テーブルに対し detect_transpose で判定し、true の場合のみ apply_transpose で転置する。',
+  2:{ overview:'detect_pivot_kv で末尾2列を(属性列,値列)とみなしKVペア構造かを判定し、検出できた場合のみ apply_pivot_kv で属性名を列見出しに昇格して横持ちに変換する。',
+      nodes:[
+        {fn:'detect_pivot_kv',pub:true,desc:'末尾2列を(属性列,値列)、それより前をキー列とみなし、(属性名,値)ペアが繰り返される縦持ち構造かを判定',
+         uses:[],ret:'{key_cols, attr_col, value_col, attributes, record_count} | None'},
+        {type:'arrow',label:'検出された場合のみ'},
+        {fn:'apply_pivot_kv',pub:true,desc:'検出結果と同一のレコード境界判定ロジックで、属性名を列見出しに昇格し横持ちに変換',
+         uses:[{fn:'_dedup_columns',note:'キー列+属性列の列名重複を解消（S4と共有）'}],
+         ret:'横持ち DataFrame（キー列＋属性列群）'},
+      ]},
+  3:{ overview:'make_transpose_client でLLMクライアントを生成し、全テーブルで使い回す。各テーブルに対し detect_transpose で判定し、true の場合のみ apply_transpose で転置する。',
       nodes:[
         {fn:'make_transpose_client',pub:true,desc:'環境変数から OpenAI / Azure OpenAI のクライアントとモデル名を生成',
          uses:[],ret:'(client, model)'},
@@ -487,7 +536,7 @@ const FLOWS = {
         {fn:'apply_transpose',pub:true,desc:'先頭列をラベル列とみなして転置し、新しいラベル列名を entity_axis_name にする',
          uses:[],ret:'転置後 DataFrame'},
       ]},
-  3:{ overview:'detect_multi_axis_header で構造分類し、軸候補が残れば detect_dimension_axes（LLM）で妥当性・軸名を判定して apply_multi_axis_header で展開。候補が無ければLLMを呼ばず列名のみ再構築する。',
+  4:{ overview:'detect_multi_axis_header で構造分類し、軸候補が残れば detect_dimension_axes（LLM）で妥当性・軸名を判定して apply_multi_axis_header で展開。候補が無ければLLMを呼ばず列名のみ再構築する。',
       nodes:[
         {fn:'detect_multi_axis_header',pub:true,desc:'ヘッダー各行を constant/time/candidate/irregular に分類し、除外可能な行と残存する軸候補行を切り分ける',
          uses:[{fn:'_ffill_header_row',note:'結合セルの空白を前方補完'},{fn:'_header_row_kind',note:'行1件ずつの構造分類'}],
@@ -499,13 +548,13 @@ const FLOWS = {
         {fn:'apply_multi_axis_header',pub:true,desc:'確定した軸名でtidy形式（各軸を列として展開・値を縦持ち）に展開',
          uses:[],ret:'展開後 DataFrame（行数が増加）'},
       ]},
-  4:{ overview:'fill_grouping_cols が単独で処理を担う。集計ラベルの過伝播防止に _is_agg_label（S6と共有）を再利用する。',
+  5:{ overview:'fill_grouping_cols が単独で処理を担う。集計ラベルの過伝播防止に _is_agg_label（S7と共有）を再利用する。',
       nodes:[
         {fn:'fill_grouping_cols',pub:true,desc:'グルーピング列の内部 None を ffill で補完する',
-         uses:[{fn:'_is_agg_label',note:'集計ラベルへの過伝播を防ぐ（S6と共有）'}],
+         uses:[{fn:'_is_agg_label',note:'集計ラベルへの過伝播を防ぐ（S7と共有）'}],
          ret:'(filled_df, filled_col_names)'},
       ]},
-  5:{ overview:'detect_uchi_breakdown で内訳行と親の対応を解決し、見つかった場合のみ apply_uchi_split でメインテーブルから分離して内訳テーブルを生成する。',
+  6:{ overview:'detect_uchi_breakdown で内訳行と親の対応を解決し、見つかった場合のみ apply_uchi_split でメインテーブルから分離して内訳テーブルを生成する。',
       nodes:[
         {fn:'detect_uchi_breakdown',pub:true,desc:'内訳ラベルを持つ行を検出し、直近の集計行（無ければ直近の非内訳行）を親として解決',
          uses:[{fn:'_is_uchi_label',note:'セル値がUCHI_PREFIXESのいずれかで始まるか判定し子ラベルを抽出'}],
@@ -514,7 +563,7 @@ const FLOWS = {
         {fn:'apply_uchi_split',pub:true,desc:'内訳行をメインテーブルから除去し、親子列を持つ内訳テーブルを生成',
          uses:[],ret:'(main_df, breakdown_df)'},
       ]},
-  6:{ overview:'remove_aggregates が全処理を統括する。集計列の検出には新たに _agg_column_group_key / _is_column_sum_verified による合計一致検証が入り、内訳列の無い単独指標を誤除去しないようにする。',
+  7:{ overview:'remove_aggregates が全処理を統括する。集計列の検出には _agg_column_group_key / _is_column_sum_verified による合計一致検証が入り、内訳列の無い単独指標を誤除去しないようにする。',
       nodes:[
         {fn:'remove_aggregates',pub:true,desc:'集計行・集計列を検出して除去し、監査用メタデータを生成する統括関数',
          uses:[
@@ -528,13 +577,22 @@ const FLOWS = {
            {fn:'_to_jsonable',note:'メタデータの値を JSON 変換可能な型に整形'},
          ],ret:'(cleaned_df, removed_rows_info, removed_cols, removed_row_indices, agg_removed_row_metadata, agg_removed_col_metadata)'},
       ]},
-  7:{ overview:'_apply_agg_and_unit_split が remove_aggregates（S6）の直後に detect_and_split_units を呼び出す統括ヘルパー。normalize_tables 本体と、うち分離で新規生成された内訳テーブルの両方から共通で呼ばれる。',
+  8:{ overview:'_apply_agg_and_unit_split が remove_aggregates（S7）の直後に detect_and_split_units を呼び出す統括ヘルパー。normalize_tables 本体と、うち分離で新規生成された内訳テーブルの両方から共通で呼ばれる。',
       nodes:[
-        {fn:'_apply_agg_and_unit_split',pub:false,desc:'集計行・集計列の除去（S6）と単位混在の分離を1テーブルに順番に適用する共通ヘルパー',
+        {fn:'_apply_agg_and_unit_split',pub:false,desc:'集計行・集計列の除去（S7）と単位混在の分離を1テーブルに順番に適用する共通ヘルパー',
          uses:[{fn:'detect_and_split_units',note:'単位混在列を検出し指標マスタへ分離'}],
          ret:'整形済み DataFrame（DetectedTable の該当フィールドを in-place 更新）'},
       ]},
-  8:{ overview:'detect_wide_to_long で複合列名（時系列+指標）を検出し、wtl_info を stack_wide_to_long に渡して縦持ちに変換する。全テーブル走査後、テーブル間で独立に一括適用する。',
+  9:{ overview:'_apply_invalid_col_defaults が detect_invalid_columns を呼び出して候補を検出し、既定選択分（全欠損列）のみを自動削除する。無名でもデータがある列は既定では保持し、UI側でユーザーが個々の候補列ごとに選び直せる。',
+      nodes:[
+        {fn:'detect_invalid_columns',pub:true,desc:'全欠損列・無名列（プレースホルダ列名）の候補を検出する（削除はしない）',
+         uses:[{fn:'_is_placeholder_col_name',note:'列名がプレースホルダ表記かを判定'}],
+         ret:'{"columns": [候補dict, ...]} | None'},
+        {type:'arrow',label:'候補を渡す'},
+        {fn:'_apply_invalid_col_defaults',pub:false,desc:'候補のうち全欠損列（default_selected）のみを自動削除し、削除前の全列DataFrameをt.pre_invalid_col_dfに保持',
+         uses:[],ret:'既定削除後 DataFrame（DetectedTable の該当フィールドも更新）'},
+      ]},
+  10:{ overview:'detect_wide_to_long で複合列名（時系列+指標）を検出し、wtl_info を stack_wide_to_long に渡して縦持ちに変換する。全テーブル走査後、テーブル間で独立に一括適用する。',
       nodes:[
         {fn:'detect_wide_to_long',pub:true,desc:'時系列+指標の複合列名を持つ横持ち表かを判定',
          uses:[{fn:'_split_time_indicator',note:'列名を(時系列トークン, 指標名, 種別)に分解'}],
@@ -543,7 +601,7 @@ const FLOWS = {
         {fn:'stack_wide_to_long',pub:true,desc:'検出情報に基づき時系列トークンごとにサブフレームを作り縦に連結',
          uses:[],ret:'縦持ち DataFrame（指標は列として維持）'},
       ]},
-  9:{ overview:'detect_cross_table で横持ち形式を検出し、stack_info を stack_cross_table に渡して縦持ちに変換する。',
+  11:{ overview:'detect_cross_table で横持ち形式を検出し、stack_info を stack_cross_table に渡して縦持ちに変換する。',
       nodes:[
         {fn:'detect_cross_table',pub:true,desc:'時系列パターン列を検出してクロス集計形式かを判定',
          uses:[{fn:'_classify_col_time',note:'各列名のパターン分類'},{fn:'_extract_year_context',note:'月のみ列の場合に年を補完'}],
@@ -551,6 +609,15 @@ const FLOWS = {
         {type:'arrow',label:'stack_info を渡す'},
         {fn:'stack_cross_table',pub:true,desc:'変換情報に基づき pd.melt で横持ち → 縦持ちに変換',
          uses:[],ret:'縦持ち DataFrame'},
+      ]},
+  12:{ overview:'S10/S11でWide_to_long/クロス集計検出が確定した表に対し、_get_external_meta（キャッシュ付きラッパー）経由で extract_external_metadata を呼び出し、抽出できた場合のみ apply_external_metadata で区分列の並びに差し込む。',
+      nodes:[
+        {fn:'extract_external_metadata',pub:true,desc:'ファイル名・シート名から付帯情報をLLMで抽出し、各項目の挿入位置（anchor/position）も判定させる',
+         uses:[{fn:'_call_transpose_api',note:'リトライ付きAPI呼び出しを再利用'}],
+         ret:'{"items":[{"column_name","value","source","is_year","anchor","position"},...],"reasoning"} | None'},
+        {type:'arrow',label:'items を渡す'},
+        {fn:'apply_external_metadata',pub:true,desc:'anchor/positionを解決するチェーン解決アルゴリズムで区分列の並びに派生列を差し込む（先頭列は常に固定）',
+         uses:[],ret:'(派生列を挿入したdf, 新しい区分列の並び順のリスト)'},
       ]},
 };
 
@@ -597,13 +664,13 @@ const FN = {
       {t:'c',tx:'ASCII率 ≥ 50%？',yes:"return 'en'"},
       {t:'r',tx:"return 'other'"},
     ]},
-  make_transpose_client:{s:2,pub:true,io:{i:'（環境変数のみ）',o:'(client, model)'},
+  make_transpose_client:{s:3,pub:true,io:{i:'（環境変数のみ）',o:'(client, model)'},
     desc:'OPENAI_API_TYPE 環境変数に応じて OpenAI または AzureOpenAI クライアントを生成する。step4_analyze.py とは依存を持たせないため独立実装。',
     steps:[
       {t:'c',tx:'OPENAI_API_TYPE == "azure"？',yes:'AzureOpenAI クライアントを生成',no:'OpenAI クライアントを生成'},
       {t:'r',tx:'return (client, model)'},
     ]},
-  detect_transpose:{s:2,pub:true,io:{i:'pd.DataFrame, client, model',o:'{"entity_axis_name","reasoning"} | None'},
+  detect_transpose:{s:3,pub:true,io:{i:'pd.DataFrame, client, model',o:'{"entity_axis_name","reasoning"} | None'},
     desc:'表の行列が意味的に逆転しているかをLLMで判定する。列数1以下の退化ケースのみLLMを呼ばず除外し、それ以外は必ずLLMを呼ぶ。',
     steps:[
       {t:'c',tx:'df が空 または 列数 < 2？',yes:'return None（形状上自明なケースのみ、意味的ヒューリスティックではない）'},
@@ -613,7 +680,7 @@ const FN = {
       {t:'c',tx:'is_transposed が true？',no:'return None'},
       {t:'r',tx:'return {entity_axis_name, reasoning}'},
     ]},
-  _call_transpose_api:{s:2,pub:false,io:{i:'client, model, messages',o:'str（レスポンス本文）'},
+  _call_transpose_api:{s:3,pub:false,io:{i:'client, model, messages',o:'str（レスポンス本文）'},
     desc:'429 / レートリミットエラー時に指数バックオフでリトライしながらAPIを呼び出す（最大4回、15秒→30秒→60秒）。',
     steps:[
       {t:'p',tx:'chat.completions.create を呼び出し（response_format=json_object, temperature=0.1）'},
@@ -621,20 +688,20 @@ const FN = {
       {t:'c',tx:'429 / rate_limit エラー？',yes:'指数バックオフしてリトライ（最大3回）',no:'例外をそのまま送出'},
       {t:'r',tx:'return レスポンス本文'},
     ]},
-  _format_table_for_transpose_check:{s:2,pub:false,io:{i:'pd.DataFrame, max_sample_rows=30',o:'str（プロンプト用テキスト）'},
+  _format_table_for_transpose_check:{s:3,pub:false,io:{i:'pd.DataFrame, max_sample_rows=30',o:'str（プロンプト用テキスト）'},
     desc:'Transpose判定プロンプト用に列名とサンプル行を軽量テキスト化する。行数が多い場合も先頭30行にトランケートしてトークンコストを抑える。',
     steps:[
       {t:'p',tx:'列名リストと先頭 max_sample_rows 行を抽出'},
       {t:'r',tx:'return "列名: [...]\\nサンプル行（先頭N行/全M行中）: ..."'},
     ]},
-  apply_transpose:{s:2,pub:true,io:{i:'pd.DataFrame, entity_axis_name',o:'転置後 pd.DataFrame'},
+  apply_transpose:{s:3,pub:true,io:{i:'pd.DataFrame, entity_axis_name',o:'転置後 pd.DataFrame'},
     desc:'先頭列をラベル列とみなして表を転置し、新しいラベル列名を entity_axis_name にする。',
     steps:[
       {t:'p',tx:'先頭列を index に設定して .T で転置'},
       {t:'p',tx:'index 列を entity_axis_name にリネーム'},
       {t:'r',tx:'return 転置後 DataFrame'},
     ]},
-  detect_multi_axis_header:{s:3,pub:true,io:{i:'List[List[Any]]（raw_header_rows）',o:'{ffilled_rows,kinds,values,leaf_time_idx,dropped_idxs,candidate_idxs} | None'},
+  detect_multi_axis_header:{s:4,pub:true,io:{i:'List[List[Any]]（raw_header_rows）',o:'{ffilled_rows,kinds,values,leaf_time_idx,dropped_idxs,candidate_idxs} | None'},
     desc:'多段ヘッダーの各行を構造的に分類し、除外可能な行・LLM判定が必要な軸候補行を切り分ける（決定論的、値の意味理解は不要）。',
     steps:[
       {t:'c',tx:'ヘッダー行が2行未満？',yes:'return None（対象外）'},
@@ -647,14 +714,14 @@ const FN = {
       {t:'c',tx:'leaf_time_idx あり かつ candidate_idxs が残る？',yes:'return None（時系列軸と未解決軸候補の混在は対象外、安全側フォールバック）'},
       {t:'r',tx:'return {ffilled_rows, kinds, values, leaf_time_idx, dropped_idxs, candidate_idxs}'},
     ]},
-  _ffill_header_row:{s:3,pub:false,io:{i:'List[Any]（1ヘッダー行）',o:'List[Any]（前方補完後）'},
+  _ffill_header_row:{s:4,pub:false,io:{i:'List[Any]（1ヘッダー行）',o:'List[Any]（前方補完後）'},
     desc:'ヘッダー行内の空白セルを左から右へ前方補完する。実際に結合されたセル（XLSX）は読み込み時点で複製済みのため冪等に働き、CSV等で空白のまま連結を表現している場合はこれで復元する。',
     steps:[
       {t:'p',tx:'左から順に走査し、非空セルの値を last として保持'},
       {t:'c',tx:'空白セル？',yes:'last の値で埋める（last が None ならそのまま None）'},
       {t:'r',tx:'return 前方補完後の行'},
     ]},
-  _header_row_kind:{s:3,pub:false,io:{i:'ffilled_row, value_positions?',o:'(kind, values)'},
+  _header_row_kind:{s:4,pub:false,io:{i:'ffilled_row, value_positions?',o:'(kind, values)'},
     desc:'前方補完済みヘッダー行を分類する。value_positions が指定された場合、その列位置のセルのみを対象にする（リーフ行がラベル列にも実名を持つケースで誤って値として拾わないため）。',
     steps:[
       {t:'p',tx:'value_positions内の非空セルを抽出し重複排除した values を作成'},
@@ -665,7 +732,7 @@ const FN = {
       {t:'c',tx:'ユニーク値数 > 非空セル数の半分？',yes:"return ('irregular', values)（ほぼ一意＝共有カテゴリ軸でない安全弁）"},
       {t:'r',tx:"return ('candidate', values)"},
     ]},
-  apply_multi_axis_header:{s:3,pub:true,io:{i:'pd.DataFrame, info, axis_result',o:'展開後 pd.DataFrame'},
+  apply_multi_axis_header:{s:4,pub:true,io:{i:'pd.DataFrame, info, axis_result',o:'展開後 pd.DataFrame'},
     desc:'LLMが確定した軸名・値列名で、多軸クロス集計形式の多段ヘッダーをtidy形式（各軸を列として展開し値を縦持ちに変換）に展開する。',
     steps:[
       {t:'p',tx:'候補軸行すべてで空白の列位置をラベル列として特定'},
@@ -673,7 +740,7 @@ const FN = {
       {t:'p',tx:'各データ列位置 × 各元データ行について、軸名=ヘッダー値、値列=元セル値のレコードを1件生成'},
       {t:'r',tx:'return 展開後 DataFrame（列数減少・行数増加）'},
     ]},
-  detect_dimension_axes:{s:3,pub:true,io:{i:'axis_candidates, title, client, model',o:'{axis_names,value_name,reasoning} | None'},
+  detect_dimension_axes:{s:4,pub:true,io:{i:'axis_candidates, title, client, model',o:'{axis_names,value_name,reasoning} | None'},
     desc:'多段ヘッダーの軸候補行が、真に独立したカテゴリ軸の交差かどうかをLLMで判定する。空の候補リストの場合はLLMを呼ばない。',
     steps:[
       {t:'c',tx:'axis_candidates が空？',yes:'return None（LLM不要）'},
@@ -684,13 +751,13 @@ const FN = {
       {t:'c',tx:'axis_names の件数が axis_candidates と不一致？',yes:'return None（安全側フォールバック）'},
       {t:'r',tx:'return {axis_names, value_name, reasoning}'},
     ]},
-  _dedup_columns:{s:3,pub:false,io:{i:'List[str]（列名）',o:'List[str]（重複解消後）'},
+  _dedup_columns:{s:4,pub:false,io:{i:'List[str]（列名）',o:'List[str]（重複解消後）'},
     desc:'列名重複時に連番を付与する（step2_detect._make_unique_columns と同等ロジックをこちらに複製し、循環importを回避）。',
     steps:[
       {t:'p',tx:'列名を順に走査し、既出の場合は "_2","_3"... を付与'},
       {t:'r',tx:'return 重複解消後の列名リスト'},
     ]},
-  fill_grouping_cols:{s:4,pub:true,io:{i:'pd.DataFrame',o:'Tuple[pd.DataFrame, List[str]]'},
+  fill_grouping_cols:{s:5,pub:true,io:{i:'pd.DataFrame',o:'Tuple[pd.DataFrame, List[str]]'},
     desc:'視覚的セル結合によるグルーピング列の内部 None を前方補完する。集計ラベルの過伝播を防止する。',
     steps:[
       {t:'c',tx:'df が None または空？',yes:'return (df, [])'},
@@ -703,7 +770,7 @@ const FN = {
       {t:'p',tx:'列を更新 → filled_cols に追加'},
       {t:'r',tx:'return (filled_df, filled_col_names)'},
     ]},
-  detect_uchi_breakdown:{s:5,pub:true,io:{i:'pd.DataFrame',o:'{label_col,parent_col_name,child_col_name,rows,match_count} | None'},
+  detect_uchi_breakdown:{s:6,pub:true,io:{i:'pd.DataFrame',o:'{label_col,parent_col_name,child_col_name,rows,match_count} | None'},
     desc:'「うち」等の接頭辞を持つ内訳行を検出し、親子関係を解決する。複数列が該当する場合は一致件数最多の列を採用する。',
     steps:[
       {t:'p',tx:'文字列型の列（ラベル列）を候補として抽出'},
@@ -716,7 +783,7 @@ const FN = {
       {t:'c',tx:'1件も解決できない？',yes:'return None'},
       {t:'r',tx:'return {label_col, parent_col_name, child_col_name, rows, match_count}'},
     ]},
-  _is_uchi_label:{s:5,pub:false,io:{i:'str（セル値）',o:'str | None（子ラベル）'},
+  _is_uchi_label:{s:6,pub:false,io:{i:'str（セル値）',o:'str | None（子ラベル）'},
     desc:'セル値が UCHI_PREFIXES のいずれかで始まるかを判定する。括弧で囲まれた表記も2パターン許容する。',
     steps:[
       {t:'c',tx:'空文字？',yes:'return None'},
@@ -727,7 +794,7 @@ const FN = {
       {t:'c',tx:'括弧内が接頭辞で始まる？',yes:'return 括弧内の子ラベル（例: "（うち男性）" → "男性"）'},
       {t:'r',tx:'return None（いずれにも一致しない）'},
     ]},
-  apply_uchi_split:{s:5,pub:true,io:{i:'pd.DataFrame, info',o:'(main_df, breakdown_df)'},
+  apply_uchi_split:{s:6,pub:true,io:{i:'pd.DataFrame, info',o:'(main_df, breakdown_df)'},
     desc:'detect_uchi_breakdown の検出結果を使って、うち内訳行をメインテーブルから除去し、親子関係を保った内訳テーブルを生成する。',
     steps:[
       {t:'p',tx:'内訳行を drop して main_df を生成'},
@@ -735,7 +802,7 @@ const FN = {
       {t:'p',tx:'列順を元のラベル列位置に親/子列を配置する形に整形'},
       {t:'r',tx:'return (main_df, breakdown_df)'},
     ]},
-  remove_aggregates:{s:6,pub:true,io:{i:'pd.DataFrame',o:'(cleaned_df, removed_rows_info, removed_col_names, removed_row_indices, agg_removed_row_metadata, agg_removed_col_metadata)'},
+  remove_aggregates:{s:7,pub:true,io:{i:'pd.DataFrame',o:'(cleaned_df, removed_rows_info, removed_col_names, removed_row_indices, agg_removed_row_metadata, agg_removed_col_metadata)'},
     desc:'集計行・集計列を検出して除去し、除去情報と監査用メタデータ（行・列それぞれ）を返す統括関数。',
     steps:[
       {t:'p',tx:'ラベル列を特定',nt:'文字列型 かつ 実質数値でない'},
@@ -753,13 +820,13 @@ const FN = {
       {t:'p',tx:'除去行・列を drop してインデックスリセット'},
       {t:'r',tx:'return (cleaned_df, removed_rows_info, removed_cols, removed_row_indices, agg_removed_row_metadata, agg_removed_col_metadata)'},
     ]},
-  _agg_column_group_key:{s:6,pub:false,io:{i:'str（列名）',o:'str（グループキー）'},
+  _agg_column_group_key:{s:7,pub:false,io:{i:'str（列名）',o:'str（グループキー）'},
     desc:'列名から、集計列と内訳候補列を対応付けるためのグループキーを求める。単位表記を除去した上で、アンダースコア区切りの最初のセグメントを返す。',
     steps:[
       {t:'p',tx:'末尾の単位表記（例: "[百万円]"）を除去'},
       {t:'c',tx:'アンダースコアを含む？',yes:'return 最初のセグメント（例: "事業所数_合計" → "事業所数"）',no:'return ""（接頭辞なしグループ、例: "現金給与総額" → ""）'},
     ]},
-  _is_column_sum_verified:{s:6,pub:false,io:{i:'df, agg_col, sibling_cols, match_ratio=0.8',o:'bool'},
+  _is_column_sum_verified:{s:7,pub:false,io:{i:'df, agg_col, sibling_cols, match_ratio=0.8',o:'bool'},
     desc:'agg_col の値が sibling_cols の行ごとの合計とみなせるかを検証する。合計元となりうる列が2列未満の場合は検証不能とみなし False。',
     steps:[
       {t:'c',tx:'sibling_cols が2列未満？',yes:'return False（内訳データが存在しないため集計列と誤認しない）'},
@@ -769,7 +836,7 @@ const FN = {
       {t:'c',tx:'検証できた行が0件？',yes:'return False'},
       {t:'r',tx:'return (一致した行数 / 検証できた行数) ≥ match_ratio'},
     ]},
-  _is_agg_label:{s:6,pub:false,io:{i:'str',o:'bool'},
+  _is_agg_label:{s:7,pub:false,io:{i:'str',o:'bool'},
     desc:'値が集計ラベルか判定する。完全一致 or キーワードで末尾一致する場合に True。',
     steps:[
       {t:'p',tx:'_normalize_label で空白類・制御文字を除去',calls:['_normalize_label']},
@@ -779,7 +846,7 @@ const FN = {
       {t:'p',tx:'末尾の括弧注記を除去',nt:'例: "合計（参考）" → "合計"'},
       {t:'c',tx:'除去後の文字列で再チェック',yes:'return True',no:'return False'},
     ]},
-  _is_redundant_agg_row:{s:6,pub:false,io:{i:'df, idx, col, ctx_cols, covar',o:'bool'},
+  _is_redundant_agg_row:{s:7,pub:false,io:{i:'df, idx, col, ctx_cols, covar',o:'bool'},
     desc:'集計値を持つ行が冗長かを判定。同一コンテキストに個別データが存在する場合のみ True。',
     steps:[
       {t:'p',tx:'col 自身と共変列をコンテキストから除外'},
@@ -788,7 +855,7 @@ const FN = {
       {t:'c',tx:'一致行に非集計値あり？',yes:'return True（冗長）'},
       {t:'c',tx:'一致行なし かつ コンテキスト列に NULL あり？',yes:'列全体で判定',no:'return False'},
     ]},
-  _detect_covariates:{s:6,pub:false,io:{i:'df, cols',o:'Dict[str, set]'},
+  _detect_covariates:{s:7,pub:false,io:{i:'df, cols',o:'Dict[str, set]'},
     desc:'一方が他方を一意に決定する列ペア（コード↔ラベルなど）を検出する。',
     steps:[
       {t:'p',tx:'ctx_cols の全ペアを列挙'},
@@ -796,27 +863,27 @@ const FN = {
       {t:'c',tx:'一意対応あり？',yes:'共変ペアとして両方向に記録'},
       {t:'r',tx:'return {col: {共変列のセット}} 辞書'},
     ]},
-  _is_grouping_col:{s:6,pub:false,io:{i:'series, df_len',o:'bool'},
+  _is_grouping_col:{s:7,pub:false,io:{i:'series, df_len',o:'bool'},
     desc:'列がグルーピング変数（カテゴリ・コード列）かを判定する。ユニーク率が低い列のみコンテキストに使用する。',
     steps:[
       {t:'p',tx:'series.nunique() でユニーク値数を取得'},
       {t:'p',tx:'ユニーク率 = n_unique / max(1, df_len) を計算'},
       {t:'c',tx:'ユニーク率 < 50%？',yes:'return True（グルーピング列）',no:'return False'},
     ]},
-  _normalize_label:{s:6,pub:false,io:{i:'str',o:'str'},
+  _normalize_label:{s:7,pub:false,io:{i:'str',o:'str'},
     desc:'ラベル比較用に Unicode 空白類・全角スペース・制御文字を除去して正規化する。',
     steps:[
       {t:'p',tx:'_WS_RE.sub("", s) で全角スペース・ゼロ幅文字を除去'},
       {t:'p',tx:'.strip() でトリム'},
       {t:'r',tx:'return 正規化済み文字列'},
     ]},
-  _to_jsonable:{s:6,pub:false,io:{i:'Any（値）',o:'Any（JSON 変換可能な値）'},
+  _to_jsonable:{s:7,pub:false,io:{i:'Any（値）',o:'Any（JSON 変換可能な値）'},
     desc:'numpy スカラー（int64/float64 等）を JSON 変換可能な Python 組み込み型に変換する。監査用メタデータの値整形に使用する。',
     steps:[
       {t:'c',tx:'.item() メソッドを持つ？',no:'return v（そのまま）'},
       {t:'c',tx:'.item() の呼び出しに成功？',yes:'return v.item()（組み込み型）',no:'return v（そのまま）'},
     ]},
-  detect_and_split_units:{s:7,pub:true,io:{i:'pd.DataFrame',o:'{label_col,master_col,cleaned_df,master_df,mapping,match_count} | None'},
+  detect_and_split_units:{s:8,pub:true,io:{i:'pd.DataFrame',o:'{label_col,master_col,cleaned_df,master_df,mapping,match_count} | None'},
     desc:'「15歳以上人口(人)」のように指標名へ単位が埋め込まれた列を検出し、単位が異なる指標が同一テーブル内に混在している場合に指標マスタへ分離する。',
     steps:[
       {t:'c',tx:'df が None または空？',yes:'return None'},
@@ -829,7 +896,7 @@ const FN = {
       {t:'p',tx:'{指標名, 単位} の master_df を生成'},
       {t:'r',tx:'return {label_col, master_col, cleaned_df, master_df, mapping, match_count}'},
     ]},
-  _apply_agg_and_unit_split:{s:7,pub:false,io:{i:'DetectedTable, pd.DataFrame',o:'整形済み pd.DataFrame'},
+  _apply_agg_and_unit_split:{s:8,pub:false,io:{i:'DetectedTable, pd.DataFrame',o:'整形済み pd.DataFrame'},
     desc:'集計行・集計列の除去（S6）、単位混在の分離（S7）を1テーブルに適用し、結果の df を返す。normalize_tables 本体とうち分離で新規生成された内訳テーブルの両方から呼ばれる共通処理。',
     steps:[
       {t:'p',tx:'remove_aggregates を呼び出し、結果を DetectedTable の該当フィールドに反映',calls:['remove_aggregates']},
@@ -837,7 +904,7 @@ const FN = {
       {t:'c',tx:'単位混在を検出？',yes:'cleaned_df を分離後の値に更新し、unit_master_df / unit_split_info を設定'},
       {t:'r',tx:'return cleaned_df'},
     ]},
-  detect_wide_to_long:{s:8,pub:true,io:{i:'pd.DataFrame, title?, filename?',o:'{label_cols,time_var_name,time_kind,time_tokens,indicators,parsed_cols} | None'},
+  detect_wide_to_long:{s:10,pub:true,io:{i:'pd.DataFrame, title?, filename?',o:'{label_cols,time_var_name,time_kind,time_tokens,indicators,parsed_cols} | None'},
     desc:'DataFrame が「時系列×複数指標」の複合列名を持つ横持ち表かを検出する。列名が時系列トークン単体の列は対象外（detect_cross_table の担当）。',
     steps:[
       {t:'c',tx:'df が空 または 列数 < 4？',yes:'return None'},
@@ -848,7 +915,7 @@ const FN = {
       {t:'c',tx:'想定グリッド（時系列数×指標数）に対する実列数比率 < 60%？',yes:'return None（歯抜けが多すぎる場合は誤検出とみなす）'},
       {t:'r',tx:'return {label_cols, time_var_name, time_kind, time_tokens, indicators, parsed_cols}'},
     ]},
-  _split_time_indicator:{s:8,pub:false,io:{i:'str（列名）',o:'(time_token,indicator,time_kind) | None'},
+  _split_time_indicator:{s:10,pub:false,io:{i:'str（列名）',o:'(time_token,indicator,time_kind) | None'},
     desc:'列名を (time_token, indicator_name, time_kind) に分解する。あらゆる分割点でプレフィックス／サフィックスが _classify_col_time にマッチするかを試し、最も長く一致したトークンを採用する。',
     steps:[
       {t:'p',tx:'全ての分割位置でプレフィックス・サフィックスそれぞれを _classify_col_time で判定',calls:['_classify_col_time']},
@@ -856,7 +923,7 @@ const FN = {
       {t:'c',tx:'候補なし？',yes:'return None'},
       {t:'r',tx:'return 最も長いトークンの候補（例: "2024Q1売上" では "2024"ではなく"2024Q1"を優先）'},
     ]},
-  stack_wide_to_long:{s:8,pub:true,io:{i:'pd.DataFrame, info',o:'縦持ち pd.DataFrame'},
+  stack_wide_to_long:{s:10,pub:true,io:{i:'pd.DataFrame, info',o:'縦持ち pd.DataFrame'},
     desc:'detect_wide_to_long の検出結果を使って横持ち→縦持ち変換する。時系列トークンごとにサブフレームを作り、指標列は元の列出現順を維持したまま縦に連結する。',
     steps:[
       {t:'p',tx:'time_tokens を走査し、各トークンについてラベル列＋時系列列のサブフレームを生成'},
@@ -864,7 +931,7 @@ const FN = {
       {t:'p',tx:'全サブフレームを縦に連結'},
       {t:'r',tx:'return 縦持ち DataFrame（指標は列として維持）'},
     ]},
-  detect_cross_table:{s:9,pub:true,io:{i:'pd.DataFrame, title?, filename?',o:'Dict | None'},
+  detect_cross_table:{s:11,pub:true,io:{i:'pd.DataFrame, title?, filename?',o:'Dict | None'},
     desc:'DataFrame がクロス集計形式（月・四半期・年度等を列に持つ横持ち）かを検出する。',
     steps:[
       {t:'c',tx:'列数 < 3 または DataFrame が空？',yes:'return None'},
@@ -876,7 +943,7 @@ const FN = {
       {t:'c',tx:'月のみ列？',yes:'_extract_year_context でタイトル/ファイル名から年を補完',calls:['_extract_year_context']},
       {t:'r',tx:'return {label_cols, time_cols, time_kind, var_name, value_name, year_context}'},
     ]},
-  stack_cross_table:{s:9,pub:true,io:{i:'pd.DataFrame, stack_info',o:'pd.DataFrame（縦持ち）'},
+  stack_cross_table:{s:11,pub:true,io:{i:'pd.DataFrame, stack_info',o:'pd.DataFrame（縦持ち）'},
     desc:'クロス集計形式（横持ち）を縦持ち（long format）に変換する。',
     steps:[
       {t:'p',tx:'stack_info から各パラメータを取得',nt:'label_cols, time_cols, var_name, value_name, year_context'},
@@ -885,15 +952,15 @@ const FN = {
       {t:'p',tx:'インデックスをリセット'},
       {t:'r',tx:'return 縦持ち DataFrame'},
     ]},
-  _classify_col_time:{s:9,pub:false,io:{i:'str（列名）',o:'str | None'},
-    desc:'列名が時系列パターンにマッチするかを判定し、種別文字列を返す。S8（Wide_to_long）とS3（多軸ヘッダー展開）からも共有される。',
+  _classify_col_time:{s:11,pub:false,io:{i:'str（列名）',o:'str | None'},
+    desc:'列名が時系列パターンにマッチするかを判定し、種別文字列を返す。S10（Wide_to_long）とS4（多軸ヘッダー展開）からも共有される。',
     steps:[
       {t:'p',tx:'列名を文字列化・trim'},
       {t:'p',tx:'TIME_PATTERNS の各パターンと順番に照合',nt:'year_month / month / fiscal_quarter / quarter / fiscal_half / fiscal_year / year / year_num'},
       {t:'c',tx:'パターンに一致？',yes:'return 種別文字列',no:'次のパターンへ'},
       {t:'r',tx:'return None（いずれにも一致しない）'},
     ]},
-  _extract_year_context:{s:9,pub:false,io:{i:'title?, filename?',o:'int | None'},
+  _extract_year_context:{s:11,pub:false,io:{i:'title?, filename?',o:'int | None'},
     desc:'テーブルタイトルまたはファイル名から西暦年（1900〜2099）を抽出する。',
     steps:[
       {t:'p',tx:'タイトル文字列を正規表現でスキャン（1900〜2099）'},
@@ -901,6 +968,83 @@ const FN = {
       {t:'p',tx:'ファイル名を正規表現でスキャン'},
       {t:'c',tx:'一致あり？',yes:'return 整数（西暦年）'},
       {t:'r',tx:'return None'},
+    ]},
+  detect_pivot_kv:{s:2,pub:true,io:{i:'pd.DataFrame',o:'{key_cols,attr_col,value_col,attributes,record_count} | None'},
+    desc:'DataFrame が (属性名, 値) のペアで繰り返される縦持ち表であるかを検出する。末尾2列を (属性列, 値列)、それより前をキー/グルーピング列とみなす。',
+    steps:[
+      {t:'c',tx:'df が空 または 列数 < 2？',yes:'return None'},
+      {t:'p',tx:'末尾2列を attr_col, value_col、それより前を key_cols として取得'},
+      {t:'c',tx:'attr_col が数値型/bool型/日時型？',yes:'return None（属性列は文字列であるべき）'},
+      {t:'c',tx:'attr_col に空値がある？',yes:'return None'},
+      {t:'c',tx:'属性のユニーク種類数 < 2？',yes:'return None'},
+      {t:'p',tx:'key_cols があれば各行のキー値をタプル化。無ければ「属性が全行数の半分以下」であることを要求',nt:'キー列が無い場合、各属性が最低2回は繰り返される見込みが無ければ繰り返しペア構造とはみなさない（キー列がある場合はキー単位でレコードが確定するためこの制約は不要）'},
+      {t:'p',tx:'キー値の切り替わり（キー列なしの場合は属性の既出）を境界としてレコードに分割'},
+      {t:'c',tx:'同一レコード内で属性が重複？',yes:'return None（KVペア構造として不正、誤検出防止）'},
+      {t:'c',tx:'レコード数 < 2？',yes:'return None'},
+      {t:'c',tx:'全属性を含む完全なレコードが過半数未満？',yes:'return None（属性の一部欠落は許容するが、大半が不完全ならKV構造ではない）'},
+      {t:'r',tx:'return {key_cols, attr_col, value_col, attributes, record_count}'},
+    ]},
+  apply_pivot_kv:{s:2,pub:true,io:{i:'pd.DataFrame, info',o:'横持ち pd.DataFrame'},
+    desc:'detect_pivot_kv が検出した (属性, 値) ペアの繰り返し構造を横持ちに変換する。detect_pivot_kv と同一のレコード境界判定ロジックを再適用する。',
+    steps:[
+      {t:'p',tx:'detect_pivot_kv と同一ロジックでレコード境界を再判定し、レコードごとに {属性: 値} の辞書を構築'},
+      {t:'p',tx:'各レコードについて key_cols の値 ＋ attributes の順で行を組み立て',nt:'欠落している属性セルは空文字とする（不揃いレコードを許容）'},
+      {t:'p',tx:'列名は key_cols + attributes を _dedup_columns で重複解消',calls:['_dedup_columns']},
+      {t:'r',tx:'return 横持ち DataFrame（キー列＋属性列群）'},
+    ]},
+  detect_invalid_columns:{s:9,pub:true,io:{i:'pd.DataFrame',o:'{"columns":[候補dict,...]} | None'},
+    desc:'無効カラム（全欠損列・無名列）の候補を検出する（削除はしない）。両者はしばしば同じ物理列で発生する（Excelの余剰空列）。',
+    steps:[
+      {t:'c',tx:'df が空 または 列数0？',yes:'return None'},
+      {t:'p',tx:'各列について非欠損セル数(nonnull)をカウント',nt:'空文字列も欠損扱い。統計秘匿マーカー（"X","***"等）は非空文字列なので実データとして扱われる'},
+      {t:'p',tx:'is_empty(nonnull==0) と is_unnamed を判定',calls:['_is_placeholder_col_name']},
+      {t:'c',tx:'is_empty も is_unnamed も False？',yes:'候補にしない（次の列へ）'},
+      {t:'p',tx:'reason を決定',nt:'両方True→"無名＋全欠損" / is_emptyのみ→"全欠損" / is_unnamedのみ→"無名（データあり）"'},
+      {t:'p',tx:'candidate dict を追加',nt:'default_selected は is_empty のみ True（無名でもデータがある列は既定では選択しない＝データ損失防止）'},
+      {t:'c',tx:'候補なし？',yes:'return None'},
+      {t:'c',tx:'候補数が全列数以上？',yes:'安全弁として末尾の候補を除外（誤検出防止のため最低1列は残す）'},
+      {t:'r',tx:'return {"columns": candidates}'},
+    ]},
+  _is_placeholder_col_name:{s:9,pub:false,io:{i:'Any（列名）',o:'bool'},
+    desc:'列名が「無名」（空文字・Unnamed: N とその表記揺れ・列/列N/列_N プレースホルダ・nan文字列）かを判定する。',
+    steps:[
+      {t:'p',tx:'文字列化して trim'},
+      {t:'c',tx:'空文字 または "nan"/"none"？',yes:'return True'},
+      {t:'r',tx:'return _PLACEHOLDER_COL_RE にマッチするか',nt:'大小無視。"Unnamed: N" の表記揺れ（コロン・空白・アンダースコア混在）／"列"／"列N"／"列_N"／末尾".1"（pandasの重複列de-dupサフィックス）に対応'},
+    ]},
+  _apply_invalid_col_defaults:{s:9,pub:false,io:{i:'DetectedTable, pd.DataFrame',o:'既定削除後 pd.DataFrame'},
+    desc:'無効カラム候補を検出し、既定選択分（全欠損列）のみを自動削除する。削除前の全列DataFrameを保持し、UI側での復元・追加削除を可能にする。',
+    steps:[
+      {t:'p',tx:'detect_invalid_columns を呼び出し',calls:['detect_invalid_columns']},
+      {t:'p',tx:'候補を t.invalid_col_candidates に保存'},
+      {t:'c',tx:'候補なし？',yes:'return df（そのまま）'},
+      {t:'p',tx:'削除前の全列 df を t.pre_invalid_col_df に保持'},
+      {t:'p',tx:'default_selected な候補（全欠損列）を t.invalid_cols_removed に記録'},
+      {t:'r',tx:'return default_remove を drop した df（候補が無ければ df のまま）'},
+    ]},
+  extract_external_metadata:{s:12,pub:true,io:{i:'filename, sheet_name, title, dimension_columns, axis_name, value_name, client, model',o:'{"items":[...],"reasoning"} | None'},
+    desc:'ファイル名・シート名から、表データ本体には現れない付帯メタデータをLLMで抽出し、各項目の挿入位置（anchor/position）も判定させる。',
+    steps:[
+      {t:'c',tx:'filename・sheet_name どちらも無い？',yes:'return None（LLM不要）'},
+      {t:'p',tx:'既存区分列の先頭列を primary_axis_line としてプロンプトへ追加',nt:'先頭列は常に一番左を維持し、抽出項目はposition="before"を使えない旨をLLMへ明示（先頭列がデフォルトの主軸として押し出されるのを防ぐ）'},
+      {t:'p',tx:'ファイル名・シート名・区分列構成・集計軸名・値列名を埋め込んだプロンプトでLLM判定を呼び出し',calls:['_call_transpose_api']},
+      {t:'c',tx:'API呼び出し / JSONパースに失敗？',yes:'return None（1テーブルの失敗で検出処理全体を落とさない）'},
+      {t:'p',tx:'各itemを検証',nt:'column_name/value/source(filename|sheet_name)が揃っているか、既存の区分列・集計軸・値列名と重複していないか'},
+      {t:'p',tx:'anchor/positionが両方とも有効な形式（anchorが非空文字列、positionがbefore/after）でなければ両方nullに正規化'},
+      {t:'r',tx:'return {items: cleaned, reasoning}（items は空リストの場合を含む）'},
+    ]},
+  apply_external_metadata:{s:12,pub:true,io:{i:'pd.DataFrame, items, dim_cols, axis_name',o:'(派生列を挿入したdf, 新しい区分列の並び順のリスト)'},
+    desc:'extract_external_metadata が抽出したメタデータ列を、各項目の anchor/position（既存区分列・集計軸・他項目との包含関係）に基づいて区分列の並びに差し込む（決定論処理）。',
+    steps:[
+      {t:'c',tx:'items が空？',yes:'return (df, dim_cols)（そのまま）'},
+      {t:'p',tx:'派生カラム名を既存区分列・集計軸・相互で重複回避（連番付与）し、元名→実名の対応表(name_map)を作成'},
+      {t:'p',tx:'primary_axis(dim_colsの先頭列)を保持し、ordered=[...dim_cols]から開始'},
+      {t:'p',tx:'各itemを反復パスで解決',nt:'anchorがprimary_axisかつposition="before"の場合は安全側で"after"に補正（プロンプト側の制約をコード側でも決定論的に担保）'},
+      {t:'c',tx:'anchor が無効/null または anchor==axis_name または position が不正？',yes:'ordered の末尾（集計軸の直前）に追加'},
+      {t:'c',tx:'anchor が ordered 内に存在する？',yes:'その前後（position）に挿入',no:'次パスへ持ち越し（チェーン解決）'},
+      {t:'c',tx:'進展のないパスが発生？',yes:'残りは全て末尾（集計軸の直前）に追加（循環参照等の安全側フォールバック）'},
+      {t:'p',tx:'df に派生定数列を追加し、列順を ordered + 元の非dim列（元の順序）に並べ替え'},
+      {t:'r',tx:'return (out, ordered)'},
     ]},
 };
 
@@ -915,8 +1059,11 @@ const SV = {
   s7:{c:'var(--s7)',bg:'var(--s7-bg)'},
   s8:{c:'var(--s8)',bg:'var(--s8-bg)'},
   s9:{c:'var(--s9)',bg:'var(--s9-bg)'},
+  s10:{c:'var(--s10)',bg:'var(--s10-bg)'},
+  s11:{c:'var(--s11)',bg:'var(--s11-bg)'},
+  s12:{c:'var(--s12)',bg:'var(--s12-bg)'},
 };
-const KEYS = ['s1','s2','s3','s4','s5','s6','s7','s8','s9'];
+const KEYS = ['s1','s2','s3','s4','s5','s6','s7','s8','s9','s10','s11','s12'];
 function sv(k){const v=SV[k];return `--sc:${v.c};--sc-bg:${v.bg}`}
 
 /* ══════════ STATE ══════════ */
@@ -937,7 +1084,7 @@ function buildOverview(){
       <div class="io-cell" style="--sc:var(--s9)">
         <div class="io-lbl">出力</div>
         <div class="io-val">正規化済み DataFrame + メタ情報</div>
-        <div class="io-sub">transpose_info, multi_axis_info, filled_cols, uchi_split_info, stack_info, wide_to_long_info, agg_removed_row/col_metadata, unit_split_info…</div>
+        <div class="io-sub">pivot_info, transpose_info, multi_axis_info, filled_cols, uchi_split_info, agg_removed_row/col_metadata, unit_split_info, invalid_col_candidates/invalid_cols_removed, stack_info, wide_to_long_info, external_meta_info…</div>
       </div>
     </div>`;
 

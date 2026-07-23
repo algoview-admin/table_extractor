@@ -225,10 +225,11 @@ a.step-card:hover{
     </div>
     <div class="step-body">
       <div class="step-desc">
-        検出された生 DataFrame を分析に適した形式に正規化する。多段ヘッダーの統合・Transpose（行列逆転）
-        検出・多軸ヘッダー展開・グルーピング列の補完・「うち」書きの内訳分離・集計行列の除去・
-        単位混在の分離・クロス集計/Wide_to_longの縦持ち変換を行う。決定論的処理（step3_normalize_determ.py）
-        とLLM使用処理（step3_normalize_llm.py）に分離されている。
+        検出された生 DataFrame を分析に適した形式に正規化する。多段ヘッダーの統合・Pivot（属性/値ペアの昇格）
+        検出・Transpose（行列逆転）検出・多軸ヘッダー展開・グルーピング列の補完・「うち」書きの内訳分離・
+        集計行列の除去・単位混在の分離・無効カラム（全欠損列・無名列）の削除・クロス集計/Wide_to_longの
+        縦持ち変換・ファイル外メタデータ（ファイル名・シート名由来の付帯情報）の派生カラム生成を行う。
+        決定論的処理（step3_normalize_determ.py）とLLM使用処理（step3_normalize_llm.py）に分離されている。
       </div>
       <div class="step-io">
         <div class="io-cell"><div class="io-lbl">入力</div><div class="io-val">DetectedTable.df（step2 が構築した生 DataFrame）</div></div>
