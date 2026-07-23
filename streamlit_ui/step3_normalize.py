@@ -713,11 +713,15 @@ def _render_invalid_col_body(t: "DetectedTable") -> None:
     チェックボックスで現在の削除対象列を選び直せる（復元・追加削除の
     両方に対応）。
 
-    表示用の「現在」は pre_invalid_col_df + 現在の選択状態のみから計算する
+    表示用の「削除後」は pre_invalid_col_df + 現在の選択状態のみから計算する
     （この機能自身の結果だけを示し、後続のファイル外メタデータ生成機能等が
     追加した列を巻き込まない）。一方、実データ t.df の更新は候補列の増減
     のみを現在の t.df に対して行う（pre から丸ごと作り直すと、pre 取得後に
-    後続ステップが追加した列が失われてしまうため）。"""
+    後続ステップが追加した列が失われてしまうため）。
+
+    削除対象が1列も選ばれていない場合、「削除後」は「検出時点」と同一に
+    なり冗長なため表示しない。代わりに「検出時点」側のオレンジ列の説明を
+    「削除予定列」/「保持予定列」で切り替える。"""
     candidates = t.invalid_col_candidates
     if not candidates:
         return
@@ -761,19 +765,34 @@ def _render_invalid_col_body(t: "DetectedTable") -> None:
             "（無名でもデータがある列は既定では保持。必要なら以下で選択して削除できます）"
         )
 
-    col_b, col_a = st.columns(2)
-    with col_b:
+    if removed_names:
+        detect_paren = "削除予定列"
+        col_b, col_a = st.columns(2)
+        with col_b:
+            st.markdown(
+                f"**検出時点**（{len(pre.columns)} 列 / オレンジ列 = {detect_paren}）"
+            )
+            st.markdown(
+                _df_to_html(pre.astype(str), max_height=300, highlight_col_names=removed_names),
+                unsafe_allow_html=True,
+            )
+        with col_a:
+            st.markdown(f"**削除後**（{len(display_after.columns)} 列）")
+            st.markdown(
+                _df_to_html(display_after.astype(str), max_height=300), unsafe_allow_html=True
+            )
+    else:
+        detect_paren = "保持予定列"
         st.markdown(
-            f"**検出時点**（{len(pre.columns)} 列 / オレンジ列 = 現在削除中の列）"
+            f"**検出時点**（{len(pre.columns)} 列 / オレンジ列 = {detect_paren}）"
         )
         st.markdown(
-            _df_to_html(pre.astype(str), max_height=300, highlight_col_names=removed_names),
+            _df_to_html(
+                pre.astype(str),
+                max_height=300,
+                highlight_col_names={c["name"] for c in candidates},
+            ),
             unsafe_allow_html=True,
-        )
-    with col_a:
-        st.markdown(f"**現在**（{len(display_after.columns)} 列）")
-        st.markdown(
-            _df_to_html(display_after.astype(str), max_height=300), unsafe_allow_html=True
         )
 
     with st.form(key=f"invcol_form_{t.table_id}"):
