@@ -447,13 +447,16 @@ _EXTERNAL_META_USER_PROMPT = """以下のファイル名・シート名から、
 抽出した各項目についても、既存の区分列・集計軸列・他の抽出項目との
 「包含関係」だけを根拠に位置を決め、anchor（隣接させる列名）と
 position（"before"=その列の左 / "after"=その列の右）を指定すること:
-- 項目 X が既存の区分列（または他の抽出項目）Y を概念的に包含する
+{primary_axis_line}- 項目 X が既存の区分列（または他の抽出項目）Y を概念的に包含する
   （X が Y の上位区分にあたる）場合 → anchor=Y, position="before"
+  （ただし上記の先頭列固定ルールが優先される。先頭列に対しては
+  position="before" を使わないこと）
 - 逆に X が Y に包含される（X が Y の下位区分にあたる）場合 →
   anchor=Y, position="after"
 - 集計対象の数値そのものの種類・単位を表す項目（指標名に該当するもの）は、
-  既存区分列のうち最も細かい（最も右にある）区分の直後、つまり値に最も
-  近い位置に置く → anchor=既存区分列の最後の列名, position="after"
+  既存区分列・他の抽出項目を合わせた中で最も細かい（最も右にくる）区分の
+  直後、つまり値に最も近い位置に置く → anchor=その最も細かい区分の列名
+  （既存区分列でも他の抽出項目の column_name でもよい）, position="after"
 - 集計軸列（{axis_name}）を時間的・階層的に包含する上位区分にあたる項目
   （例: 集計軸が月なら、その年を表す項目）は、軸の直前に置く →
   anchor="{axis_name}", position="before"
@@ -499,6 +502,14 @@ def extract_external_metadata(
         return None
 
     title_line = f"表タイトル: {title}\n" if title else ""
+    primary_axis_line = ""
+    if dimension_columns:
+        primary_axis_line = (
+            f"- 既存区分列の先頭列「{dimension_columns[0]}」は、この表のデフォルトの主軸\n"
+            "  として常に一番左を維持する。どの抽出項目も、この列を anchor にして\n"
+            "  position=\"before\" を指定してはならない（この列より上位の概念に見える\n"
+            "  項目であっても、必ず position=\"after\" として先頭列の直後に置くこと）。\n"
+        )
     messages = [
         {"role": "system", "content": _EXTERNAL_META_SYSTEM_PROMPT},
         {
@@ -510,6 +521,7 @@ def extract_external_metadata(
                 dimension_columns=[str(c) for c in dimension_columns],
                 axis_name=axis_name,
                 value_name=value_name,
+                primary_axis_line=primary_axis_line,
             ),
         },
     ]
@@ -596,6 +608,11 @@ def apply_external_metadata(
         resolved.append({**item, "column_name": name})
 
     # 2. anchor / position を解決し、区分列の並び順を決める（チェーン解決）。
+    # 既存区分列の先頭列（この表のデフォルトの主軸）は常に一番左を維持する。
+    # プロンプト側にも同じ制約を明示しているが、LLMが誤って先頭列への
+    # position="before" を返した場合に備え、ここでも決定論的に補正する
+    # （安全側フォールバックとして "after" に読み替える）。
+    primary_axis = dim_cols[0] if dim_cols else None
     ordered = list(dim_cols)
     pending = list(resolved)
     for _ in range(len(pending) + 1):
@@ -607,6 +624,8 @@ def apply_external_metadata(
             raw_anchor = item.get("anchor")
             anchor = name_map.get(raw_anchor, raw_anchor) if raw_anchor else None
             position = item.get("position")
+            if anchor is not None and primary_axis is not None and anchor == primary_axis and position == "before":
+                position = "after"
             if not anchor or anchor == axis_name or position not in ("before", "after"):
                 ordered.append(item["column_name"])
                 progressed = True
