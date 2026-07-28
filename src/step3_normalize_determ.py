@@ -2311,7 +2311,6 @@ def _apply_agg_and_unit_split(
 _PAREN_SPLIT_MATCH_RATIO = 0.6     # 注釈付きセルが列内の文字列セルに占めるべき最低割合
 _PAREN_SPLIT_MIN_MATCH = 2         # 判定に必要な注釈付きセルの最低数
 _PAREN_SPLIT_MIN_DISTINCT = 2      # 注釈の異なり数の最低値（定数列になる分離は行わない）
-_PAREN_SPLIT_MAX_ANNOTATIONS = 20  # LLM に渡す注釈値の上限
 _PAREN_SPLIT_SAMPLE_ROWS = 5       # LLM に渡す元値サンプルの件数
 
 # 注記マーカー（"※1"、"注2"、"*3" 等）。分類軸ではないため対象外にする
