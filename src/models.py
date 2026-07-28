@@ -64,6 +64,9 @@ class DetectedTable:
     pre_multi_axis_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 多段ヘッダーの検出と解決機能（軸展開）適用前 DataFrame（展開適用時のみ）
     multi_axis_info: Optional[Dict[str, Any]] = field(default=None)  # 多段ヘッダーの検出と解決機能（軸展開）情報 {axis_names, value_name, dropped_labels, reasoning}
     multi_axis_candidates_declined: bool = False  # 軸候補は見つかったがLLMが妥当でないと判定した（またはLLM呼び出しが失敗した）か。Wide_to_long検出がTier2の閾値を緩和する判断材料に使う
+    col_split_candidates: Optional[List[Dict[str, Any]]] = field(default=None)  # カラム名内階層区切りの分離候補 [{name, position, delimiter, new_names, part_count, nonnull_count, match_count, unsplit_count, samples, default_selected}]（不変。検出時点のスナップショット）
+    pre_col_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 階層区切り分離前 DataFrame（不変。復元・再選択の基準）
+    col_split_applied: List[Dict[str, Any]] = field(default_factory=list)  # 現在分離が適用されているカラム [{name, new_names}]（既定は候補全件を自動適用、ユーザーがチェックボックスで調整可能）
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

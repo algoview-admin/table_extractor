@@ -8,7 +8,11 @@ import streamlit.components.v1 as components
 
 from streamlit_ui.shared import _go_to, _inject_splitter_js, _splitter_marker
 from src.models import DetectedTable
-from src.step3_normalize_determ import _is_agg_label, normalize_tables
+from src.step3_normalize_determ import (
+    _is_agg_label,
+    apply_column_hierarchy_split,
+    normalize_tables,
+)
 
 _TH_STYLE = (
     "position:sticky;top:0;z-index:2;"
@@ -824,6 +828,162 @@ def _render_invalid_col_body(t: "DetectedTable") -> None:
         t.df = new_df
         t.invalid_cols_removed = [
             {"name": c["name"], "reason": c["reason"]}
+            for c in candidates
+            if c["name"] in selected
+        ]
+        st.rerun()
+
+
+def _render_col_split_body(t: "DetectedTable") -> None:
+    """カラム名内階層区切りの分離結果と調整 UI（Streamlit ウィジェット版）。
+
+    他の整形処理と同様に既定で分離を自動適用した状態を表示する。列を増やす
+    操作のため、分離前 DataFrame（pre_col_split_df）を保持しており、
+    チェックボックスで分離対象カラムを選び直せる（復元・追加分離の両方に対応）。
+
+    表示用の「変換後」は pre_col_split_df ＋ 現在の選択状態のみから計算する
+    （この機能自身の結果だけを示し、後続ステップが追加・削除した列を
+    巻き込まない）。一方、実データ t.df の更新は候補列の分離状態の変化のみを
+    現在の t.df に対して行う（pre から丸ごと作り直すと、pre 取得後に後続
+    ステップが追加した列が失われてしまうため）。"""
+    candidates = getattr(t, "col_split_candidates", None)
+    pre = getattr(t, "pre_col_split_df", None)
+    if not candidates or pre is None:
+        return
+
+    st.markdown(_INVCOL_CHECKBOX_CSS, unsafe_allow_html=True)
+
+    applied_names = {c["name"] for c in (getattr(t, "col_split_applied", None) or [])}
+    active = [c for c in candidates if c["name"] in applied_names]
+
+    def _badge(c: Dict) -> str:
+        is_on = c["name"] in applied_names
+        color = "255,180,100" if is_on else "107,114,128"
+        state = "分離中" if is_on else "未分離"
+        return (
+            f"<code style='background:rgba({color},0.15);"
+            f"border:1px solid rgba({color},0.4);border-radius:4px;"
+            f"padding:1px 6px;margin:2px;display:inline-block'>"
+            f"{_html.escape(c['name'])}"
+            f"（区切り \"{_html.escape(c['delimiter'])}\" / "
+            f"{c['part_count']} 分割 / {state}）</code>"
+        )
+
+    st.markdown(
+        f"<p style='margin:4px 0 6px'>検出候補（{len(candidates)} 列）: "
+        + " ".join(_badge(c) for c in candidates)
+        + "</p>",
+        unsafe_allow_html=True,
+    )
+
+    if active:
+        generated = sum(c["part_count"] for c in active)
+        st.caption(
+            f"既定で **{len(active)}** 列を計 **{generated}** 列に分離しました。"
+            "不要はチェックを外すと元に戻せます"
+            "（カラム名だけでなくセル値も同じ区切りで同じ個数に分割できる列のみを"
+            "候補にしています）"
+        )
+    else:
+        st.caption(
+            "現在分離されている列はありません（以下で選択すると分離できます）"
+        )
+
+    unsplit_total = sum(c["unsplit_count"] for c in active)
+    if unsplit_total:
+        st.warning(
+            f"分離対象列のうち計 **{unsplit_total}** セルは区切り文字で"
+            f"同じ個数に分割できませんでした。該当セルは元の値を先頭カラムに"
+            f"残しています（データは失われていません）"
+        )
+
+    display_after = apply_column_hierarchy_split(pre, active) if active else None
+    green_cols = {n for c in active for n in c["new_names"]}
+
+    if display_after is not None:
+        col_b, col_a = st.columns(2)
+        with col_b:
+            st.markdown(
+                f"**変換前**（{len(pre.columns)} 列 × {len(pre)} 行 / "
+                f"オレンジ列 = 分離元カラム）"
+            )
+            st.markdown(
+                _df_to_html(
+                    pre.astype(str), max_height=340, highlight_col_names=applied_names
+                ),
+                unsafe_allow_html=True,
+            )
+        with col_a:
+            st.markdown(
+                f"**変換後**（{len(display_after.columns)} 列 × {len(display_after)} 行 / "
+                f"緑列 = 分離で生まれたカラム）"
+            )
+            st.markdown(
+                _df_to_html(
+                    display_after.astype(str), max_height=340, green_col_names=green_cols
+                ),
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            f"**検出時点**（{len(pre.columns)} 列 × {len(pre)} 行 / "
+            f"オレンジ列 = 分離候補カラム）"
+        )
+        st.markdown(
+            _df_to_html(
+                pre.astype(str),
+                max_height=340,
+                highlight_col_names={c["name"] for c in candidates},
+            ),
+            unsafe_allow_html=True,
+        )
+
+    with st.form(key=f"colsplit_form_{t.table_id}"):
+        checks: Dict[str, bool] = {}
+        for c in candidates:
+            parts_label = "」「".join(c["new_names"])
+            label = (
+                f"「{c['name']}」を「{parts_label}」に分離する"
+                f"（一致 {c['match_count']}/{c['nonnull_count']} セル）"
+            )
+            checks[c["name"]] = st.checkbox(
+                label,
+                value=c["name"] in applied_names,
+                key=f"colsplit_{t.table_id}_{c['position']}",
+            )
+        submitted = st.form_submit_button("選択を反映")
+
+    if submitted:
+        selected = {name for name, checked in checks.items() if checked}
+        # 候補列の分離状態の変化だけを現在の t.df に対して適用する（pre からの
+        # 丸ごと再構築はしない）。後続ステップが既に追加した列を、分離の
+        # 選び直しで失わないようにするため。
+        new_df = t.df.copy()
+        for c in candidates:
+            name = c["name"]
+            new_names = c["new_names"]
+            is_on = name in applied_names
+            want_on = name in selected
+            if want_on and not is_on:
+                if name not in new_df.columns:
+                    continue
+                pos = list(new_df.columns).index(name)
+                split_df = apply_column_hierarchy_split(new_df[[name]], [c])
+                new_df = new_df.drop(columns=[name])
+                for i, new_name in enumerate(new_names):
+                    new_df.insert(
+                        min(pos + i, len(new_df.columns)), new_name, split_df[new_name]
+                    )
+            elif is_on and not want_on:
+                present = [n for n in new_names if n in new_df.columns]
+                if not present or name not in pre.columns:
+                    continue
+                pos = list(new_df.columns).index(present[0])
+                new_df = new_df.drop(columns=present)
+                new_df.insert(min(pos, len(new_df.columns)), name, pre[name])
+        t.df = new_df
+        t.col_split_applied = [
+            {"name": c["name"], "new_names": list(c["new_names"])}
             for c in candidates
             if c["name"] in selected
         ]
@@ -1847,6 +2007,7 @@ def step_format():
     invalid_col_targets = [
         t for t in tables if getattr(t, "invalid_col_candidates", None)
     ]
+    col_split_targets = [t for t in tables if getattr(t, "col_split_candidates", None)]
     external_meta_applied = [
         t for t in tables if getattr(t, "external_meta_info", None)
     ]
@@ -1861,6 +2022,7 @@ def step_format():
         and not multi_axis_applied
         and not uchi_split_applied
         and not invalid_col_targets
+        and not col_split_targets
         and not external_meta_applied
     )
     if nothing_done:
@@ -1922,6 +2084,49 @@ def step_format():
                         level=2,
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
+
+        # ── カラム名内階層区切りの分離機能 ────────────────────────────
+        if col_split_targets:
+            if not first_section:
+                st.divider()
+            first_section = False
+            applied_all = [
+                c
+                for t in col_split_targets
+                for c in (getattr(t, "col_split_applied", None) or [])
+            ]
+            generated_cols = sum(len(c["new_names"]) for c in applied_all)
+            st.subheader(
+                f"✂️ カラム名内階層区切りの分離機能（対象：{len(col_split_targets)}テーブル）"
+            )
+            st.success(
+                f"**{len(col_split_targets)}** テーブルでカラム名に埋め込まれた"
+                f"階層区切りを検出し、複数カラムに分離しました  "
+                f"（分離元: 計 {len(applied_all)} 列 → 生成列: 計 {generated_cols} 列。"
+                f"不要な場合は各テーブルで元に戻せます）"
+            )
+
+            rep_c = col_split_targets[0]
+            rep_c_title = f"  🏷️ `{rep_c.title}`" if rep_c.title else ""
+            with st.expander(
+                f"**`{rep_c.table_id}`**{rep_c_title}  —  シート: {rep_c.sheet_name}",
+                expanded=True,
+            ):
+                _render_col_split_body(rep_c)
+
+                rest_c = col_split_targets[1:]
+                if rest_c:
+                    with st.expander(
+                        f"その他の同様処理（{len(rest_c)} 件）", expanded=False
+                    ):
+                        for idx, r in enumerate(rest_c):
+                            if idx > 0:
+                                st.divider()
+                            r_title = f"  🏷️ `{r.title}`" if r.title else ""
+                            st.markdown(
+                                f"**`{r.table_id}`**{r_title}  —  シート: {r.sheet_name}"
+                            )
+                            _render_col_split_body(r)
 
         # ── Pivot 検出と変換機能 ─────────────────────────────────
         if pivot_applied:

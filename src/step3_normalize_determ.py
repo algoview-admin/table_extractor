@@ -5,7 +5,8 @@
           多段ヘッダーの検出と解決機能（軸展開。単純統合自体はStep2の
           step2_detect.py が担う）・グルーピング列の補完・「うち」書きの
           内訳別テーブル分離・集計行列の除去・単位混在の分離（指標マスタ
-          生成）・クロス集計/Wide_to_longの縦持ち変換など、正規表現・
+          生成）・カラム名内階層区切りの分離・クロス集計/Wide_to_longの
+          縦持ち変換など、正規表現・
           語彙辞書のみで完結する（LLMを使わない）処理を扱う。
           LLMを使用する処理（Transpose検出等）は
           src/step3_normalize_llm.py を参照。
@@ -22,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .keywords import (
     AGG_KEYWORDS,
     AXIS_DELIMITERS,
+    HIERARCHY_DELIMITERS,
     STAT_NA_MARKERS as _STAT_NA_MARKERS,
     TIME_PATTERNS as _TIME_PATTERNS,
     UCHI_PREFIXES,
@@ -2287,6 +2289,253 @@ def _apply_agg_and_unit_split(
     return cleaned_df
 
 
+# ---------------------------------------------------------------------------
+# カラム名内階層区切りの分離
+# ---------------------------------------------------------------------------
+# カラム名に階層区切り文字（"/"、"・"、">" 等）が埋め込まれ、実際には複数の
+# 属性が1列に押し込まれているケースを検出し、複数カラムに分離する
+# （例: 列名 "帳票プラン1 / 帳票プラン2" ＋ 値 "フレッツ光 / おまかせLAN構築"
+#  → "帳票プラン1", "帳票プラン2" の2列）。
+#
+# 「分離すべきでないケース」（"T/O比"、"9/10月"、"N/A" 等）の誤検出を防ぐため、
+# カラム名が区切れるだけでは発火させず、「同じ列のセル値も同じ区切り文字で
+# 同じ個数に分割できる」ことを必須条件にする。この裏付けが取れれば分離後の
+# 列名・値は元テキストをそのまま採用するだけで命名判断が不要になるため、
+# detect_pivot_kv と同様にLLMは使わない。
+
+_COL_SPLIT_MIN_PART_LEN = 2       # 分割後の各パートの最小文字数（"N/A"、"T/O比" を除外する）
+_COL_SPLIT_MIN_MATCH_RATIO = 0.8  # 同じ個数に分割できる非空セルの最低割合
+_COL_SPLIT_MIN_SAMPLE = 2         # 判定に必要な非空セルの最低数
+_COL_SPLIT_SAMPLE_ROWS = 3        # UI 表示用に保持する分割サンプルの件数
+
+# パートが数字のみ（半角・全角）かの判定。"9/10月" の "9" のような
+# 日付・数値表記を階層区切りと誤認しないために使う。
+_NUMERIC_PART_RE = _re.compile(r"^[0-9０-９]+$")
+
+
+def _split_col_name_by_hierarchy(name: str) -> Optional[Tuple[str, List[str]]]:
+    """カラム名を階層区切り文字で分解し、(区切り文字, パート列) を返す。
+
+    HIERARCHY_DELIMITERS を記載順に試し、最初に下記をすべて満たしたものを
+    採用する（保守的判定）:
+      - パート数が2以上で、全パートが非空
+      - 全パート長が _COL_SPLIT_MIN_PART_LEN 以上（"N/A"、"T/O比" を除外）
+      - 数字のみのパートを含まない（"9/10月" 等の日付表記を除外）
+      - カラム名全体が時系列パターンに一致しない（"2023/2024年度" 等を除外）
+
+    分解できない場合は None。
+    """
+    if _classify_col_time(name) is not None:
+        return None
+
+    for delim in HIERARCHY_DELIMITERS:
+        if delim not in name:
+            continue
+        parts = [p.strip() for p in name.split(delim)]
+        if len(parts) < 2:
+            continue
+        if any(len(p) < _COL_SPLIT_MIN_PART_LEN for p in parts):
+            continue
+        if any(_NUMERIC_PART_RE.match(p) for p in parts):
+            continue
+        return delim, parts
+    return None
+
+
+def _split_cell_by_hierarchy(value: Any, delim: str, part_count: int) -> Optional[List[str]]:
+    """セル値を区切り文字で分割し、ちょうど part_count 個の非空パートに
+    なった場合のみそのリストを返す。空セル・個数不一致の場合は None。"""
+    import pandas as pd
+
+    if value is None:
+        return None
+    try:
+        if bool(pd.isna(value)):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    s = str(value).strip()
+    if s == "":
+        return None
+
+    parts = [p.strip() for p in s.split(delim)]
+    if len(parts) != part_count or not all(parts):
+        return None
+    return parts
+
+
+def detect_column_hierarchy_split(df: Any) -> Optional[Dict[str, Any]]:
+    """カラム名内に階層区切りが埋め込まれた列の分離候補を検出する（分離はしない）。
+
+    カラム名側（_split_col_name_by_hierarchy）とセル値側の両方のゲートを
+    通過した列のみを候補にする。セル値側は「非空セルが _COL_SPLIT_MIN_SAMPLE
+    件以上あり、そのうち _COL_SPLIT_MIN_MATCH_RATIO 以上がカラム名と同じ
+    区切り文字・同じ個数に分割できる」ことを要求する。この条件により、
+    "T/O比"（値が数値で区切り文字を含まない）や "東京/売上" のような
+    軸×指標の複合列名（値が数値）は発火しない。
+
+    生成する新カラム名が既存カラム名と衝突する場合は _dedup_columns と
+    同じ規約（"名前_1"、"名前_2"）で連番を付与する。
+
+    Returns:
+        候補がなければ None。あれば {"columns": [候補dict, ...]}。
+        候補dict: {name, position, delimiter, new_names, part_count,
+                   nonnull_count, match_count, unsplit_count, samples,
+                   default_selected}
+    """
+    import pandas.api.types as _pat
+
+    if df is None or df.empty or len(df.columns) == 0:
+        return None
+
+    taken = {str(c) for c in df.columns}
+    candidates: List[Dict[str, Any]] = []
+
+    for pos, col in enumerate(df.columns):
+        if _is_placeholder_col_name(col):
+            continue
+
+        series = df[col]
+        # 数値・真偽・日時列は「セル内に区切り文字を含む文字列」になり得ない
+        if (
+            _pat.is_numeric_dtype(series)
+            or _pat.is_bool_dtype(series)
+            or _pat.is_datetime64_any_dtype(series)
+        ):
+            continue
+
+        name = str(col).strip()
+        split = _split_col_name_by_hierarchy(name)
+        if not split:
+            continue
+        delim, parts = split
+        part_count = len(parts)
+
+        nonnull_count = 0
+        match_count = 0
+        samples: List[Dict[str, Any]] = []
+        for v in series:
+            cell_parts = _split_cell_by_hierarchy(v, delim, part_count)
+            if cell_parts is None:
+                # 空セルは母数に含めない（分割不能な非空セルのみ母数に数える）
+                s = "" if v is None else str(v).strip()
+                if s == "" or s.lower() in ("nan", "none"):
+                    continue
+                nonnull_count += 1
+                continue
+            nonnull_count += 1
+            match_count += 1
+            if len(samples) < _COL_SPLIT_SAMPLE_ROWS:
+                samples.append({"before": str(v).strip(), "after": cell_parts})
+
+        if nonnull_count < _COL_SPLIT_MIN_SAMPLE:
+            continue
+        if match_count / nonnull_count < _COL_SPLIT_MIN_MATCH_RATIO:
+            continue
+
+        # 分離後の列名を確定する（元の列名は消えるため衝突判定から外す）
+        taken.discard(name)
+        new_names: List[str] = []
+        for p in parts:
+            unique = p
+            n = 0
+            while unique in taken:
+                n += 1
+                unique = f"{p}_{n}"
+            taken.add(unique)
+            new_names.append(unique)
+
+        candidates.append(
+            {
+                "name": name,
+                "position": pos,
+                "delimiter": delim,
+                "new_names": new_names,
+                "part_count": part_count,
+                "nonnull_count": nonnull_count,
+                "match_count": match_count,
+                "unsplit_count": nonnull_count - match_count,
+                "samples": samples,
+                "default_selected": True,
+            }
+        )
+
+    if not candidates:
+        return None
+    return {"columns": candidates}
+
+
+def apply_column_hierarchy_split(df: Any, candidates: List[Dict[str, Any]]) -> Any:
+    """検出済み候補のカラムを、元の位置で複数カラムに分離した DataFrame を返す。
+
+    セル値が期待パート数に分割できない行は、元の値をそのまま先頭の新カラムに
+    残し、残りを空欄にする（分離できなかった行でもデータを失わないため）。
+    空セルは全新カラムを空欄にする。
+    """
+    import pandas as pd
+
+    if df is None or not candidates:
+        return df
+
+    by_name = {c["name"]: c for c in candidates}
+    out = pd.DataFrame(index=df.index)
+
+    for col in df.columns:
+        c = by_name.get(str(col))
+        if c is None:
+            out[str(col)] = df[col]
+            continue
+
+        delim = c["delimiter"]
+        part_count = c["part_count"]
+        columns_values: List[List[Any]] = [[] for _ in range(part_count)]
+        for v in df[col]:
+            cell_parts = _split_cell_by_hierarchy(v, delim, part_count)
+            if cell_parts is not None:
+                for i in range(part_count):
+                    columns_values[i].append(cell_parts[i])
+                continue
+            s = "" if v is None else str(v).strip()
+            if s.lower() in ("nan", "none"):
+                s = ""
+            # 分割できなかった非空セルは元の値を先頭カラムに温存する
+            columns_values[0].append(s)
+            for i in range(1, part_count):
+                columns_values[i].append("")
+
+        for i, new_name in enumerate(c["new_names"]):
+            out[new_name] = pd.Series(columns_values[i], index=df.index)
+
+    return out
+
+
+def _apply_col_split_defaults(t: Any, df: Any) -> Any:
+    """カラム名内階層区切りの分離候補を検出し、既定選択分を自動適用して返す。
+
+    他の整形処理と同様に既定では自動適用する。ただし列を増やす操作のため、
+    分離前 DataFrame を t.pre_col_split_df として保持しておき、UI側
+    （streamlit_ui/step3_normalize.py）でユーザーが候補列ごとに分離の適用・
+    復元をチェックボックスで調整できるようにする
+    （t.col_split_applied が現在の適用状態を表す）。
+    """
+    split_result = detect_column_hierarchy_split(df)
+    candidates = split_result.get("columns") if split_result else None
+    if not candidates:
+        return df
+
+    t.col_split_candidates = candidates
+    t.pre_col_split_df = df
+
+    selected = [c for c in candidates if c["default_selected"]]
+    t.col_split_applied = [
+        {"name": c["name"], "new_names": list(c["new_names"])} for c in selected
+    ]
+    if not selected:
+        return df
+    return apply_column_hierarchy_split(df, selected)
+
+
 def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
     """検出済みテーブル（DetectedTable）に Step3 の整形処理一式を適用する。
 
@@ -2314,26 +2563,37 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          縦持ち展開でその結果を上書きする
          （Transpose適用時は raw_header_rows が転置前の構造を指すため対象外。
          ただし上記の理由により軸候補がある表ではTransposeは適用されない）
-      5. グルーピング列の前方補完
-      6. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
+      5. カラム名内階層区切りの分離（決定論的・LLM不使用） — カラム名に階層
+         区切り文字（"/"、"・"、">" 等）が埋め込まれ、かつ同じ列のセル値も
+         同じ区切りで同じ個数に分割できる列を検出し、複数カラムに分離する。
+         1.〜4. が raw_header_rows を基準に列構造を確定させた後に行う
+         （先に列を増やすと raw_header_rows と df の列数がずれ、4.の軸展開が
+         適用できなくなるため）。一方、6.以降および11.のWide_to_long検出は
+         列名を手掛かりにするため、それらより前に分離して列名を原子的に
+         しておく（"東京/売上" のような軸×指標の複合列名はセル値側に区切りが
+         現れないため本機能では発火せず、Wide_to_long の判定を妨げない）。
+         列を増やす操作のため、9.の無効カラム同様に分離前 DataFrame を保持し
+         UI側でユーザーが列ごとに選び直せるようにする
+      6. グルーピング列の前方補完
+      7. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
          親として参照される「合計」行も冗長行とみなして削除してしまうため、
-         うち分離を必ず7.より前に行った上で、親として使われた行の
+         うち分離を必ず8.より前に行った上で、親として使われた行の
          インデックス（apply_uchi_split が返す protected_indices）を
          remove_aggregates に渡し、その行が本体テーブルから消えないよう
          保護する（内訳テーブル側は親の値を保持しているだけなので、本体
          からも合計行自体が消えると対応関係を追えなくなるため）。
          分離結果は独立した新規 DetectedTable として tables に追加し、以降の
-         整形処理（7〜8）の対象にする（メインテーブルと同じ「実テーブル」として
+         整形処理（8〜9）の対象にする（メインテーブルと同じ「実テーブル」として
          Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
-      7. 集計行・集計列の除去
-      8. 単位混在の分離（指標マスタ生成）
-      9. 無効カラム（全欠損列・無名列）の検出と既定削除 — 決定論的・LLM不使用。
+      8. 集計行・集計列の除去
+      9. 単位混在の分離（指標マスタ生成）
+      10. 無効カラム（全欠損列・無名列）の検出と既定削除 — 決定論的・LLM不使用。
          他の整形処理と同様に既定では自動適用する（全欠損列を削除。無名でも
          データがある列は削除しない）。削除前の全列 DataFrame を保持するため、
          UI側（streamlit_ui/step3_normalize.py）でユーザーが列ごとに削除の
          復元・追加を選び直せる
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
-      10. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換。縦持ち変換
+      11. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換。縦持ち変換
           対象と確定した表にのみ、ファイル外メタデータからの派生カラム生成
           機能（LLM、step3_normalize_llm）を適用する — ファイル名・シート名
           にしか現れないサービス名・オプション種別・年度等を抽出し、
@@ -2477,6 +2737,12 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
                         for i in range(1, len(t.raw_header_rows))
                         if i not in used_original_idx
                     }
+
+        # カラム名内階層区切りの分離: 1.〜4.が raw_header_rows を基準に列構造を
+        # 確定させた後に行う（先に列を増やすと raw_header_rows と df の列数が
+        # ずれ、軸展開が適用できなくなる）。以降の処理および Wide_to_long 検出は
+        # 列名を手掛かりにするため、ここで列名を原子的にしておく。
+        df = _apply_col_split_defaults(t, df)
 
         pre_fill_df_candidate = df
         df, filled_cols = fill_grouping_cols(df)
