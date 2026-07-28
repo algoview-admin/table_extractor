@@ -5,8 +5,8 @@
           多段ヘッダーの検出と解決機能（軸展開。単純統合自体はStep2の
           step2_detect.py が担う）・グルーピング列の補完・「うち」書きの
           内訳別テーブル分離・集計行列の除去・単位混在の分離（指標マスタ
-          生成）・カラム名内階層区切りの分離・クロス集計/Wide_to_longの
-          縦持ち変換など、正規表現・
+          生成）・カラム名内階層区切りの分離・括弧書き注釈の分離・
+          クロス集計/Wide_to_longの縦持ち変換など、正規表現・
           語彙辞書のみで完結する（LLMを使わない）処理を扱う。
           LLMを使用する処理（Transpose検出等）は
           src/step3_normalize_llm.py を参照。
@@ -35,6 +35,7 @@ from .keywords import (
 from .step3_normalize_llm import (
     apply_external_metadata,
     apply_transpose,
+    detect_annotation_column_names,
     detect_category_axis,
     detect_dimension_axes,
     detect_transpose,
@@ -2290,6 +2291,196 @@ def _apply_agg_and_unit_split(
 
 
 # ---------------------------------------------------------------------------
+# 括弧書き注釈の分離
+# ---------------------------------------------------------------------------
+# セル値末尾の括弧書き注釈（"東京(本社)"、"法人（新規）" 等）を検出し、注釈を
+# 別カラムに分離する（例: 列 "支店" の値 "東京(本社)" → 列 "支店"="東京"、
+# 新設列 "支店種別"="本社"）。
+#
+# 検出（注釈の抽出・分離すべきか）は既存の _UNIT_SUFFIX_RE（単位混在の分離が
+# 使う括弧抽出パターンをそのまま流用）と語彙照合で完結する決定論的処理だが、
+# 括弧内の値が「元の値を分類する独立した属性」として意味を持つかどうか、
+# 意味を持つ場合に何という列名を与えるべきかは値の意味理解が必要なため、
+# 命名・妥当性判定のみ LLM（detect_annotation_column_names、
+# step3_normalize_llm）に委ねる。
+#
+# 単位付き数値の注記（"15歳以上人口(人)" 等）は対象外とする（Silver層の責務。
+# detect_and_split_units が単位混在の分離として別途扱う）。UNIT_VOCAB に
+# 一致する注釈を除外することで担保する。
+
+_PAREN_SPLIT_MATCH_RATIO = 0.6     # 注釈付きセルが列内の文字列セルに占めるべき最低割合
+_PAREN_SPLIT_MIN_MATCH = 2         # 判定に必要な注釈付きセルの最低数
+_PAREN_SPLIT_MIN_DISTINCT = 2      # 注釈の異なり数の最低値（定数列になる分離は行わない）
+_PAREN_SPLIT_MAX_ANNOTATIONS = 20  # LLM に渡す注釈値の上限
+_PAREN_SPLIT_SAMPLE_ROWS = 5       # LLM に渡す元値サンプルの件数
+
+# 注記マーカー（"※1"、"注2"、"*3" 等）。分類軸ではないため対象外にする
+_FOOTNOTE_MARK_RE = _re.compile(r"^[※*＊注]")
+
+# 数字のみ（半角・全角）の注釈判定。"(2024)"、"(1)" 等の年・連番を除外する
+_PAREN_NUMERIC_RE = _re.compile(r"^[0-9０-９]+$")
+
+
+def detect_paren_annotations(df: Any) -> Optional[Dict[str, Any]]:
+    """セル値末尾の括弧書き注釈を持つ列の分離候補を検出する（分離はしない）。
+
+    detect_and_split_units と同じ列前提（時系列列を除外、非null値の80%以上が
+    文字列）を課した上で、_UNIT_SUFFIX_RE で括弧注釈を抽出する。以下は
+    マッチから除外する:
+      - 注釈が UNIT_VOCAB に一致（単位付き数値。Silver層の責務）
+      - 注釈が数字のみ（年・連番等の日付表記）
+      - 注釈が注記マーカーで始まる（脚注）
+      - ラベル（括弧前の部分）が空
+
+    列の採用条件（すべて必須）:
+      - 注釈付きセル数が _PAREN_SPLIT_MIN_MATCH 以上
+      - 注釈付きセル数 / 文字列セル数 が _PAREN_SPLIT_MATCH_RATIO 以上
+      - 注釈の異なり数が _PAREN_SPLIT_MIN_DISTINCT 以上
+        （全セル同一注釈なら定数列になるだけで分離の価値がないため）
+
+    detect_and_split_units と異なり、条件を満たす列は複数あればすべて候補にする
+    （1テーブル内に注釈列が複数あるケースを取りこぼさないため）。新カラム名は
+    ここでは決めない（LLM が命名する）。
+
+    Returns:
+        候補がなければ None。あれば {"columns": [候補dict, ...]}。
+        候補dict: {source_col, position, mapping, distinct_annotations,
+                   match_count, str_count, label_samples}
+        （mapping は 元セル文字列 → (label, annotation) の辞書）
+    """
+    import pandas as pd
+
+    if df is None or df.empty:
+        return None
+
+    candidates: List[Dict[str, Any]] = []
+
+    for pos, col in enumerate(df.columns):
+        if _classify_col_time(col) is not None:
+            continue  # 時系列列（年・月等）は対象外
+
+        series = df[col]
+        non_null = [
+            v for v in series if v is not None and not (isinstance(v, float) and pd.isna(v))
+        ]
+        str_vals = [str(v).strip() for v in non_null if isinstance(v, str)]
+        if not str_vals or len(str_vals) / max(1, len(non_null)) < 0.8:
+            continue  # 文字列主体でない列（数値列・時系列値列等）は対象外
+
+        mapping: Dict[str, Tuple[str, str]] = {}  # 元セル文字列 → (label, annotation)
+        matched_cell_count = 0  # 重複値を含む実セル数（比率計算用）
+        for v in str_vals:
+            m = _UNIT_SUFFIX_RE.match(v)
+            if not m:
+                continue
+            label = m.group("label").strip()
+            annotation = m.group("unit").strip()
+            if not label:
+                continue
+            if annotation.lower() in UNIT_VOCAB:
+                continue  # 単位付き数値は対象外（Silver層の責務）
+            if _PAREN_NUMERIC_RE.match(annotation):
+                continue  # 数字のみの注釈（年・連番等）は対象外
+            if _FOOTNOTE_MARK_RE.match(annotation):
+                continue  # 脚注マーカーは対象外
+            mapping[v] = (label, annotation)
+            matched_cell_count += 1
+
+        """
+        比率は実セル数（matched_cell_count）を分子に使う。mapping は元セル
+        文字列をキーとする辞書のため、同一ラベル・同一注釈のセルが複数行
+        （他のグルーピング列との組み合わせ）で繰り返される典型的なケースでは
+        重複が畳み込まれてしまい、len(mapping) を使うと実際は全セル一致でも
+        比率が大きく下がって誤検出漏れが起きる（detect_and_split_units と
+        同じ理由）。
+        """
+        if matched_cell_count < _PAREN_SPLIT_MIN_MATCH:
+            continue
+
+        match_ratio = matched_cell_count / len(str_vals)
+        distinct_annotations = sorted({a for _, a in mapping.values()})
+        if match_ratio < _PAREN_SPLIT_MATCH_RATIO:
+            continue
+        if len(distinct_annotations) < _PAREN_SPLIT_MIN_DISTINCT:
+            continue  # 注釈が統一されている（実質定数列）場合は分離不要
+
+        label_samples = []
+        for label, _ in mapping.values():
+            if label not in label_samples:
+                label_samples.append(label)
+            if len(label_samples) >= _PAREN_SPLIT_SAMPLE_ROWS:
+                break
+
+        candidates.append(
+            {
+                "source_col": str(col),
+                "position": pos,
+                "mapping": mapping,
+                "distinct_annotations": distinct_annotations,
+                "match_count": matched_cell_count,
+                "str_count": len(str_vals),
+                "label_samples": label_samples,
+            }
+        )
+
+    if not candidates:
+        return None
+    return {"columns": candidates}
+
+
+def apply_paren_annotations(df: Any, applied: List[Dict[str, Any]]) -> Any:
+    """LLM が命名した括弧書き注釈の分離候補を DataFrame に適用する。
+
+    applied は detect_paren_annotations の候補dictに "new_col"（LLMが決めた
+    列名）を加えたもののリスト。元カラムの値は注釈を除いたラベルに置き換え、
+    新設の注釈カラムを元カラムの直後に挿入する。マッチしなかったセルは
+    元カラムの値をそのまま残し、注釈カラム側は空欄にする。
+
+    新カラム名が既存カラム名と衝突する場合は _dedup_columns と同じ規約
+    （"名前_1"、"名前_2"）で連番を付与する。
+    """
+    import pandas as pd
+
+    if df is None or not applied:
+        return df
+
+    by_name = {c["source_col"]: c for c in applied}
+    taken = {str(c) for c in df.columns}
+
+    out_cols: Dict[str, Any] = {}
+    for col in df.columns:
+        c = by_name.get(str(col))
+        if c is None:
+            out_cols[str(col)] = df[col]
+            continue
+
+        mapping = c["mapping"]
+        labels = []
+        annotations = []
+        for v in df[col]:
+            key = str(v).strip() if isinstance(v, str) else None
+            if key is not None and key in mapping:
+                label, annotation = mapping[key]
+                labels.append(label)
+                annotations.append(annotation)
+            else:
+                labels.append(v)
+                annotations.append("")
+        out_cols[str(col)] = labels
+
+        new_col = str(c["new_col"]).strip()
+        unique = new_col
+        n = 0
+        while unique in taken and unique != str(col):
+            n += 1
+            unique = f"{new_col}_{n}"
+        taken.add(unique)
+        out_cols[unique] = annotations
+
+    return pd.DataFrame(out_cols, index=df.index)
+
+
+# ---------------------------------------------------------------------------
 # カラム名内階層区切りの分離
 # ---------------------------------------------------------------------------
 # カラム名に階層区切り文字（"/"、"・"、">" 等）が埋め込まれ、実際には複数の
@@ -2572,28 +2763,36 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          列名を手掛かりにするため、それらより前に分離して列名を原子的に
          しておく（"東京/売上" のような軸×指標の複合列名はセル値側に区切りが
          現れないため本機能では発火せず、Wide_to_long の判定を妨げない）。
-         列を増やす操作のため、9.の無効カラム同様に分離前 DataFrame を保持し
+         列を増やす操作のため、10.の無効カラム同様に分離前 DataFrame を保持し
          UI側でユーザーが列ごとに選び直せるようにする
-      6. グルーピング列の前方補完
-      7. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
+      6. 括弧書き注釈の分離（決定論的検出＋LLM命名） — セル値末尾の括弧書き
+         注釈（"東京(本社)" 等）を検出し、注釈を別カラムに分離する。5.と同じく
+         1列に押し込まれた複数属性をほどく処理のため隣接して置く。単位付き
+         数値の注記（"人口(人)" 等）は対象外とし、9.の単位混在の分離（指標
+         マスタ生成）に委ねる（UNIT_VOCAB に一致する注釈を除外することで
+         担保する）。括弧内の値が何の分類軸かを判断して新カラム名を決めるのは
+         語彙辞書では不可能なため、命名と妥当性判定のみ LLM に委ねる（LLMが
+         失敗・否定した場合は分離しない）
+      7. グルーピング列の前方補完
+      8. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
          親として参照される「合計」行も冗長行とみなして削除してしまうため、
-         うち分離を必ず8.より前に行った上で、親として使われた行の
+         うち分離を必ず9.より前に行った上で、親として使われた行の
          インデックス（apply_uchi_split が返す protected_indices）を
          remove_aggregates に渡し、その行が本体テーブルから消えないよう
          保護する（内訳テーブル側は親の値を保持しているだけなので、本体
          からも合計行自体が消えると対応関係を追えなくなるため）。
          分離結果は独立した新規 DetectedTable として tables に追加し、以降の
-         整形処理（8〜9）の対象にする（メインテーブルと同じ「実テーブル」として
+         整形処理（9〜10）の対象にする（メインテーブルと同じ「実テーブル」として
          Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
-      8. 集計行・集計列の除去
-      9. 単位混在の分離（指標マスタ生成）
-      10. 無効カラム（全欠損列・無名列）の検出と既定削除 — 決定論的・LLM不使用。
+      9. 集計行・集計列の除去
+      10. 単位混在の分離（指標マスタ生成）
+      11. 無効カラム（全欠損列・無名列）の検出と既定削除 — 決定論的・LLM不使用。
          他の整形処理と同様に既定では自動適用する（全欠損列を削除。無名でも
          データがある列は削除しない）。削除前の全列 DataFrame を保持するため、
          UI側（streamlit_ui/step3_normalize.py）でユーザーが列ごとに削除の
          復元・追加を選び直せる
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
-      11. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換。縦持ち変換
+      12. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換。縦持ち変換
           対象と確定した表にのみ、ファイル外メタデータからの派生カラム生成
           機能（LLM、step3_normalize_llm）を適用する — ファイル名・シート名
           にしか現れないサービス名・オプション種別・年度等を抽出し、
@@ -2743,6 +2942,32 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         # ずれ、軸展開が適用できなくなる）。以降の処理および Wide_to_long 検出は
         # 列名を手掛かりにするため、ここで列名を原子的にしておく。
         df = _apply_col_split_defaults(t, df)
+
+        # 括弧書き注釈の分離: 上記と同じく1列に押し込まれた複数属性をほどく
+        # 処理のため隣接して行う。検出（括弧注釈の抽出・単位混在の除外）は
+        # 決定論的だが、新カラム名の決定と分離の妥当性判定はLLMに委ねる
+        # （失敗・否定時は分離しない）。
+        paren_result = detect_paren_annotations(df)
+        if paren_result:
+            named = detect_annotation_column_names(
+                paren_result["columns"], t.title, llm_client, llm_model
+            )
+            if named:
+                t.pre_paren_split_df = df
+                df = apply_paren_annotations(df, named)
+                t.paren_split_info = {
+                    "columns": [
+                        {
+                            "source_col": c["source_col"],
+                            "new_col": c["new_col"],
+                            "distinct_annotations": c["distinct_annotations"],
+                            "match_count": c["match_count"],
+                            "reasoning": c["reasoning"],
+                        }
+                        for c in named
+                    ]
+                }
+                t.post_paren_split_df = df
 
         pre_fill_df_candidate = df
         df, filled_cols = fill_grouping_cols(df)

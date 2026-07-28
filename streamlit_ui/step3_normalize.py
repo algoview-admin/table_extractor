@@ -708,6 +708,95 @@ def _render_pivot_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
+def _paren_split_badge(text: str, color: str) -> str:
+    return (
+        f"<span style='background:rgba({color},0.15);color:rgba({color},1);"
+        f"border:1px solid rgba({color},0.4);border-radius:4px;"
+        f"padding:2px 8px;font-size:12px;font-weight:600;margin:2px'>"
+        f"{_html.escape(str(text))}</span>"
+    )
+
+
+def _paren_split_meta_html(t: "DetectedTable") -> str:
+    """括弧書き注釈の分離のメタ情報（分離元→生成列・注釈値・理由）を組み立てる。"""
+    info = t.paren_split_info
+    columns = (info or {}).get("columns", [])
+
+    rows_html = ""
+    for c in columns:
+        annotations = "、".join(c.get("distinct_annotations", []))
+        rows_html += (
+            "<div style='margin:2px 0'>"
+            f"{_paren_split_badge(c['source_col'], '156,163,175')}"
+            " → "
+            f"{_paren_split_badge(c['new_col'], '52,211,153')}"
+            f"（注釈: {_html.escape(annotations)} / 一致 {c.get('match_count', 0)} セル）"
+            f"<br><span style='font-size:12px;color:rgba(160,160,160,1)'>"
+            f"{_html.escape(c.get('reasoning', ''))}</span>"
+            "</div>"
+        )
+    return f"<div style='margin:4px 0 12px;line-height:1.8'>{rows_html}</div>"
+
+
+def _render_paren_split_body(t: "DetectedTable") -> None:
+    """括弧書き注釈の分離の詳細（Streamlit ウィジェット版）。"""
+    before = t.pre_paren_split_df
+    after = t.post_paren_split_df if t.post_paren_split_df is not None else t.df
+    info = t.paren_split_info
+    if not info or before is None or after is None:
+        return
+
+    columns = info.get("columns", [])
+    source_cols = {c["source_col"] for c in columns}
+    new_cols = {c["new_col"] for c in columns}
+
+    st.markdown(_paren_split_meta_html(t), unsafe_allow_html=True)
+
+    col_b, col_a = st.columns(2)
+    with col_b:
+        st.markdown(
+            f"**変換前**（{len(before.columns)} 列 × {len(before)} 行 / "
+            f"オレンジ列 = 注釈を含むカラム）"
+        )
+        st.markdown(
+            _df_to_html(before, max_height=340, highlight_col_names=source_cols),
+            unsafe_allow_html=True,
+        )
+    with col_a:
+        st.markdown(
+            f"**変換後**（{len(after.columns)} 列 × {len(after)} 行 / "
+            f"緑列 = 分離で生まれた注釈カラム）"
+        )
+        st.markdown(
+            _df_to_html(after, max_height=340, green_col_names=new_cols),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_paren_split_body_html(t: "DetectedTable") -> str:
+    """括弧書き注釈の分離の詳細（HTML 文字列版）。"""
+    before = t.pre_paren_split_df
+    after = t.post_paren_split_df if t.post_paren_split_df is not None else t.df
+    info = t.paren_split_info
+    if not info or before is None or after is None:
+        return ""
+
+    columns = info.get("columns", [])
+    source_cols = {c["source_col"] for c in columns}
+    new_cols = {c["new_col"] for c in columns}
+
+    meta_html = _paren_split_meta_html(t)
+    pre_html = _df_to_html(before, max_height=340, highlight_col_names=source_cols)
+    post_html = _df_to_html(after, max_height=340, green_col_names=new_cols)
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before.columns)} 列 × {len(before)} 行 / オレンジ列 = 注釈を含むカラム）</p>{pre_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 分離で生まれた注釈カラム）</p>{post_html}</div>"
+        "</div>"
+    )
+    return meta_html + grid_html
+
+
 def _render_invalid_col_body(t: "DetectedTable") -> None:
     """無効カラム（全欠損列・無名列）の検出結果と調整 UI（Streamlit ウィジェット版）。
 
@@ -2008,6 +2097,7 @@ def step_format():
         t for t in tables if getattr(t, "invalid_col_candidates", None)
     ]
     col_split_targets = [t for t in tables if getattr(t, "col_split_candidates", None)]
+    paren_split_applied = [t for t in tables if getattr(t, "paren_split_info", None)]
     external_meta_applied = [
         t for t in tables if getattr(t, "external_meta_info", None)
     ]
@@ -2023,6 +2113,7 @@ def step_format():
         and not uchi_split_applied
         and not invalid_col_targets
         and not col_split_targets
+        and not paren_split_applied
         and not external_meta_applied
     )
     if nothing_done:
@@ -2127,6 +2218,50 @@ def step_format():
                                 f"**`{r.table_id}`**{r_title}  —  シート: {r.sheet_name}"
                             )
                             _render_col_split_body(r)
+
+        # ── 括弧書き注釈の分離機能 ──────────────────────────────────
+        if paren_split_applied:
+            if not first_section:
+                st.divider()
+            first_section = False
+            generated_cols = sum(
+                len((t.paren_split_info or {}).get("columns", []))
+                for t in paren_split_applied
+            )
+            st.subheader(
+                f"🔖 括弧書き注釈の分離機能（対象：{len(paren_split_applied)}テーブル）"
+            )
+            st.success(
+                f"**{len(paren_split_applied)}** テーブルでセル内の括弧書き注釈を検出し、"
+                f"別カラムに分離しました（生成列: 計 {generated_cols} 件）"
+            )
+            rep_ps = paren_split_applied[0]
+            rep_ps_title = f"  🏷️ `{rep_ps.title}`" if rep_ps.title else ""
+            with st.expander(
+                f"**`{rep_ps.table_id}`**{rep_ps_title}  —  シート: {rep_ps.sheet_name}",
+                expanded=True,
+            ):
+                _render_paren_split_body(rep_ps)
+
+                rest_ps = paren_split_applied[1:]
+                if rest_ps:
+                    inner_html = ""
+                    for r in rest_ps:
+                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
+                        lbl = (
+                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
+                            f" — シート: {_html.escape(r.sheet_name)}"
+                        )
+                        inner_html += _make_details_html(
+                            lbl, _render_paren_split_body_html(r), open=False, level=3
+                        )
+                    outer_html = _MHD_CSS + _make_details_html(
+                        f"その他の同様処理（{len(rest_ps)} 件）",
+                        inner_html,
+                        open=False,
+                        level=2,
+                    )
+                    st.markdown(outer_html, unsafe_allow_html=True)
 
         # ── Pivot 検出と変換機能 ─────────────────────────────────
         if pivot_applied:

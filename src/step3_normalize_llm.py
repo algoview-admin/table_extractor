@@ -655,6 +655,116 @@ def apply_external_metadata(
     return out, ordered
 
 
+# ---------------------------------------------------------------------------
+# 括弧書き注釈の分離（命名・妥当性判定）
+# ---------------------------------------------------------------------------
+#
+# src/step3_normalize_determ.py の detect_paren_annotations が「セル値末尾の
+# 括弧書き注釈を、決定論的に（単位表記等を除外した上で）抽出済み」の候補列を
+# 渡してくる。ここでは、抽出された注釈値の集合が「元の値を分類する独立した
+# 属性」として意味を持つか、意味を持つ場合に何という列名を与えるべきかを
+# 判断するため LLM を用いる（語彙辞書だけでは新規カラム名を決められないため）。
+
+_PAREN_ANNOTATION_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
+セル値の末尾に括弧書きで埋め込まれた注釈が、独立した分類属性として別カラムに
+分離する価値があるかどうかを判定し、指定された JSON 形式のみで回答してください
+（説明文は不要）。"""
+
+_PAREN_ANNOTATION_USER_PROMPT = """以下は、ある表の中で「値の末尾に括弧書き注釈が
+付いている」と機械的に検出された列の一覧です。各列について、括弧を除いた値の
+サンプルと、括弧内に現れた注釈値の一覧（重複排除）を示します。
+
+{columns_block}
+{title_line}
+
+【判定基準】
+- 括弧内の値が、元の値を分類する独立した属性（例: 支店の"本社/支店"区分、
+  担当者の所属部署など）として意味を持つ場合のみ is_valid=true としてください。
+- 単なる補足説明・表記ゆれ・脚注・データ由来の注記など、独立した分類属性とは
+  言えない場合は is_valid=false としてください。
+- is_valid=true の場合、column_name には分離後の注釈列につける日本語の列名を
+  設定してください（例: 元列が"支店"で注釈が"本社"等の場合は"支店種別"）。
+- 少しでも判断に迷う場合は is_valid=false としてよい。
+
+JSON形式で回答してください:
+{{"results": [{{"index": 対象列のindex（0始まり）, "is_valid": true または false, "column_name": "分離後の注釈列名（日本語）または空文字", "reasoning": "判断理由（日本語、1〜2文）"}}, ...]}}"""
+
+
+def detect_annotation_column_names(
+    candidates: List[Dict[str, Any]],
+    title: Optional[str],
+    client: Any,
+    model: str,
+) -> Optional[List[Dict[str, Any]]]:
+    """括弧書き注釈の分離候補列について、分離の妥当性と新カラム名を LLM で判定する。
+
+    candidates: detect_paren_annotations が返した候補dictのリスト
+      （{source_col, position, mapping, distinct_annotations, match_count,
+       str_count, label_samples} を含む）。1テーブルあたり1回の呼び出しで
+      全候補列をまとめて判定する。
+
+    ネットワークエラー・JSON パース失敗・想定外の構造等は握りつぶして None を
+    返し、1テーブルの失敗が検出処理全体を落とさないようにする。
+
+    Returns:
+      is_valid と判定された列が1つ以上あれば、それらの候補dictに
+      "new_col"（LLMが決めた列名）と "reasoning" を加えたリスト。
+      1つも妥当と判定されなければ None。
+    """
+    if not candidates:
+        return None
+
+    blocks = []
+    for i, c in enumerate(candidates):
+        samples = "、".join(c.get("label_samples", [])[:5])
+        annotations = "、".join(c.get("distinct_annotations", [])[:_PAREN_SPLIT_MAX_ANNOTATIONS])
+        blocks.append(
+            f"列{i}: 元カラム名「{c['source_col']}」\n"
+            f"  括弧を除いた値のサンプル: {samples}\n"
+            f"  括弧内の注釈値一覧: {annotations}"
+        )
+    columns_block = "\n".join(blocks)
+    title_line = f"\n表タイトル: {title}" if title else ""
+
+    messages = [
+        {"role": "system", "content": _PAREN_ANNOTATION_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _PAREN_ANNOTATION_USER_PROMPT.format(
+                columns_block=columns_block, title_line=title_line
+            ),
+        },
+    ]
+    try:
+        content = _call_transpose_api(client, model, messages)
+        raw = json.loads(content)
+    except Exception:
+        return None
+
+    if not isinstance(raw, dict):
+        return None
+    results = raw.get("results")
+    if not isinstance(results, list):
+        return None
+
+    named: List[Dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict) or not item.get("is_valid"):
+            continue
+        idx = item.get("index")
+        if not isinstance(idx, int) or isinstance(idx, bool) or not (0 <= idx < len(candidates)):
+            continue
+        new_col = str(item.get("column_name") or "").strip()
+        if not new_col:
+            continue
+        entry = dict(candidates[idx])
+        entry["new_col"] = new_col
+        entry["reasoning"] = str(item.get("reasoning") or "")
+        named.append(entry)
+
+    return named or None
+
+
 def apply_transpose(df: Any, entity_axis_name: str) -> Any:
     """先頭列をラベル列とみなして表を転置し、新しいラベル列名を entity_axis_name にする。
 

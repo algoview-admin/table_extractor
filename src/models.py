@@ -67,6 +67,9 @@ class DetectedTable:
     col_split_candidates: Optional[List[Dict[str, Any]]] = field(default=None)  # カラム名内階層区切りの分離候補 [{name, position, delimiter, new_names, part_count, nonnull_count, match_count, unsplit_count, samples, default_selected}]（不変。検出時点のスナップショット）
     pre_col_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 階層区切り分離前 DataFrame（不変。復元・再選択の基準）
     col_split_applied: List[Dict[str, Any]] = field(default_factory=list)  # 現在分離が適用されているカラム [{name, new_names}]（既定は候補全件を自動適用、ユーザーがチェックボックスで調整可能）
+    pre_paren_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 括弧書き注釈の分離前 DataFrame（分離適用時のみ）
+    post_paren_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 分離直後（後続ステップ適用前）の DataFrame スナップショット
+    paren_split_info: Optional[Dict[str, Any]] = field(default=None)  # 括弧書き注釈の分離情報 {columns: [{source_col, new_col, distinct_annotations, match_count, reasoning}]}
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:
