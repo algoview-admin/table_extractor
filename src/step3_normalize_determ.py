@@ -2781,6 +2781,117 @@ def expand_hierarchy_column(df: Any, detection: Dict[str, Any], level_names: Lis
     return out
 
 
+_HIER_ROLLUP_SUM_TOLERANCE_RATIO = 0.01  # 許容誤差（値の1%。_is_column_sum_verified と同じ考え方）
+_HIER_ROLLUP_MIN_MATCH_RATIO = 0.8       # 検証できた数値列のうち一致が必要な割合
+
+
+def find_hierarchy_rollup_rows(
+    df: Any, detection: Dict[str, Any]
+) -> Tuple[List[Any], List[Dict[str, Any]]]:
+    """階層展開結果のうち、1段深い子行群の合計と数値が一致する行（ロールアップ行）を検出する。
+
+    detection["rows"] は df と同じ行順で各行の階層レベル値を保持している
+    （非該当レベルは ""）。ある行の「自分の値」を持つ最も深いレベルを d と
+    したとき、レベル 0..d の値が一致し、かつレベル d+1 に値を持つ行（直接の
+    子行）が1件以上存在する場合、その行は子行群の集計値である可能性がある。
+
+    子の存在だけでなく、数値列の値が実際に子行群の合計と一致することまで
+    検証できた場合のみロールアップ行と判定する（remove_aggregates の
+    _is_redundant_agg_row と同じ「冗長性を検証できた場合のみ除去する」という
+    保守的な考え方を、集計キーワードではなく階層の親子構造そのもので判定
+    する）。子が存在しない行（その分類の内訳データが無い、実質的な末端）や、
+    子の合計と数値が一致しない行（内訳データの一部欠落等）は、情報を失わない
+    よう削除対象にしない。
+
+    Returns: (削除対象の df インデックスラベルのリスト, 監査用メタデータのリスト)
+        メタデータ: {level_values, child_count, matched_columns}
+    """
+    import numbers
+
+    import pandas as pd
+    import pandas.api.types as _pat
+
+    rows = detection["rows"]
+    depth = detection["depth"]
+    level_names = detection.get("level_names") or []
+    index_list = list(df.index)
+
+    numeric_cols = [c for c in df.columns if _pat.is_numeric_dtype(df[c])]
+    if not numeric_cols:
+        return [], []
+
+    def _own_depth(row_vals: List[str]) -> int:
+        for d in range(depth - 1, -1, -1):
+            if row_vals[d]:
+                return d
+        return 0
+
+    # 祖先チェーン（自分の値を含まない）-> 直接の子行のポジションリスト。
+    # 行 R（own_depth=d_r）の祖先チェーン row_vals[:d_r] は、その親 P
+    # （own_depth=d_r-1）の識別チェーン row_vals[:d_r-1]+[P自身の値] と一致する
+    # ため、これをキーにして親→子の対応を引ける。
+    children_index: Dict[Tuple[str, ...], List[int]] = {}
+    for pos, row_vals in enumerate(rows):
+        d_r = _own_depth(row_vals)
+        if d_r == 0:
+            continue  # 最上位行は誰の子でもない
+        key = tuple(row_vals[:d_r])
+        children_index.setdefault(key, []).append(pos)
+
+    def _num(v: Any) -> Optional[float]:
+        # df.iloc[]/df.at[] は numpy.int64/float64 等をそのまま返し Python の
+        # int/float に自動変換しないため（Series の for ループとは異なる）、
+        # numbers.Number で判定する（_is_column_sum_verified と同じ理由）。
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, numbers.Number) and not (isinstance(v, float) and pd.isna(v)):
+            return float(v)
+        return None
+
+    to_remove: List[Any] = []
+    metadata: List[Dict[str, Any]] = []
+
+    for pos, row_vals in enumerate(rows):
+        d = _own_depth(row_vals)
+        if d >= depth - 1:
+            continue  # 最深レベルは子を持ち得ない
+
+        key = tuple(row_vals[: d + 1])
+        child_positions = children_index.get(key, [])
+        if not child_positions:
+            continue  # 子が存在しない = 実質的な末端。削除しない
+
+        checked = 0
+        matched = 0
+        matched_cols: List[str] = []
+        for col in numeric_cols:
+            parent_val = _num(df.iloc[pos][col])
+            if parent_val is None:
+                continue
+            child_vals = [_num(df.iloc[cp][col]) for cp in child_positions]
+            if any(v is None for v in child_vals):
+                continue
+            checked += 1
+            tolerance = max(1e-6, abs(parent_val) * _HIER_ROLLUP_SUM_TOLERANCE_RATIO)
+            if abs(parent_val - sum(child_vals)) <= tolerance:
+                matched += 1
+                matched_cols.append(str(col))
+
+        if checked == 0 or matched / checked < _HIER_ROLLUP_MIN_MATCH_RATIO:
+            continue  # 検証できない、または合計と一致しない → 削除しない
+
+        to_remove.append(index_list[pos])
+        metadata.append(
+            {
+                "level_values": {n: v for n, v in zip(level_names, row_vals) if v},
+                "child_count": len(child_positions),
+                "matched_columns": matched_cols,
+            }
+        )
+
+    return to_remove, metadata
+
+
 def _default_level_names(depth: int, source_col: str) -> List[str]:
     """LLM が失敗・否定した場合のフォールバック命名（汎用的な既定の階層名を割り当てる）。"""
     if depth == 2:
@@ -2801,6 +2912,15 @@ def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str
 
     レベル名は LLM（detect_hierarchy_level_names）に委ねるが、失敗・否定時は
     _default_level_names にフォールバックし、展開自体は実行する。
+
+    展開直後、find_hierarchy_rollup_rows で「1段深い子行群の合計と数値が
+    一致する行」（ロールアップ行。例: 地方の内訳を都道府県レベルで持つ表で、
+    地方自体の小計を表す行）を検出し、既定で除去する。これは remove_aggregates
+    が集計キーワードに基づいて行う集計行除去と同じ目的を、キーワードに
+    頼れない階層構造に対して行うもので、新たな整形処理として切り出さず、
+    本機能（階層圧縮カラムの展開）の一部として扱う。除去した行は
+    t.hier_rollup_removed_metadata に監査用メタデータとして保持する
+    （remove_aggregates 同様、行削除自体に選び直しUIは設けない）。
     """
     excluded_cols = {
         n for c in (getattr(t, "col_split_applied", None) or []) for n in c["new_names"]
@@ -2823,10 +2943,17 @@ def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str
         level_names = _default_level_names(detection["depth"], detection["source_col"])
         naming_source = "fallback"
 
-    t.hier_expand_detection = {**detection, "level_names": level_names, "naming_source": naming_source}
+    detection = {**detection, "level_names": level_names, "naming_source": naming_source}
+    t.hier_expand_detection = detection
     t.pre_hier_expand_df = df
     t.hier_expand_applied = True
-    return expand_hierarchy_column(df, detection, level_names)
+
+    expanded = expand_hierarchy_column(df, detection, level_names)
+    rollup_indices, rollup_metadata = find_hierarchy_rollup_rows(expanded, detection)
+    t.hier_rollup_removed_metadata = rollup_metadata
+    if rollup_indices:
+        expanded = expanded.drop(index=rollup_indices).reset_index(drop=True)
+    return expanded
 
 
 # ---------------------------------------------------------------------------
