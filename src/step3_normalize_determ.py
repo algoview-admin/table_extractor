@@ -2542,12 +2542,19 @@ def _detect_hierarchy_by_indent(str_vals: List[str]) -> Optional[Dict[str, Any]]
       - 先頭データ行の深さが 0（いきなり子から始まる表は誤検出とみなす）
       - 深さの増加が一度に1レベルまで（0→2 のような飛びは誤検出とみなす）
       - 深さ>0 の各行について、先行行に深さ-1 の行が存在する（親が解決できる）
+      - どの行の値（インデント除去後）も集計ラベル（_is_agg_label、
+        "合計"/"小計"等）に一致しない。「合計」＋インデントされた内訳項目
+        （例: "合計"/"  商品A"/"  商品B"）という集計行＋内訳行のパターンは、
+        インデントの見た目こそ階層カテゴリと同じだが分類階層ではなく、
+        集計行・集計列の除去（remove_aggregates）が本来扱うべき対象のため
 
     Returns:
         不採用なら None。採用なら {"depth", "rows"}。
         rows は各行に対応する [lv0, lv1, ...] のリスト（非該当レベルは ""）。
     """
     if not str_vals or _indent_width(str_vals[0]) != 0:
+        return None
+    if any(_is_agg_label(_strip_indent(s)) for s in str_vals):
         return None
 
     widths = [_indent_width(s) for s in str_vals]
@@ -2587,6 +2594,9 @@ def _detect_hierarchy_by_delimiter(str_vals: List[str]) -> Optional[Dict[str, An
       - パスとして解釈できる（全パート非空）セルが非空セルの
         _HIER_EXPAND_MIN_RATIO 以上
       - 最大パート数が _HIER_EXPAND_MIN_DEPTH 以上 _HIER_EXPAND_MAX_DEPTH 以下
+      - パート内に集計ラベル（_is_agg_label、"合計"/"小計"等）を含むセルが
+        存在しない（"○○>合計" のようなパスは分類階層ではないため、その
+        区切り文字は不採用にして次の区切り文字を試す）
 
     Returns:
         不採用なら None。採用なら {"depth", "rows", "delimiter"}。
@@ -2599,6 +2609,7 @@ def _detect_hierarchy_by_delimiter(str_vals: List[str]) -> Optional[Dict[str, An
         parsed: List[Optional[List[str]]] = []
         matched = 0
         max_parts = 0
+        has_agg_segment = False
         for s in str_vals:
             if delim not in s:
                 parsed.append(None)
@@ -2607,10 +2618,15 @@ def _detect_hierarchy_by_delimiter(str_vals: List[str]) -> Optional[Dict[str, An
             if not all(parts):
                 parsed.append(None)
                 continue
+            if any(_is_agg_label(p) for p in parts):
+                has_agg_segment = True
+                break
             parsed.append(parts)
             matched += 1
             max_parts = max(max_parts, len(parts))
 
+        if has_agg_segment:
+            continue
         if matched == 0 or matched / len(str_vals) < _HIER_EXPAND_MIN_RATIO:
             continue
         if not (_HIER_EXPAND_MIN_DEPTH <= max_parts <= _HIER_EXPAND_MAX_DEPTH):
