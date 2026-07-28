@@ -11,6 +11,7 @@ from src.models import DetectedTable
 from src.step3_normalize_determ import (
     _is_agg_label,
     apply_column_hierarchy_split,
+    expand_hierarchy_column,
     normalize_tables,
 )
 
@@ -1079,6 +1080,132 @@ def _render_col_split_body(t: "DetectedTable") -> None:
         st.rerun()
 
 
+def _visualize_indent(s: str) -> str:
+    """先頭の半角空白・タブを全角スペースに置き換え、HTML表示で潰れないようにする。
+
+    ブラウザは連続する半角空白を1つに畳んでしまうため、生の値をそのまま
+    _df_to_html に渡すとインデントが見えなくなる。全角スペースは個別の
+    文字として畳まれないため、視認用にこちらへ変換する。"""
+    i = 0
+    while i < len(s) and s[i] in (" ", "\t"):
+        i += 1
+    if i == 0:
+        return s
+    return ("　" * i) + s[i:]
+
+
+def _render_hier_expand_body(t: "DetectedTable") -> None:
+    """階層圧縮カラムの展開結果と調整 UI（Streamlit ウィジェット版）。
+
+    他の整形処理と同様に既定で展開を自動適用した状態を表示する。列構造を
+    大きく変える操作のため、展開前 DataFrame（pre_hier_expand_df）を保持
+    しており、チェックボックスで展開の適用・復元を選び直せる。
+
+    表示用の「変換後」は pre_hier_expand_df ＋ 現在の適用状態のみから計算する
+    （後続ステップが追加・削除した列を巻き込まない）。一方、実データ t.df の
+    更新は展開状態の変化のみを現在の t.df に対して行う（pre から丸ごと
+    作り直すと、pre 取得後に後続ステップが追加した列が失われてしまうため）。"""
+    detection = getattr(t, "hier_expand_detection", None)
+    pre = getattr(t, "pre_hier_expand_df", None)
+    if not detection or pre is None:
+        return
+
+    source_col = detection["source_col"]
+    level_names = detection["level_names"]
+    naming_source = detection["naming_source"]
+    mode = detection["mode"]
+    depth = detection["depth"]
+    applied = bool(getattr(t, "hier_expand_applied", False))
+
+    mode_label = "インデント" if mode == "indent" else f'区切り文字 "{detection.get("delimiter", "")}"'
+    naming_label = "LLM命名" if naming_source == "llm" else "既定名"
+    levels_label = "」「".join(level_names)
+    st.markdown(
+        f"<p style='margin:4px 0 6px'>検出カラム: "
+        f"<code style='background:rgba(156,163,175,0.15);border:1px solid rgba(156,163,175,0.4);"
+        f"border-radius:4px;padding:1px 6px;margin:2px;display:inline-block'>"
+        f"{_html.escape(source_col)}（{mode_label} / 深さ {depth}）</code>"
+        f" → 生成カラム: 「{_html.escape(levels_label)}」（{naming_label}）"
+        "</p>",
+        unsafe_allow_html=True,
+    )
+
+    if applied:
+        st.caption(
+            f"既定で「{_html.escape(source_col)}」を **{depth}** 列に展開しました。"
+            "不要な場合はチェックを外すと元に戻せます"
+        )
+    else:
+        st.caption("現在展開されていません（以下で選択すると展開できます）")
+
+    display_after = expand_hierarchy_column(pre, detection, level_names) if applied else None
+    green_cols = set(level_names)
+
+    pre_display = pre.astype(str)
+    if mode == "indent" and source_col in pre_display.columns:
+        pre_display = pre_display.copy()
+        pre_display[source_col] = pre_display[source_col].map(_visualize_indent)
+
+    if display_after is not None:
+        col_b, col_a = st.columns(2)
+        with col_b:
+            st.markdown(
+                f"**変換前**（{len(pre.columns)} 列 × {len(pre)} 行 / "
+                f"オレンジ列 = 階層が圧縮されたカラム）"
+            )
+            st.markdown(
+                _df_to_html(pre_display, max_height=340, highlight_col_names={source_col}),
+                unsafe_allow_html=True,
+            )
+        with col_a:
+            st.markdown(
+                f"**変換後**（{len(display_after.columns)} 列 × {len(display_after)} 行 / "
+                f"緑列 = 展開で生まれた階層カラム）"
+            )
+            st.markdown(
+                _df_to_html(
+                    display_after.astype(str), max_height=340, green_col_names=green_cols
+                ),
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            f"**検出時点**（{len(pre.columns)} 列 × {len(pre)} 行 / "
+            f"オレンジ列 = 展開候補カラム）"
+        )
+        st.markdown(
+            _df_to_html(pre_display, max_height=340, highlight_col_names={source_col}),
+            unsafe_allow_html=True,
+        )
+
+    with st.form(key=f"hierexp_form_{t.table_id}"):
+        checked = st.checkbox(
+            f"「{source_col}」を「{levels_label}」に展開する",
+            value=applied,
+            key=f"hierexp_{t.table_id}",
+        )
+        submitted = st.form_submit_button("選択を反映")
+
+    if submitted:
+        new_df = t.df.copy()
+        if checked and not applied:
+            if source_col in new_df.columns:
+                pos = list(new_df.columns).index(source_col)
+                expanded = expand_hierarchy_column(new_df[[source_col]], detection, level_names)
+                new_df = new_df.drop(columns=[source_col])
+                for i, name in enumerate(level_names):
+                    new_df.insert(min(pos + i, len(new_df.columns)), name, expanded[name])
+        elif applied and not checked:
+            present = [n for n in level_names if n in new_df.columns]
+            if present and source_col in pre.columns:
+                pos = list(new_df.columns).index(present[0])
+                new_df = new_df.drop(columns=present)
+                new_df.insert(min(pos, len(new_df.columns)), source_col, pre[source_col])
+        t.df = new_df
+        t.hier_expand_applied = checked
+        st.rerun()
+
+
 def _render_fill_cols_body(t: "DetectedTable") -> None:
     """グルーピング列 ffill の詳細（Streamlit ウィジェット版）。"""
     pre = t.pre_fill_df
@@ -2098,6 +2225,7 @@ def step_format():
     ]
     col_split_targets = [t for t in tables if getattr(t, "col_split_candidates", None)]
     paren_split_applied = [t for t in tables if getattr(t, "paren_split_info", None)]
+    hier_expand_targets = [t for t in tables if getattr(t, "hier_expand_detection", None)]
     external_meta_applied = [
         t for t in tables if getattr(t, "external_meta_info", None)
     ]
@@ -2114,6 +2242,7 @@ def step_format():
         and not invalid_col_targets
         and not col_split_targets
         and not paren_split_applied
+        and not hier_expand_targets
         and not external_meta_applied
     )
     if nothing_done:
@@ -2262,6 +2391,47 @@ def step_format():
                         level=2,
                     )
                     st.markdown(outer_html, unsafe_allow_html=True)
+
+        # ── 階層圧縮カラムの展開機能 ────────────────────────────────
+        if hier_expand_targets:
+            if not first_section:
+                st.divider()
+            first_section = False
+            generated_cols = sum(
+                len((t.hier_expand_detection or {}).get("level_names", []))
+                for t in hier_expand_targets
+                if getattr(t, "hier_expand_applied", False)
+            )
+            st.subheader(
+                f"🌳 階層圧縮カラムの展開機能（対象：{len(hier_expand_targets)}テーブル）"
+            )
+            st.success(
+                f"**{len(hier_expand_targets)}** テーブルで1カラムに圧縮された階層カテゴリを"
+                f"検出し、階層レベルごとのカラムに展開しました"
+                f"（生成列: 計 {generated_cols} 件。不要な場合は各テーブルで元に戻せます）"
+            )
+
+            rep_h = hier_expand_targets[0]
+            rep_h_title = f"  🏷️ `{rep_h.title}`" if rep_h.title else ""
+            with st.expander(
+                f"**`{rep_h.table_id}`**{rep_h_title}  —  シート: {rep_h.sheet_name}",
+                expanded=True,
+            ):
+                _render_hier_expand_body(rep_h)
+
+                rest_h = hier_expand_targets[1:]
+                if rest_h:
+                    with st.expander(
+                        f"その他の同様処理（{len(rest_h)} 件）", expanded=False
+                    ):
+                        for idx, r in enumerate(rest_h):
+                            if idx > 0:
+                                st.divider()
+                            r_title = f"  🏷️ `{r.title}`" if r.title else ""
+                            st.markdown(
+                                f"**`{r.table_id}`**{r_title}  —  シート: {r.sheet_name}"
+                            )
+                            _render_hier_expand_body(r)
 
         # ── Pivot 検出と変換機能 ─────────────────────────────────
         if pivot_applied:

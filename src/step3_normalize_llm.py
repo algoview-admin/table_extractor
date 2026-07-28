@@ -767,6 +767,100 @@ def detect_annotation_column_names(
     return named or None
 
 
+# ---------------------------------------------------------------------------
+# 階層圧縮カラムの展開（レベル命名）
+# ---------------------------------------------------------------------------
+#
+# src/step3_normalize_determ.py の detect_hierarchy_expansion が「インデント
+# またはセル内区切り文字で1カラムに圧縮された階層構造を、決定論的に検出・
+# 深さ確定済み」の候補列を渡してくる。ここでは、各階層レベルに何という
+# カラム名を与えるべきかを判断するため LLM を用いる（語彙辞書だけでは新規
+# カラム名を決められないため）。妥当な既定名（大分類/中分類/小分類）が
+# 別途用意されているため、失敗・否定時は呼び出し側でフォールバックする。
+
+_HIER_LEVEL_NAMING_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
+1カラムに圧縮された階層カテゴリの各階層レベルに、内容にふさわしい日本語の
+カラム名を付け、指定された JSON 形式のみで回答してください（説明文は不要）。"""
+
+_HIER_LEVEL_NAMING_USER_PROMPT = """以下は、ある表で「1カラムに階層カテゴリが
+圧縮されている」と機械的に検出された列の情報です。
+
+元カラム名: {source_col}
+階層の深さ: {depth}
+階層パスのサンプル（浅い階層 > 深い階層の順）:
+{sample_paths}
+{title_line}
+
+【判定基準】
+- 各階層レベルの内容から、そのレベルが何を表す分類かを判断できる場合のみ
+  is_valid=true とし、各レベルに具体的で自然な日本語のカラム名を付けて
+  ください（例: 地域、支社、営業所）。
+- level_names は浅い階層から深い階層の順で、必ず {depth} 個にしてください。
+- 内容から意味づけが困難な場合（特定分野の専門知識やマスタ辞書がないと
+  分類の意味が判断できない場合を含む）は is_valid=false としてください。
+- 少しでも判断に迷う場合は is_valid=false としてよい。
+
+JSON形式で回答してください:
+{{"is_valid": true または false, "level_names": ["浅い階層から深い階層順のカラム名（日本語）", "..."], "reasoning": "判断理由（日本語、1〜2文）"}}"""
+
+
+def detect_hierarchy_level_names(
+    source_col: str,
+    depth: int,
+    sample_paths: List[str],
+    title: Optional[str],
+    client: Any,
+    model: str,
+) -> Optional[List[str]]:
+    """階層圧縮カラムの展開候補について、各階層レベルのカラム名を LLM で判定する。
+
+    sample_paths: "東日本 > 神奈川事業部 > 横浜支店" のような、浅い階層から
+    深い階層順の文字列のリスト（detect_hierarchy_expansion が生成したサンプル）。
+
+    ネットワークエラー・JSON パース失敗・想定外の構造・長さ不一致等は
+    握りつぶして None を返す。呼び出し側（_apply_hier_expand_defaults）は
+    None の場合、既定名（大分類/中分類/小分類）にフォールバックする。
+
+    Returns:
+      is_valid かつ depth と同じ長さの level_names が得られた場合、その
+      リスト。それ以外は None。
+    """
+    if depth < 1 or not sample_paths:
+        return None
+
+    paths_block = "\n".join(f"  {p}" for p in sample_paths)
+    title_line = f"\n表タイトル: {title}" if title else ""
+    messages = [
+        {"role": "system", "content": _HIER_LEVEL_NAMING_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _HIER_LEVEL_NAMING_USER_PROMPT.format(
+                source_col=source_col,
+                depth=depth,
+                sample_paths=paths_block,
+                title_line=title_line,
+            ),
+        },
+    ]
+    try:
+        content = _call_transpose_api(client, model, messages)
+        raw = json.loads(content)
+    except Exception:
+        return None
+
+    if not isinstance(raw, dict) or not raw.get("is_valid"):
+        return None
+
+    level_names = raw.get("level_names")
+    if not isinstance(level_names, list) or len(level_names) != depth:
+        return None
+
+    names = [str(n).strip() for n in level_names]
+    if any(not n for n in names):
+        return None
+    return names
+
+
 def apply_transpose(df: Any, entity_axis_name: str) -> Any:
     """先頭列をラベル列とみなして表を転置し、新しいラベル列名を entity_axis_name にする。
 

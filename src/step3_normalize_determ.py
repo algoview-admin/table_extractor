@@ -6,7 +6,7 @@
           step2_detect.py が担う）・グルーピング列の補完・「うち」書きの
           内訳別テーブル分離・集計行列の除去・単位混在の分離（指標マスタ
           生成）・カラム名内階層区切りの分離・括弧書き注釈の分離・
-          クロス集計/Wide_to_longの縦持ち変換など、正規表現・
+          階層圧縮カラムの展開・クロス集計/Wide_to_longの縦持ち変換など、正規表現・
           語彙辞書のみで完結する（LLMを使わない）処理を扱う。
           LLMを使用する処理（Transpose検出等）は
           src/step3_normalize_llm.py を参照。
@@ -38,6 +38,7 @@ from .step3_normalize_llm import (
     detect_annotation_column_names,
     detect_category_axis,
     detect_dimension_axes,
+    detect_hierarchy_level_names,
     detect_transpose,
     extract_external_metadata,
     make_transpose_client,
@@ -2480,6 +2481,339 @@ def apply_paren_annotations(df: Any, applied: List[Dict[str, Any]]) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# 階層圧縮カラムの展開
+# ---------------------------------------------------------------------------
+# 階層カテゴリがインデント（"  神奈川事業部" のような先頭空白の段差）または
+# セル内の階層区切り文字（"東日本/神奈川事業部/横浜支店"）で1カラムに圧縮
+# されている表を検出し、階層レベルごとのカラムに展開する（例: 列 "拠点" の値
+# "東日本"/"  神奈川事業部"/"    横浜支店" → 列 "レベル1"="東日本"、
+# "レベル2"="神奈川事業部"、"レベル3"="横浜支店"）。
+#
+# 階層構造の検出（インデント幅の段差、またはセル内の区切り文字数から深さを
+# 確定する）は決定論的に行える。一方、各階層レベルに何というカラム名を
+# 与えるべきかは値の意味理解が必要なため、命名のみ LLM
+# （detect_hierarchy_level_names、step3_normalize_llm）に委ねる。ただし
+# 括弧書き注釈の分離と異なり、妥当な既定名（大分類/中分類/小分類）が
+# 存在するため、LLM が失敗・否定した場合でも展開自体は実行する。
+#
+# 特定分野の専門知識やマスタ辞書がないと意味づけできない階層（LLMが
+# is_valid=false と判定するケース）は既定名にフォールバックし、展開自体は
+# 実行する。
+
+_HIER_EXPAND_MIN_DEPTH = 2       # 展開に必要な最小階層数（2未満は展開不要）
+_HIER_EXPAND_MAX_DEPTH = 5       # 展開する最大階層数（誤検出時の列爆発を防ぐ安全弁）
+_HIER_EXPAND_MIN_INDENTED = 2    # インデント方式で必要な「深さ>0」の行数
+_HIER_EXPAND_MIN_RATIO = 0.6     # 区切り文字方式で必要な、パスとして解釈できる行の割合
+_HIER_EXPAND_SAMPLE_PATHS = 8    # LLM に渡す階層パスのサンプル件数
+
+# 先頭インデントとして扱う空白文字（半角/全角スペース・タブ）。全角スペースは
+# 半角スペース2つ分の幅として扱う。
+_INDENT_CHARS = " 　\t"
+
+
+def _indent_width(s: str) -> int:
+    """文字列先頭の空白幅を返す（全角スペースは幅2、半角スペース・タブは幅1）。"""
+    width = 0
+    for ch in s:
+        if ch == "　":
+            width += 2
+        elif ch in (" ", "\t"):
+            width += 1
+        else:
+            break
+    return width
+
+
+def _strip_indent(s: str) -> str:
+    """文字列先頭の空白（半角/全角スペース・タブ）を除去する。"""
+    i = 0
+    while i < len(s) and s[i] in _INDENT_CHARS:
+        i += 1
+    return s[i:]
+
+
+def _detect_hierarchy_by_indent(str_vals: List[str]) -> Optional[Dict[str, Any]]:
+    """先頭インデントの段差から階層構造を検出する（方式A）。
+
+    採用条件（すべて必須）:
+      - 異なるインデント幅が _HIER_EXPAND_MIN_DEPTH 種類以上、
+        _HIER_EXPAND_MAX_DEPTH 以下
+      - 深さ>0 の行が _HIER_EXPAND_MIN_INDENTED 行以上
+      - 先頭データ行の深さが 0（いきなり子から始まる表は誤検出とみなす）
+      - 深さの増加が一度に1レベルまで（0→2 のような飛びは誤検出とみなす）
+      - 深さ>0 の各行について、先行行に深さ-1 の行が存在する（親が解決できる）
+
+    Returns:
+        不採用なら None。採用なら {"depth", "rows"}。
+        rows は各行に対応する [lv0, lv1, ...] のリスト（非該当レベルは ""）。
+    """
+    if not str_vals or _indent_width(str_vals[0]) != 0:
+        return None
+
+    widths = [_indent_width(s) for s in str_vals]
+    distinct_widths = sorted(set(widths))
+    if not (_HIER_EXPAND_MIN_DEPTH <= len(distinct_widths) <= _HIER_EXPAND_MAX_DEPTH):
+        return None
+    if sum(1 for w in widths if w > 0) < _HIER_EXPAND_MIN_INDENTED:
+        return None
+
+    width_to_depth = {w: i for i, w in enumerate(distinct_widths)}
+    depths = [width_to_depth[w] for w in widths]
+    depth = len(distinct_widths)
+
+    ancestors: List[str] = [""] * depth  # 各深さの直近値
+    rows: List[List[str]] = []
+    prev_depth = 0
+    for s, d in zip(str_vals, depths):
+        if d > prev_depth + 1:
+            return None  # 深さが一度に2以上増える → 誤検出とみなす
+        if d > 0 and not ancestors[d - 1]:
+            return None  # 親が解決できない
+        value = _strip_indent(s)
+        ancestors[d] = value
+        for i in range(d + 1, depth):
+            ancestors[i] = ""  # 兄弟に移ったら、より深い祖先はリセットする
+        row = list(ancestors[:d]) + [value] + [""] * (depth - d - 1)
+        rows.append(row)
+        prev_depth = d
+
+    return {"depth": depth, "rows": rows}
+
+
+def _detect_hierarchy_by_delimiter(str_vals: List[str]) -> Optional[Dict[str, Any]]:
+    """セル内の階層区切り文字からパス構造を検出する（方式B）。
+
+    HIERARCHY_DELIMITERS を記載順に試し、最初に下記を満たしたものを採用する:
+      - パスとして解釈できる（全パート非空）セルが非空セルの
+        _HIER_EXPAND_MIN_RATIO 以上
+      - 最大パート数が _HIER_EXPAND_MIN_DEPTH 以上 _HIER_EXPAND_MAX_DEPTH 以下
+
+    Returns:
+        不採用なら None。採用なら {"depth", "rows", "delimiter"}。
+        rows は各行に対応する [lv0, lv1, ...] のリスト（非該当レベルは ""）。
+    """
+    if not str_vals:
+        return None
+
+    for delim in HIERARCHY_DELIMITERS:
+        parsed: List[Optional[List[str]]] = []
+        matched = 0
+        max_parts = 0
+        for s in str_vals:
+            if delim not in s:
+                parsed.append(None)
+                continue
+            parts = [p.strip() for p in s.split(delim)]
+            if not all(parts):
+                parsed.append(None)
+                continue
+            parsed.append(parts)
+            matched += 1
+            max_parts = max(max_parts, len(parts))
+
+        if matched == 0 or matched / len(str_vals) < _HIER_EXPAND_MIN_RATIO:
+            continue
+        if not (_HIER_EXPAND_MIN_DEPTH <= max_parts <= _HIER_EXPAND_MAX_DEPTH):
+            continue
+
+        rows: List[List[str]] = []
+        for s, parts in zip(str_vals, parsed):
+            if parts is None:
+                rows.append([s] + [""] * (max_parts - 1))
+            else:
+                rows.append(list(parts) + [""] * (max_parts - len(parts)))
+
+        return {"depth": max_parts, "rows": rows, "delimiter": delim}
+
+    return None
+
+
+def detect_hierarchy_expansion(
+    df: Any, excluded_cols: Optional[set] = None
+) -> Optional[Dict[str, Any]]:
+    """階層カテゴリが1カラムに圧縮された列の展開候補を検出する（展開はしない）。
+
+    対象列は1列のみ。インデント方式（方式A）を優先し、不成立ならセル内区切り
+    文字方式（方式B）を試す。複数列が条件を満たす場合は、より深い階層構造が
+    検出できた列を採用する（深さが同じ場合は列の出現順）。
+
+    excluded_cols: カラム名内階層区切りの分離（detect_column_hierarchy_split）
+    が既に分離した生成列。発火条件は排他だが、念のため対象外にする。
+
+    Returns:
+        候補がなければ None。あれば {source_col, position, mode, delimiter,
+        depth, rows, sample_paths}。
+        mode は "indent" または "delimiter"。rows は df の各行に対応する
+        [lv0, lv1, ...] のリスト（非該当レベルは ""）。sample_paths は
+        LLM 命名用の "東日本 > 神奈川事業部 > 横浜支店" 形式のサンプル
+        文字列リスト。
+    """
+    import pandas as pd
+    import pandas.api.types as _pat
+
+    if df is None or df.empty:
+        return None
+
+    excluded_cols = excluded_cols or set()
+    best: Optional[Dict[str, Any]] = None
+
+    for pos, col in enumerate(df.columns):
+        if str(col) in excluded_cols:
+            continue
+        if _is_placeholder_col_name(col) or _classify_col_time(col) is not None:
+            continue
+
+        series = df[col]
+        if (
+            _pat.is_numeric_dtype(series)
+            or _pat.is_bool_dtype(series)
+            or _pat.is_datetime64_any_dtype(series)
+        ):
+            continue
+
+        non_null = [
+            v for v in series if v is not None and not (isinstance(v, float) and pd.isna(v))
+        ]
+        # インデント方式は先頭空白そのものが検出シグナルのため strip() しない
+        # 生値を使う。区切り文字方式は前後空白を無視してよいため strip() する。
+        str_vals_raw = [str(v) for v in non_null if isinstance(v, str)]
+        if not str_vals_raw or len(str_vals_raw) / max(1, len(non_null)) < 0.8:
+            continue
+
+        result = _detect_hierarchy_by_indent(str_vals_raw)
+        mode = "indent"
+        delimiter = None
+        if result is None:
+            str_vals_stripped = [s.strip() for s in str_vals_raw]
+            result = _detect_hierarchy_by_delimiter(str_vals_stripped)
+            mode = "delimiter"
+            delimiter = result.get("delimiter") if result else None
+        if result is None:
+            continue
+
+        depth = result["depth"]
+        if best is not None and depth <= best["depth"]:
+            continue
+
+        # rows は非null文字列セルのみに対応するため、元の df 全行分に
+        # 位置合わせする（数値・NaN・非対象行は空文字パディング）
+        full_rows: List[List[str]] = []
+        it = iter(result["rows"])
+        for v in series:
+            if isinstance(v, str):
+                full_rows.append(next(it))
+            else:
+                full_rows.append([""] * depth)
+
+        sample_paths = []
+        for row in result["rows"]:
+            path = " > ".join(p for p in row if p)
+            if path and path not in sample_paths:
+                sample_paths.append(path)
+            if len(sample_paths) >= _HIER_EXPAND_SAMPLE_PATHS:
+                break
+
+        best = {
+            "source_col": str(col),
+            "position": pos,
+            "mode": mode,
+            "delimiter": delimiter,
+            "depth": depth,
+            "rows": full_rows,
+            "sample_paths": sample_paths,
+        }
+
+    return best
+
+
+def expand_hierarchy_column(df: Any, detection: Dict[str, Any], level_names: List[str]) -> Any:
+    """検出済みの階層圧縮カラムを、元の位置で複数レベルのカラムに展開した DataFrame を返す。
+
+    非該当レベルは空文字で埋める（None にすると fill_grouping_cols の ffill
+    対象になり、親レベル行の空欄が後続行の値で誤って埋められてしまうため）。
+
+    level_names が既存カラム名と衝突する場合は _dedup_columns と同じ規約
+    （"名前_1"、"名前_2"）で連番を付与する。
+    """
+    import pandas as pd
+
+    if df is None or not detection:
+        return df
+
+    source_col = detection["source_col"]
+    rows = detection["rows"]
+    taken = {str(c) for c in df.columns if str(c) != source_col}
+
+    unique_names: List[str] = []
+    for name in level_names:
+        unique = name
+        n = 0
+        while unique in taken:
+            n += 1
+            unique = f"{name}_{n}"
+        taken.add(unique)
+        unique_names.append(unique)
+
+    out = pd.DataFrame(index=df.index)
+    for col in df.columns:
+        if str(col) != source_col:
+            out[str(col)] = df[col]
+            continue
+        for i, name in enumerate(unique_names):
+            out[name] = [row[i] for row in rows]
+
+    return out
+
+
+def _default_level_names(depth: int, source_col: str) -> List[str]:
+    """LLM が失敗・否定した場合のフォールバック命名（汎用的な既定の階層名を割り当てる）。"""
+    if depth == 2:
+        return ["大分類", "小分類"]
+    if depth == 3:
+        return ["大分類", "中分類", "小分類"]
+    return [f"{source_col}レベル{i + 1}" for i in range(depth)]
+
+
+def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str) -> Any:
+    """階層圧縮カラムの展開候補を検出し、既定で自動適用して返す。
+
+    他の整形処理と同様に既定では自動適用する。ただし列構造を大きく変える
+    操作のため、展開前 DataFrame を t.pre_hier_expand_df として保持しておき、
+    UI側（streamlit_ui/step3_normalize.py）でユーザーが展開の適用・復元を
+    チェックボックスで選び直せるようにする（t.hier_expand_applied が現在の
+    適用状態を表す）。
+
+    レベル名は LLM（detect_hierarchy_level_names）に委ねるが、失敗・否定時は
+    _default_level_names にフォールバックし、展開自体は実行する。
+    """
+    excluded_cols = {
+        n for c in (getattr(t, "col_split_applied", None) or []) for n in c["new_names"]
+    }
+    detection = detect_hierarchy_expansion(df, excluded_cols=excluded_cols)
+    if not detection:
+        return df
+
+    level_names = detect_hierarchy_level_names(
+        detection["source_col"],
+        detection["depth"],
+        detection["sample_paths"],
+        t.title,
+        llm_client,
+        llm_model,
+    )
+    if level_names:
+        naming_source = "llm"
+    else:
+        level_names = _default_level_names(detection["depth"], detection["source_col"])
+        naming_source = "fallback"
+
+    t.hier_expand_detection = {**detection, "level_names": level_names, "naming_source": naming_source}
+    t.pre_hier_expand_df = df
+    t.hier_expand_applied = True
+    return expand_hierarchy_column(df, detection, level_names)
+
+
+# ---------------------------------------------------------------------------
 # カラム名内階層区切りの分離
 # ---------------------------------------------------------------------------
 # カラム名に階層区切り文字（"/"、"・"、">" 等）が埋め込まれ、実際には複数の
@@ -2772,26 +3106,38 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          担保する）。括弧内の値が何の分類軸かを判断して新カラム名を決めるのは
          語彙辞書では不可能なため、命名と妥当性判定のみ LLM に委ねる（LLMが
          失敗・否定した場合は分離しない）
-      7. グルーピング列の前方補完
-      8. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
+      7. 階層圧縮カラムの展開（決定論的検出＋LLM命名） — 階層カテゴリが
+         インデントまたはセル内の階層区切り文字で1カラムに圧縮されている
+         表を検出し、階層レベルごとのカラムに展開する。5.・6.と同じく1列に
+         押し込まれた情報をほどく処理のため隣接して置く。8.のグルーピング
+         列の前方補完より前に行い、かつ非該当レベルを空文字で埋める（None
+         で埋めると8.が親レベル行の空欄を後続行の値で埋めてしまい、階層
+         構造が壊れるため）。レベル名の命名のみLLMに委ねるが、既定名
+         （大分類/中分類/小分類）が存在するため、LLMが失敗・否定した場合は
+         フォールバックして展開自体は実行する。展開後の親
+         レベル行（子の合計値のみを持つ行）は9.の集計行除去が冗長行として
+         除去する可能性があるが、これは集計行除去本来の責務であり本機能
+         では保護しない
+      8. グルーピング列の前方補完
+      9. 「うち」書きの内訳を別テーブルへ分離 — remove_aggregates は本来、
          親として参照される「合計」行も冗長行とみなして削除してしまうため、
-         うち分離を必ず9.より前に行った上で、親として使われた行の
+         うち分離を必ず10.より前に行った上で、親として使われた行の
          インデックス（apply_uchi_split が返す protected_indices）を
          remove_aggregates に渡し、その行が本体テーブルから消えないよう
          保護する（内訳テーブル側は親の値を保持しているだけなので、本体
          からも合計行自体が消えると対応関係を追えなくなるため）。
          分離結果は独立した新規 DetectedTable として tables に追加し、以降の
-         整形処理（9〜10）の対象にする（メインテーブルと同じ「実テーブル」として
+         整形処理（10〜11）の対象にする（メインテーブルと同じ「実テーブル」として
          Step4のテーブル関係分析・Step6のテーブル選択にもそのまま乗る）。
-      9. 集計行・集計列の除去
-      10. 単位混在の分離（指標マスタ生成）
-      11. 無効カラム（全欠損列・無名列）の検出と既定削除 — 決定論的・LLM不使用。
+      10. 集計行・集計列の除去
+      11. 単位混在の分離（指標マスタ生成）
+      12. 無効カラム（全欠損列・無名列）の検出と既定削除 — 決定論的・LLM不使用。
          他の整形処理と同様に既定では自動適用する（全欠損列を削除。無名でも
          データがある列は削除しない）。削除前の全列 DataFrame を保持するため、
          UI側（streamlit_ui/step3_normalize.py）でユーザーが列ごとに削除の
          復元・追加を選び直せる
     全テーブルに対して上記が完了した後、テーブル間で独立な処理として:
-      12. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換。縦持ち変換
+      13. クロス集計形式（Wide_to_long含む）の検出と縦持ち変換。縦持ち変換
           対象と確定した表にのみ、ファイル外メタデータからの派生カラム生成
           機能（LLM、step3_normalize_llm）を適用する — ファイル名・シート名
           にしか現れないサービス名・オプション種別・年度等を抽出し、
@@ -2967,6 +3313,12 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
                     ]
                 }
                 t.post_paren_split_df = df
+
+        # 階層圧縮カラムの展開: 上記と同じく1列に押し込まれた情報をほどく
+        # 処理のため隣接して行う。ffill（前方補完）より前に行い、非該当
+        # レベルは空文字で埋める（None だと後続の ffill が親レベル行の
+        # 空欄を後続行の値で埋めてしまい、階層構造が壊れるため）。
+        df = _apply_hier_expand_defaults(t, df, llm_client, llm_model)
 
         pre_fill_df_candidate = df
         df, filled_cols = fill_grouping_cols(df)
