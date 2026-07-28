@@ -1126,8 +1126,15 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
     rollup_metadata = getattr(t, "hier_rollup_removed_metadata", None) or []
 
     mode_label = "インデント" if mode == "indent" else f'区切り文字 "{detection.get("delimiter", "")}"'
-    naming_label = "LLM命名" if naming_source == "llm" else "既定名"
     levels_label = "」「".join(level_names)
+    if naming_source == "llm":
+        naming_label = "LLM命名"
+    else:
+        # なぜ意味のある名前ではなく既定名になったかを添える（解釈性のため）
+        naming_reason = str(detection.get("naming_reason") or "").strip()
+        naming_label = (
+            f"既定名：{_html.escape(naming_reason)}" if naming_reason else "既定名"
+        )
     st.markdown(
         f"<p style='margin:4px 0 6px'>検出カラム: "
         f"<code style='background:rgba(156,163,175,0.15);border:1px solid rgba(156,163,175,0.4);"

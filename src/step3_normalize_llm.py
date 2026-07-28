@@ -811,22 +811,27 @@ def detect_hierarchy_level_names(
     title: Optional[str],
     client: Any,
     model: str,
-) -> Optional[List[str]]:
+) -> Tuple[Optional[List[str]], str]:
     """階層圧縮カラムの展開候補について、各階層レベルのカラム名を LLM で判定する。
 
     sample_paths: "東日本 > 神奈川事業部 > 横浜支店" のような、浅い階層から
     深い階層順の文字列のリスト（detect_hierarchy_expansion が生成したサンプル）。
 
     ネットワークエラー・JSON パース失敗・想定外の構造・長さ不一致等は
-    握りつぶして None を返す。呼び出し側（_apply_hier_expand_defaults）は
+    握りつぶして (None, 理由) を返す。呼び出し側（_apply_hier_expand_defaults）は
     None の場合、既定名（大分類/中分類/小分類）にフォールバックする。
 
     Returns:
-      is_valid かつ depth と同じ長さの level_names が得られた場合、その
-      リスト。それ以外は None。
+      (level_names, reason)
+      level_names — is_valid かつ depth と同じ長さの level_names が得られた
+        場合はそのリスト、それ以外は None。
+      reason — level_names が None のとき、なぜ命名できなかったかを示す
+        日本語の文字列（LLM が is_valid=false とした場合はその reasoning、
+        それ以外は失敗種別）。UI側で「なぜ既定名になったか」を表示するために
+        使う。命名に成功した場合は空文字。
     """
     if depth < 1 or not sample_paths:
-        return None
+        return None, "階層情報が不足しているため命名を実行しませんでした"
 
     paths_block = "\n".join(f"  {p}" for p in sample_paths)
     title_line = f"\n表タイトル: {title}" if title else ""
@@ -846,19 +851,22 @@ def detect_hierarchy_level_names(
         content = _call_transpose_api(client, model, messages)
         raw = json.loads(content)
     except Exception:
-        return None
+        return None, "LLM の呼び出しまたは応答の解析に失敗しました"
 
-    if not isinstance(raw, dict) or not raw.get("is_valid"):
-        return None
+    if not isinstance(raw, dict):
+        return None, "LLM の応答が想定した形式ではありませんでした"
+    if not raw.get("is_valid"):
+        reasoning = str(raw.get("reasoning") or "").strip()
+        return None, reasoning or "LLM が各階層の意味を特定できないと判断しました"
 
     level_names = raw.get("level_names")
     if not isinstance(level_names, list) or len(level_names) != depth:
-        return None
+        return None, "LLM の応答が想定した形式ではありませんでした"
 
     names = [str(n).strip() for n in level_names]
     if any(not n for n in names):
-        return None
-    return names
+        return None, "LLM の応答が想定した形式ではありませんでした"
+    return names, ""
 
 
 def apply_transpose(df: Any, entity_axis_name: str) -> Any:

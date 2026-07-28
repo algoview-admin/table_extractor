@@ -2893,12 +2893,26 @@ def find_hierarchy_rollup_rows(
 
 
 def _default_level_names(depth: int, source_col: str) -> List[str]:
-    """LLM が失敗・否定した場合のフォールバック命名（汎用的な既定の階層名を割り当てる）。"""
+    """LLM が失敗・否定した場合のフォールバック命名。
+
+    既定の階層名（大分類/中分類/小分類、深さ4以上はレベルN）に、必ず元カラム名を
+    アンダースコア区切りの接頭辞として付ける（"勘定コード_大分類" 等）。
+    元カラム名は表の作成者が明示的に付けた確かな情報であり、LLM が意味づけを
+    見送った場面でこそ捨てるべきでないため。接頭辞の付け方は merge_header_rows
+    が多段ヘッダーを "東京支社_売上" と連結する規約（"所属_項目"）に揃えており、
+    _agg_column_group_key もこの規約を前提に "_" の前をグループキーとして読む。
+
+    LLM が命名に成功した場合はこの関数を通さず、LLM の返した名前をそのまま使う
+    （"地方"/"都道府県"/"市区町村" のように自己説明的で、元カラム名を足すと
+    "地域_地方" のように冗長かつ意味が薄れるため）。
+    """
     if depth == 2:
-        return ["大分類", "小分類"]
-    if depth == 3:
-        return ["大分類", "中分類", "小分類"]
-    return [f"{source_col}レベル{i + 1}" for i in range(depth)]
+        levels = ["大分類", "小分類"]
+    elif depth == 3:
+        levels = ["大分類", "中分類", "小分類"]
+    else:
+        levels = [f"レベル{i + 1}" for i in range(depth)]
+    return [f"{source_col}_{lv}" for lv in levels]
 
 
 def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str) -> Any:
@@ -2929,7 +2943,7 @@ def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str
     if not detection:
         return df
 
-    level_names = detect_hierarchy_level_names(
+    level_names, naming_reason = detect_hierarchy_level_names(
         detection["source_col"],
         detection["depth"],
         detection["sample_paths"],
@@ -2943,7 +2957,12 @@ def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str
         level_names = _default_level_names(detection["depth"], detection["source_col"])
         naming_source = "fallback"
 
-    detection = {**detection, "level_names": level_names, "naming_source": naming_source}
+    detection = {
+        **detection,
+        "level_names": level_names,
+        "naming_source": naming_source,
+        "naming_reason": naming_reason,
+    }
     t.hier_expand_detection = detection
     t.pre_hier_expand_df = df
     t.hier_expand_applied = True

@@ -70,7 +70,7 @@ class DetectedTable:
     pre_paren_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 括弧書き注釈の分離前 DataFrame（分離適用時のみ）
     post_paren_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 分離直後（後続ステップ適用前）の DataFrame スナップショット
     paren_split_info: Optional[Dict[str, Any]] = field(default=None)  # 括弧書き注釈の分離情報 {columns: [{source_col, new_col, distinct_annotations, match_count, reasoning}]}
-    hier_expand_detection: Optional[Dict[str, Any]] = field(default=None)  # 階層圧縮カラムの展開の検出結果 {source_col, position, mode, delimiter, depth, rows, sample_paths, level_names, naming_source}（不変。検出時点のスナップショット）
+    hier_expand_detection: Optional[Dict[str, Any]] = field(default=None)  # 階層圧縮カラムの展開の検出結果 {source_col, position, mode, delimiter, depth, rows, sample_paths, level_names, naming_source, naming_reason}（不変。検出時点のスナップショット。naming_reason は既定名にフォールバックした理由）
     pre_hier_expand_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 階層展開前 DataFrame（不変。復元・再選択の基準）
     hier_expand_applied: bool = False  # 現在展開が適用されているか（既定は自動適用、ユーザーがチェックボックスで調整可能）
     hier_rollup_removed_metadata: List[Dict[str, Any]] = field(default_factory=list)  # 階層圧縮カラムの展開時に除去したロールアップ行（子行群の合計と数値が一致する集計行）の監査用メタデータ [{level_values, child_count, matched_columns}]
