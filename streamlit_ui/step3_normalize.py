@@ -11,8 +11,6 @@ from src.models import DetectedTable
 from src.step3_normalize_determ import (
     _is_agg_label,
     apply_column_hierarchy_split,
-    expand_hierarchy_column,
-    find_hierarchy_rollup_rows,
     normalize_tables,
 )
 
@@ -1096,22 +1094,15 @@ def _visualize_indent(s: str) -> str:
 
 
 def _render_hier_expand_body(t: "DetectedTable") -> None:
-    """階層圧縮カラムの展開結果と調整 UI（Streamlit ウィジェット版）。
+    """階層圧縮カラムの展開結果の詳細（Streamlit ウィジェット版）。
 
-    他の整形処理と同様に既定で展開を自動適用した状態を表示する。列構造を
-    大きく変える操作のため、展開前 DataFrame（pre_hier_expand_df）を保持
-    しており、チェックボックスで展開の適用・復元を選び直せる。
+    他の整形処理と同様に自動適用した結果を表示する。行を削除する処理
+    （ロールアップ行の除去）を含むため、集計行・集計列の除去や「うち」書き
+    分離と同じく適用・復元の選び直し UI は設けない（詳細は
+    _apply_hier_expand_defaults のドキュメント参照）。
 
-    表示用の「変換後」は pre_hier_expand_df ＋ 現在の適用状態のみから計算する
-    （後続ステップが追加・削除した列を巻き込まない）。一方、実データ t.df の
-    更新は展開状態の変化のみを現在の t.df に対して行う（pre から丸ごと
-    作り直すと、pre 取得後に後続ステップが追加した列が失われてしまうため）。
-
-    展開時に子行群の合計と一致するロールアップ行を除去している場合があり、
-    行数が変わるため、チェックボックスの ON/OFF は列名と行の位置ではなく
-    「階層レベル値の組み合わせ ⇔ 元の圧縮済み文字列」の対応関係（内容ベース）
-    で相互変換する（除去済みロールアップ行は元に戻らない。remove_aggregates
-    同様、行削除自体に選び直しUIは設けない設計のため）。"""
+    「変換後」は post_hier_expand_df（展開直後のスナップショット）を使い、
+    後続ステップが追加・削除した列を巻き込まないようにする。"""
     detection = getattr(t, "hier_expand_detection", None)
     pre = getattr(t, "pre_hier_expand_df", None)
     if not detection or pre is None:
@@ -1122,7 +1113,6 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
     naming_source = detection["naming_source"]
     mode = detection["mode"]
     depth = detection["depth"]
-    applied = bool(getattr(t, "hier_expand_applied", False))
     rollup_metadata = getattr(t, "hier_rollup_removed_metadata", None) or []
 
     mode_label = "インデント" if mode == "indent" else f'区切り文字 "{detection.get("delimiter", "")}"'
@@ -1145,28 +1135,18 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
         unsafe_allow_html=True,
     )
 
-    if applied:
-        if rollup_metadata:
-            st.caption(
-                f"既定で「{_html.escape(source_col)}」を **{depth}** 列に展開し、"
-                f"子行の合計と一致する **{len(rollup_metadata)}** 件の集計行（ロールアップ行）を"
-                "除去しました。不要な場合はチェックを外すと展開前のカラムに戻せます"
-                "（除去した集計行自体は復元されません）"
-            )
-        else:
-            st.caption(
-                f"既定で「{_html.escape(source_col)}」を **{depth}** 列に展開しました。"
-                "不要な場合はチェックを外すと元に戻せます"
-            )
+    if rollup_metadata:
+        st.caption(
+            f"「{_html.escape(source_col)}」を **{depth}** 列に展開し、"
+            f"子行の合計と一致する **{len(rollup_metadata)}** 件の集計行（ロールアップ行）を"
+            "除去しました"
+        )
     else:
-        st.caption("現在展開されていません（以下で選択すると展開できます）")
+        st.caption(f"「{_html.escape(source_col)}」を **{depth}** 列に展開しました")
 
-    display_after = None
-    if applied:
-        display_after = expand_hierarchy_column(pre, detection, level_names)
-        rollup_idx, _ = find_hierarchy_rollup_rows(display_after, detection)
-        if rollup_idx:
-            display_after = display_after.drop(index=rollup_idx).reset_index(drop=True)
+    display_after = getattr(t, "post_hier_expand_df", None)
+    if display_after is None:
+        display_after = t.df
     green_cols = set(level_names)
 
     pre_display = pre.astype(str)
@@ -1174,83 +1154,27 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
         pre_display = pre_display.copy()
         pre_display[source_col] = pre_display[source_col].map(_visualize_indent)
 
-    if display_after is not None:
-        col_b, col_a = st.columns(2)
-        with col_b:
-            st.markdown(
-                f"**変換前**（{len(pre.columns)} 列 × {len(pre)} 行 / "
-                f"オレンジ列 = 階層が圧縮されたカラム）"
-            )
-            st.markdown(
-                _df_to_html(pre_display, max_height=340, highlight_col_names={source_col}),
-                unsafe_allow_html=True,
-            )
-        with col_a:
-            st.markdown(
-                f"**変換後**（{len(display_after.columns)} 列 × {len(display_after)} 行 / "
-                f"緑列 = 展開で生まれた階層カラム）"
-            )
-            st.markdown(
-                _df_to_html(
-                    display_after.astype(str), max_height=340, green_col_names=green_cols
-                ),
-                unsafe_allow_html=True,
-            )
-    else:
+    col_b, col_a = st.columns(2)
+    with col_b:
         st.markdown(
-            f"**検出時点**（{len(pre.columns)} 列 × {len(pre)} 行 / "
-            f"オレンジ列 = 展開候補カラム）"
+            f"**変換前**（{len(pre.columns)} 列 × {len(pre)} 行 / "
+            f"オレンジ列 = 階層が圧縮されたカラム）"
         )
         st.markdown(
             _df_to_html(pre_display, max_height=340, highlight_col_names={source_col}),
             unsafe_allow_html=True,
         )
-
-    with st.form(key=f"hierexp_form_{t.table_id}"):
-        checked = st.checkbox(
-            f"「{source_col}」を「{levels_label}」に展開する",
-            value=applied,
-            key=f"hierexp_{t.table_id}",
+    with col_a:
+        st.markdown(
+            f"**変換後**（{len(display_after.columns)} 列 × {len(display_after)} 行 / "
+            f"緑列 = 展開で生まれた階層カラム）"
         )
-        submitted = st.form_submit_button("選択を反映")
-
-    if submitted:
-        new_df = t.df.copy()
-        if checked and not applied:
-            # 展開はロールアップ行を除去し得るため、以後 new_df の行数・index は
-            # pre_hier_expand_df と一致しない。位置ではなく「元の圧縮済み文字列
-            # ⇔ 階層レベル値」の対応関係（内容ベース）で変換する。
-            if source_col in new_df.columns:
-                text_to_levels = {
-                    str(txt): lv for txt, lv in zip(pre[source_col], detection["rows"])
-                }
-                empty_levels = [""] * len(level_names)
-                level_lists = new_df[source_col].map(
-                    lambda v: text_to_levels.get(str(v), empty_levels)
-                )
-                pos = list(new_df.columns).index(source_col)
-                new_df = new_df.drop(columns=[source_col])
-                for i, name in enumerate(level_names):
-                    new_df.insert(
-                        min(pos + i, len(new_df.columns)),
-                        name,
-                        level_lists.map(lambda lv, i=i: lv[i]),
-                    )
-        elif applied and not checked:
-            present = [n for n in level_names if n in new_df.columns]
-            if present:
-                levels_to_text = {
-                    tuple(lv): txt for txt, lv in zip(pre[source_col], detection["rows"])
-                }
-                pos = list(new_df.columns).index(present[0])
-                restored = new_df[present].apply(
-                    lambda r: levels_to_text.get(tuple(r), ""), axis=1
-                )
-                new_df = new_df.drop(columns=present)
-                new_df.insert(min(pos, len(new_df.columns)), source_col, restored)
-        t.df = new_df
-        t.hier_expand_applied = checked
-        st.rerun()
+        st.markdown(
+            _df_to_html(
+                display_after.astype(str), max_height=340, green_col_names=green_cols
+            ),
+            unsafe_allow_html=True,
+        )
 
 
 def _render_fill_cols_body(t: "DetectedTable") -> None:
@@ -2447,7 +2371,6 @@ def step_format():
             generated_cols = sum(
                 len((t.hier_expand_detection or {}).get("level_names", []))
                 for t in hier_expand_targets
-                if getattr(t, "hier_expand_applied", False)
             )
             rollup_removed_total = sum(
                 len(getattr(t, "hier_rollup_removed_metadata", None) or [])
@@ -2464,7 +2387,7 @@ def step_format():
             st.success(
                 f"**{len(hier_expand_targets)}** テーブルで1カラムに圧縮された階層カテゴリを"
                 f"検出し、階層レベルごとのカラムに展開しました"
-                f"（生成列: 計 {generated_cols} 件{rollup_note}。不要な場合は各テーブルで元に戻せます）"
+                f"（生成列: 計 {generated_cols} 件{rollup_note}）"
             )
 
             rep_h = hier_expand_targets[0]

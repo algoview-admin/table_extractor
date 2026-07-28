@@ -2916,25 +2916,27 @@ def _default_level_names(depth: int, source_col: str) -> List[str]:
 
 
 def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str) -> Any:
-    """階層圧縮カラムの展開候補を検出し、既定で自動適用して返す。
+    """階層圧縮カラムの展開候補を検出し、自動適用して返す。
 
-    他の整形処理と同様に既定では自動適用する。ただし列構造を大きく変える
-    操作のため、展開前 DataFrame を t.pre_hier_expand_df として保持しておき、
-    UI側（streamlit_ui/step3_normalize.py）でユーザーが展開の適用・復元を
-    チェックボックスで選び直せるようにする（t.hier_expand_applied が現在の
-    適用状態を表す）。
+    他の整形処理と同様、検出できた場合は自動適用する。行を削除する処理
+    （下記のロールアップ行除去）を含むため、集計行・集計列の除去や
+    「うち」書き分離と同じく、UI側に適用・復元の選び直し機能は設けない
+    （列の増減だけで完結する無効カラムの検出と削除機能・カラム名内階層区切りの
+    分離とは異なり、行の削除は後続ステップを経た後に巻き戻すと、後続ステップが
+    その行に対して行った処理を再現できず整合が取れなくなるため）。
+    UI表示用に展開前後のスナップショット（pre_hier_expand_df /
+    post_hier_expand_df）を保持する。
 
     レベル名は LLM（detect_hierarchy_level_names）に委ねるが、失敗・否定時は
     _default_level_names にフォールバックし、展開自体は実行する。
 
     展開直後、find_hierarchy_rollup_rows で「1段深い子行群の合計と数値が
     一致する行」（ロールアップ行。例: 地方の内訳を都道府県レベルで持つ表で、
-    地方自体の小計を表す行）を検出し、既定で除去する。これは remove_aggregates
+    地方自体の小計を表す行）を検出して除去する。これは remove_aggregates
     が集計キーワードに基づいて行う集計行除去と同じ目的を、キーワードに
     頼れない階層構造に対して行うもので、新たな整形処理として切り出さず、
     本機能（階層圧縮カラムの展開）の一部として扱う。除去した行は
-    t.hier_rollup_removed_metadata に監査用メタデータとして保持する
-    （remove_aggregates 同様、行削除自体に選び直しUIは設けない）。
+    t.hier_rollup_removed_metadata に監査用メタデータとして保持する。
     """
     excluded_cols = {
         n for c in (getattr(t, "col_split_applied", None) or []) for n in c["new_names"]
@@ -2965,13 +2967,13 @@ def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str
     }
     t.hier_expand_detection = detection
     t.pre_hier_expand_df = df
-    t.hier_expand_applied = True
 
     expanded = expand_hierarchy_column(df, detection, level_names)
     rollup_indices, rollup_metadata = find_hierarchy_rollup_rows(expanded, detection)
     t.hier_rollup_removed_metadata = rollup_metadata
     if rollup_indices:
         expanded = expanded.drop(index=rollup_indices).reset_index(drop=True)
+    t.post_hier_expand_df = expanded
     return expanded
 
 
