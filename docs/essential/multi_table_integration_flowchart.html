@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>複数テーブルの統合と選択機能 フローチャート</title>
+<style>
+:root {
+  --bg:#F6F7FB; --surface:#FFFFFF; --sur2:#F1F3F9;
+  --tx1:#101828; --tx2:#475467; --tx3:#98A2B3;
+  --bd:#E4E7EC; --bd2:#D0D5DD;
+  --terminal-fill:#D1E9FF; --terminal-line:#2E90FA;
+  --decision-fill:#D3F8DF; --decision-line:#12B76A;
+  --process-fill:#FFFFFF; --process-line:#2E90FA;
+  --arrow:#667085;
+  --sh: 0 1px 3px rgba(16,24,40,.08), 0 6px 16px rgba(16,24,40,.06);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--tx1);
+  font-family:'Yu Gothic','Hiragino Sans',system-ui,sans-serif;
+  font-size:14px; line-height:1.6;
+}
+.page { max-width:1440px; margin:0 auto; padding:1.5rem 1.25rem 2.5rem; }
+.hero { margin-bottom:.9rem; display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }
+.hero h1 { font-size:26px; margin:0 0 .25rem; color:var(--tx1); }
+.hero p { margin:0; color:var(--tx2); font-size:14px; }
+.other-btn {
+  flex-shrink:0; display:inline-flex; align-items:center; gap:.4rem;
+  font-size:14px; font-weight:700; color:#fff; text-decoration:none;
+  background:var(--terminal-line); padding:.6rem 1.1rem; border-radius:8px;
+  box-shadow:var(--sh); white-space:nowrap; margin-top:.1rem;
+  transition:filter .13s;
+}
+.other-btn:hover { filter:brightness(0.93); }
+.nav {
+  display:flex; flex-wrap:wrap; gap:.5rem; margin:0 0 1.1rem;
+  padding:.65rem .9rem; background:var(--surface); border:1.5px solid var(--bd);
+  border-radius:10px; box-shadow:var(--sh);
+}
+.nav-lnk {
+  font-size:13.5px; color:var(--tx2); text-decoration:none;
+  padding:.3rem .65rem; border-radius:6px; border:1px solid var(--bd);
+  background:var(--sur2); white-space:nowrap;
+}
+.nav-lnk:hover { border-color:var(--decision-line); color:var(--tx1); }
+
+.feature {
+  background:var(--surface); border:1.5px solid var(--bd); border-radius:14px;
+  box-shadow:var(--sh); margin-bottom:1.1rem; overflow:hidden; scroll-margin-top:1rem;
+}
+.feature-hd {
+  display:flex; align-items:center; gap:.9rem;
+  padding:.85rem 1.2rem; border-bottom:1.5px solid var(--bd); background:var(--sur2);
+}
+.feature-num {
+  flex-shrink:0; width:36px; height:36px; border-radius:50%;
+  background:var(--terminal-line); color:#fff; font-weight:800; font-size:16px;
+  display:flex; align-items:center; justify-content:center;
+}
+.feature-hd h2 { margin:0 0 .15rem; font-size:18px; color:var(--tx1); }
+.feature-desc { margin:0; font-size:13.5px; color:var(--tx2); }
+
+.feature-body {
+  display:flex; gap:1rem; padding:.9rem 1rem 1rem; align-items:flex-start;
+  flex-wrap:nowrap; overflow-x:auto;
+}
+.flow-pane { flex:0 0 820px; width:820px; }
+.flow-svg { width:100%; height:auto; display:block; }
+
+.sh-terminal { fill:var(--terminal-fill); stroke:var(--terminal-line); stroke-width:2; }
+.sh-decision { fill:var(--decision-fill); stroke:var(--decision-line); stroke-width:2; }
+.sh-process  { fill:var(--process-fill);  stroke:var(--process-line);  stroke-width:2; }
+.fc-arrow { stroke:var(--arrow); stroke-width:1.6; }
+.fc-arrow-head { fill:var(--arrow); }
+.flow-svg text { fill:var(--tx1); }
+
+.sample-pane {
+  flex:1 1 auto; min-width:280px;
+  background:#EAF1FE; border:1.5px solid var(--bd2); border-radius:12px;
+  padding:1rem 1.15rem; box-shadow:inset 0 1px 3px rgba(16,24,40,.05);
+}
+.sample-pane-title {
+  font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--tx2); margin-bottom:.7rem;
+}
+.sample-group-label {
+  font-size:14px; font-weight:800; color:var(--tx1);
+  margin:1rem 0 .55rem; padding:.45rem .65rem;
+  background:rgba(46,144,250,0.14); border-left:3px solid var(--terminal-line);
+  border-radius:0 4px 4px 0;
+}
+.sample-group-label.first { margin-top:0; }
+.sample-block { margin-bottom:.45rem; }
+.sample-label { font-size:14.5px; font-weight:700; color:var(--tx1); margin-bottom:.35rem; }
+.sample-note { font-size:12.5px; color:var(--tx3); margin-top:.25rem; }
+.sample-tbl-wrap {
+  max-width:100%; overflow-x:auto; border-radius:4px;
+}
+.sample-tbl {
+  border-collapse:collapse; width:100%; font-size:14px;
+  background:var(--surface); border:1px solid var(--bd2); border-radius:6px; overflow:hidden;
+  box-shadow:0 1px 6px rgba(16,24,40,.12);
+}
+.sample-tbl th, .sample-tbl td {
+  border:1px solid var(--bd); padding:7px 11px; text-align:center; white-space:nowrap;
+}
+.sample-tbl th { background:#F0F4FA; color:var(--tx1); font-weight:700; }
+.sample-tbl th.hl { background:color-mix(in srgb, var(--decision-line) 26%, #F0F4FA); color:var(--tx1); }
+.down-arrow {
+  text-align:center; font-size:15px; font-weight:700; color:var(--decision-line); margin:.4rem 0;
+  display:flex; align-items:center; justify-content:center; gap:.4rem;
+}
+.down-arrow.plus { color:var(--terminal-line); }
+.da-txt { font-size:14px; font-weight:700; color:var(--tx1); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero">
+    <div>
+      <h1>複数テーブルの統合と選択機能 フローチャート</h1>
+      <p>テーブル整形（Step3）より後の工程で行う、複数テーブルをまたいだ統合判断とユーザー選択の業務フロー（Step4 テーブル関係分析→Step5 新規テーブル案生成→Step6 テーブル選択）</p>
+    </div>
+    <a href="index.html" class="other-btn">📋 ドキュメント一覧</a>
+  </div>
+  <nav class="nav"><a href="#analyze" class="nav-lnk">1. テーブル関係分析とAI分類（Step4）</a><a href="#propose" class="nav-lnk">2. 統合軸・派生テーブル案の生成（Step5）</a><a href="#select" class="nav-lnk">3. テーブル選択と最終出力の確定（Step6）</a></nav>
+
+<section class="feature" id="analyze">
+  <div class="feature-hd">
+    <span class="feature-num">1</span>
+    <div>
+      <h2>テーブル関係分析とAI分類（Step4）</h2>
+      <p class="feature-desc">シート間・テーブル間の関係をAIが分析し、各テーブルの粒度（明細/集計/マスタ/参照）や親子・類似関係を判定する。決定論的に検証できる合計関係がある場合はそれを最優先根拠としてLLMに提示し、値のスケールが大きいだけのシートを集計シートと誤認しないようにする</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">分析結果サンプル</div>
+      <div class="sample-group-label first">①スケールが大きいだけの明細シート（誤検出を防止）</div><div class="sample-block"><div class="sample-label">入力（同一列構造の3シート）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">シート名</th><th class="">数値合計の目安</th></tr></thead><tbody><tr><td>支店別（AP数）</td><td>6,000</td></tr><tr><td>支店別（プラン数）</td><td>3,000</td></tr><tr><td>支店別（ID数）</td><td>30,000</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">分析</span></div><div class="sample-block"><div class="sample-label">分類結果</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">シート名</th><th class="hl">粒度</th></tr></thead><tbody><tr><td>支店別（AP数）</td><td>明細</td></tr><tr><td>支店別（プラン数）</td><td>明細</td></tr><tr><td>支店別（ID数）</td><td>明細</td></tr></tbody></table></div><div class="sample-note">ID数は値の桁が大きいだけで他シートとの合計関係が確認できないため、集計シートと誤認しない</div></div>
+      <div class="sample-group-label">②真の集計関係があるシート</div><div class="sample-block"><div class="sample-label">入力</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">シート名</th><th class="">数値合計</th></tr></thead><tbody><tr><td>全社計</td><td>600</td></tr><tr><td>東京</td><td>100</td></tr><tr><td>大阪</td><td>200</td></tr><tr><td>名古屋</td><td>300</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">分析</span></div><div class="sample-block"><div class="sample-label">分類結果</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">シート名</th><th class="hl">粒度</th></tr></thead><tbody><tr><td>全社計</td><td>集計</td></tr><tr><td>東京・大阪・名古屋</td><td>明細</td></tr></tbody></table></div><div class="sample-note">東京+大阪+名古屋=600と一致するため、部分集合合計探索で集計関係を検証済み</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 582" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">検出済みの全テーブルを入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">決定論的な部分集合合計探索で</tspan><tspan x="280" dy="23">集計関係を確認できたか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">検証済みの根拠なし。LLMが</tspan><tspan x="660" dy="22">列構造・値パターンのみで判定</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="354.0" width="320" height="76"/><text x="280" y="398.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">検証済みの合計関係を最優先根拠</tspan><tspan x="280" dy="22">としてLLMに提示し、集計と確定</tspan></text>
+<line class="fc-arrow" x1="280" y1="430" x2="280" y2="488" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="488.0" width="340" height="64" rx="32.0"/><text x="280" y="526.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">粒度・関係を記録し統合案生成へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="385" width="48" height="22" rx="11"/>
+<text x="692" y="402" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,427 678,438 654,449 630,438"/>
+<text x="692" y="444" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="469" width="48" height="22"/>
+<text x="692" y="486" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="propose">
+  <div class="feature-hd">
+    <span class="feature-num">2</span>
+    <div>
+      <h2>統合軸・派生テーブル案の生成（Step5）</h2>
+      <p class="feature-desc">複数テーブルを1つの縦持ちテーブルに統合する際、統合前から既に同じ意味の軸（列）が存在する場合は新規軸を追加せず既存軸をそのまま採用する。また、集計テーブルと検出済み内訳の差分から、欠落した内訳（派生テーブル）を算出して提案する</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">変換前（3シートに共通の「オプション種別」列が既に存在）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="">オプション種別</th><th class="">数量</th></tr></thead><tbody><tr><td>東京南支店</td><td>拡張サポート</td><td>5</td></tr><tr><td>大阪支店</td><td>訪問修理</td><td>3</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">統合</span></div><div class="sample-block"><div class="sample-label">変換後（新規軸を追加せず既存列を採用）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="hl">オプション種別</th><th class="">数量</th></tr></thead><tbody><tr><td>東京南支店</td><td>拡張サポート</td><td>5</td></tr><tr><td>大阪支店</td><td>訪問修理</td><td>3</td></tr></tbody></table></div><div class="sample-note">新規の統合軸列を追加するのではなく、統合前から存在する「オプション種別」をそのまま採用（列順は最初のテーブルの並びを踏襲）</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 796" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">分析結果とシート群を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">複数テーブルに意味的に統合できる</tspan><tspan x="280" dy="23">軸（観点）があるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">統合案を生成せず</tspan><tspan x="660" dy="22">各テーブルは個別のまま次へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<polygon class="sh-decision" points="280,354.0 450.0,432.0 280,510.0 110.0,432.0"/><text x="280" y="438.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">統合前の各テーブルに、既に同じ</tspan><tspan x="280" dy="23">意味の列が存在するか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="432.0" x2="500.0" y2="432.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="416.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="394.0" width="320" height="76"/><text x="660" y="438.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">新規の統合軸列を追加して</tspan><tspan x="660" dy="22">縦持ちに統合</tspan></text>
+<line class="fc-arrow" x1="280" y1="510" x2="280" y2="568" marker-end="url(#arrowhead)"/>
+<text x="312" y="539.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="568.0" width="320" height="76"/><text x="280" y="612.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">新規軸を追加せず、既存の同義列を</tspan><tspan x="280" dy="22">採用して統合（列順は最初のテーブルを踏襲）</tspan></text>
+<line class="fc-arrow" x1="280" y1="644" x2="280" y2="702" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="702.0" width="340" height="64" rx="32.0"/><text x="280" y="740.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">統合案・派生案をテーブル選択へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="599" width="48" height="22" rx="11"/>
+<text x="692" y="616" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,641 678,652 654,663 630,652"/>
+<text x="692" y="658" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="683" width="48" height="22"/>
+<text x="692" y="700" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="select">
+  <div class="feature-hd">
+    <span class="feature-num">3</span>
+    <div>
+      <h2>テーブル選択と最終出力の確定（Step6）</h2>
+      <p class="feature-desc">統合案・派生テーブル案・個別テーブルを一覧表示し、ユーザーが最終的に出力するテーブルの組み合わせを選択・確定する。統合案に採用された個別テーブルは二重出力を防ぐため既定で選択解除される</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">候補一覧サンプル</div>
+      <div class="sample-block"><div class="sample-label">候補と既定の選択状態</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">候補</th><th class="">種別</th><th class="hl">既定の選択</th></tr></thead><tbody><tr><td>支店別プラン別実績</td><td>統合テーブル</td><td>選択</td></tr><tr><td>支店別（東京プラン）</td><td>個別テーブル</td><td>除外</td></tr><tr><td>支店別（大阪プラン）</td><td>個別テーブル</td><td>除外</td></tr><tr><td>支店別（名古屋プラン・その他）</td><td>派生テーブル</td><td>選択</td></tr></tbody></table></div><div class="sample-note">東京・大阪プランは統合テーブルに含まれるため既定で除外。名古屋プラン・その他は親の集計値と検出済み子の差分から算出された派生テーブルで、既定で選択される</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 582" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">統合案・派生案・個別テーブルを入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">統合案に採用された</tspan><tspan x="280" dy="23">個別テーブルか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">個別テーブルとして</tspan><tspan x="660" dy="22">既定で選択</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="354.0" width="320" height="76"/><text x="280" y="398.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">統合後テーブルで代替されるため</tspan><tspan x="280" dy="22">既定で選択解除（二重出力を防ぐ）</tspan></text>
+<line class="fc-arrow" x1="280" y1="430" x2="280" y2="488" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="488.0" width="340" height="64" rx="32.0"/><text x="280" y="526.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">ユーザーが最終調整しStep7へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="385" width="48" height="22" rx="11"/>
+<text x="692" y="402" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,427 678,438 654,449 630,438"/>
+<text x="692" y="444" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="469" width="48" height="22"/>
+<text x="692" y="486" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+</div>
+</body>
+</html>

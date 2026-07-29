@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Step3 各種機能フローチャート</title>
+<style>
+:root {
+  --bg:#F6F7FB; --surface:#FFFFFF; --sur2:#F1F3F9;
+  --tx1:#101828; --tx2:#475467; --tx3:#98A2B3;
+  --bd:#E4E7EC; --bd2:#D0D5DD;
+  --terminal-fill:#D1E9FF; --terminal-line:#2E90FA;
+  --decision-fill:#D3F8DF; --decision-line:#12B76A;
+  --process-fill:#FFFFFF; --process-line:#2E90FA;
+  --arrow:#667085;
+  --sh: 0 1px 3px rgba(16,24,40,.08), 0 6px 16px rgba(16,24,40,.06);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--tx1);
+  font-family:'Yu Gothic','Hiragino Sans',system-ui,sans-serif;
+  font-size:14px; line-height:1.6;
+}
+.page { max-width:1440px; margin:0 auto; padding:1.5rem 1.25rem 2.5rem; }
+.hero { margin-bottom:.9rem; display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }
+.hero h1 { font-size:26px; margin:0 0 .25rem; color:var(--tx1); }
+.hero p { margin:0; color:var(--tx2); font-size:14px; }
+.other-btn {
+  flex-shrink:0; display:inline-flex; align-items:center; gap:.4rem;
+  font-size:14px; font-weight:700; color:#fff; text-decoration:none;
+  background:var(--terminal-line); padding:.6rem 1.1rem; border-radius:8px;
+  box-shadow:var(--sh); white-space:nowrap; margin-top:.1rem;
+  transition:filter .13s;
+}
+.other-btn:hover { filter:brightness(0.93); }
+.nav {
+  display:flex; flex-wrap:wrap; gap:.5rem; margin:0 0 1.1rem;
+  padding:.65rem .9rem; background:var(--surface); border:1.5px solid var(--bd);
+  border-radius:10px; box-shadow:var(--sh);
+}
+.nav-lnk {
+  font-size:13.5px; color:var(--tx2); text-decoration:none;
+  padding:.3rem .65rem; border-radius:6px; border:1px solid var(--bd);
+  background:var(--sur2); white-space:nowrap;
+}
+.nav-lnk:hover { border-color:var(--decision-line); color:var(--tx1); }
+
+.feature {
+  background:var(--surface); border:1.5px solid var(--bd); border-radius:14px;
+  box-shadow:var(--sh); margin-bottom:1.1rem; overflow:hidden; scroll-margin-top:1rem;
+}
+.feature-hd {
+  display:flex; align-items:center; gap:.9rem;
+  padding:.85rem 1.2rem; border-bottom:1.5px solid var(--bd); background:var(--sur2);
+}
+.feature-num {
+  flex-shrink:0; width:36px; height:36px; border-radius:50%;
+  background:var(--terminal-line); color:#fff; font-weight:800; font-size:16px;
+  display:flex; align-items:center; justify-content:center;
+}
+.feature-hd h2 { margin:0 0 .15rem; font-size:18px; color:var(--tx1); }
+.feature-desc { margin:0; font-size:13.5px; color:var(--tx2); }
+
+.feature-body {
+  display:flex; gap:1rem; padding:.9rem 1rem 1rem; align-items:flex-start;
+  flex-wrap:nowrap; overflow-x:auto;
+}
+.flow-pane { flex:0 0 820px; width:820px; }
+.flow-svg { width:100%; height:auto; display:block; }
+
+.sh-terminal { fill:var(--terminal-fill); stroke:var(--terminal-line); stroke-width:2; }
+.sh-decision { fill:var(--decision-fill); stroke:var(--decision-line); stroke-width:2; }
+.sh-process  { fill:var(--process-fill);  stroke:var(--process-line);  stroke-width:2; }
+.fc-arrow { stroke:var(--arrow); stroke-width:1.6; }
+.fc-arrow-head { fill:var(--arrow); }
+.flow-svg text { fill:var(--tx1); }
+
+.sample-pane {
+  flex:1 1 auto; min-width:280px;
+  background:#EAF1FE; border:1.5px solid var(--bd2); border-radius:12px;
+  padding:1rem 1.15rem; box-shadow:inset 0 1px 3px rgba(16,24,40,.05);
+}
+.sample-pane-title {
+  font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--tx2); margin-bottom:.7rem;
+}
+.sample-group-label {
+  font-size:14px; font-weight:800; color:var(--tx1);
+  margin:1rem 0 .55rem; padding:.45rem .65rem;
+  background:rgba(46,144,250,0.14); border-left:3px solid var(--terminal-line);
+  border-radius:0 4px 4px 0;
+}
+.sample-group-label.first { margin-top:0; }
+.sample-block { margin-bottom:.45rem; }
+.sample-label { font-size:14.5px; font-weight:700; color:var(--tx1); margin-bottom:.35rem; }
+.sample-note { font-size:12.5px; color:var(--tx3); margin-top:.25rem; }
+.sample-tbl-wrap {
+  max-width:100%; overflow-x:auto; border-radius:4px;
+}
+.sample-tbl {
+  border-collapse:collapse; width:100%; font-size:14px;
+  background:var(--surface); border:1px solid var(--bd2); border-radius:6px; overflow:hidden;
+  box-shadow:0 1px 6px rgba(16,24,40,.12);
+}
+.sample-tbl th, .sample-tbl td {
+  border:1px solid var(--bd); padding:7px 11px; text-align:center; white-space:nowrap;
+}
+.sample-tbl th { background:#F0F4FA; color:var(--tx1); font-weight:700; }
+.sample-tbl th.hl { background:color-mix(in srgb, var(--decision-line) 26%, #F0F4FA); color:var(--tx1); }
+.down-arrow {
+  text-align:center; font-size:15px; font-weight:700; color:var(--decision-line); margin:.4rem 0;
+  display:flex; align-items:center; justify-content:center; gap:.4rem;
+}
+.down-arrow.plus { color:var(--terminal-line); }
+.da-txt { font-size:14px; font-weight:700; color:var(--tx1); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero">
+    <div>
+      <h1>Step3 各種機能フローチャート</h1>
+      <p>直近追加された3機能（カラム名内階層区切りの分離・括弧書き注釈の分離・階層圧縮カラムの展開）の大まかな業務フローと、変換前後のテーブルサンプル</p>
+    </div>
+    <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
+      <a href="index.html" class="other-btn">📋 ドキュメント一覧</a>
+      <a href="step3_processing_order_flowchart.html" class="other-btn">処理順ページを見る →</a>
+    </div>
+  </div>
+  <nav class="nav"><a href="#colsplit" class="nav-lnk">1. カラム名内階層区切りの分離機能</a><a href="#parensplit" class="nav-lnk">2. 括弧書き注釈の分離機能</a><a href="#hierexpand" class="nav-lnk">3. 階層圧縮カラムの展開機能</a></nav>
+
+<section class="feature" id="colsplit">
+  <div class="feature-hd">
+    <span class="feature-num">1</span>
+    <div>
+      <h2>カラム名内階層区切りの分離機能</h2>
+      <p class="feature-desc">カラム名に階層区切り文字（"/"「・」等）が埋め込まれ、かつセル値も同じ区切り・個数で分割できる列を検出し、複数カラムに分離する（決定論的・LLM不使用）</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">変換前</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="">帳票プラン1 / 帳票プラン2</th><th class="">T/O比</th></tr></thead><tbody><tr><td>東京支店</td><td>フレッツ光 / おまかせLAN構築</td><td>12.5</td></tr><tr><td>大阪営業所</td><td>光コラボ / リモートアクセス</td><td>9.7</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">分離</span></div><div class="sample-block"><div class="sample-label">変換後</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="hl">帳票プラン1</th><th class="hl">帳票プラン2</th><th class="">T/O比</th></tr></thead><tbody><tr><td>東京支店</td><td>フレッツ光</td><td>おまかせLAN構築</td><td>12.5</td></tr><tr><td>大阪営業所</td><td>光コラボ</td><td>リモートアクセス</td><td>9.7</td></tr></tbody></table></div><div class="sample-note">T/O比はセル値が数値で区切りを含まないため分割されず維持</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 796" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">検出した表を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">カラム名が階層区切り文字</tspan><tspan x="280" dy="23">（"/"「・」等）で分割できるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま</tspan><tspan x="660" dy="22">次の処理へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<polygon class="sh-decision" points="280,354.0 450.0,432.0 280,510.0 110.0,432.0"/><text x="280" y="438.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">セル値も同じ区切り・個数で</tspan><tspan x="280" dy="23">十分な割合が分割できるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="432.0" x2="500.0" y2="432.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="416.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="394.0" width="320" height="76"/><text x="660" y="438.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">分割できないため</tspan><tspan x="660" dy="22">元の列のまま維持</tspan></text>
+<line class="fc-arrow" x1="280" y1="510" x2="280" y2="568" marker-end="url(#arrowhead)"/>
+<text x="312" y="539.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="568.0" width="320" height="76"/><text x="280" y="612.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">元の列位置で複数カラムに分離</tspan><tspan x="280" dy="22">（既定で適用、列ごとに復元可）</tspan></text>
+<line class="fc-arrow" x1="280" y1="644" x2="280" y2="702" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="702.0" width="340" height="64" rx="32.0"/><text x="280" y="740.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">変換後の表を次の処理へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="599" width="48" height="22" rx="11"/>
+<text x="692" y="616" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,641 678,652 654,663 630,652"/>
+<text x="692" y="658" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="683" width="48" height="22"/>
+<text x="692" y="700" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="parensplit">
+  <div class="feature-hd">
+    <span class="feature-num">2</span>
+    <div>
+      <h2>括弧書き注釈の分離機能</h2>
+      <p class="feature-desc">セル値末尾の括弧書き注釈（"東京(本社)"等）を検出し、注釈を別カラムに分離する（単位付き数値の注記は対象外・LLMが新カラム名を命名）</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">変換前</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="">人口</th></tr></thead><tbody><tr><td>東京(本社)</td><td>15歳以上人口(人)</td></tr><tr><td>大阪(支店)</td><td>労働力率(％)</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">分離</span></div><div class="sample-block"><div class="sample-label">変換後</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="hl">拠点区分</th><th class="">人口</th></tr></thead><tbody><tr><td>東京</td><td>本社</td><td>15歳以上人口(人)</td></tr><tr><td>大阪</td><td>支店</td><td>労働力率(％)</td></tr></tbody></table></div><div class="sample-note">「人口」列の(人)(％)は単位のため対象外（単位混在の分離に委ねる）。「拠点区分」はLLMが命名</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 796" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">検出した表を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">文字列セルの末尾に括弧書き</tspan><tspan x="280" dy="23">（"ラベル(注釈)"）があるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま</tspan><tspan x="660" dy="22">次の処理へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<polygon class="sh-decision" points="280,354.0 450.0,432.0 280,510.0 110.0,432.0"/><text x="280" y="438.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">注釈が単位・数字のみ・脚注</tspan><tspan x="280" dy="23">ではなく、種類が複数あるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="432.0" x2="500.0" y2="432.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="416.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="394.0" width="320" height="76"/><text x="660" y="438.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">単位・数字・脚注等のため</tspan><tspan x="660" dy="22">分離しない（他機能に委ねる）</tspan></text>
+<line class="fc-arrow" x1="280" y1="510" x2="280" y2="568" marker-end="url(#arrowhead)"/>
+<text x="312" y="539.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="568.0" width="320" height="76"/><text x="280" y="612.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">注釈を別カラムに分離し、</tspan><tspan x="280" dy="22">LLMが新カラム名を命名</tspan></text>
+<line class="fc-arrow" x1="280" y1="644" x2="280" y2="702" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="702.0" width="340" height="64" rx="32.0"/><text x="280" y="740.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">変換後の表を次の処理へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="599" width="48" height="22" rx="11"/>
+<text x="692" y="616" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,641 678,652 654,663 630,652"/>
+<text x="692" y="658" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="683" width="48" height="22"/>
+<text x="692" y="700" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="hierexpand">
+  <div class="feature-hd">
+    <span class="feature-num">3</span>
+    <div>
+      <h2>階層圧縮カラムの展開機能</h2>
+      <p class="feature-desc">階層カテゴリがインデントまたはセル内の階層区切り文字で1カラムに圧縮された表を検出し、レベルごとのカラムに展開する（LLMがレベル名を命名、失敗時は既定名「大分類/中分類/小分類」にフォールバック）。展開直後、子行群の合計と数値が一致するロールアップ行（親レベルの小計・合計）は本機能自身が検出・除去する</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-group-label first">①インデント方式</div><div class="sample-block"><div class="sample-label">変換前（先頭空白の段差で階層を表現）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">地域</th><th class="">売上</th></tr></thead><tbody><tr><td style="text-align:left;">東日本</td><td>1600</td></tr><tr><td style="text-align:left; padding-left:2em; color:var(--tx2);">神奈川事業部</td><td>1100</td></tr><tr><td style="text-align:left; padding-left:4em; color:var(--tx3);">横浜支店</td><td>700</td></tr><tr><td style="text-align:left; padding-left:4em; color:var(--tx3);">川崎支店</td><td>400</td></tr><tr><td style="text-align:left; padding-left:2em; color:var(--tx2);">千葉事業部</td><td>500</td></tr></tbody></table></div><div class="sample-note">先頭の空白の数（段差）が深いほど下位階層（東日本の下に神奈川事業部・千葉事業部、神奈川事業部の下に横浜支店・川崎支店）</div></div><div class="down-arrow">▼<span class="da-txt">展開</span></div><div class="sample-block"><div class="sample-label">変換後（レベルごとのカラムに展開）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="hl">地域</th><th class="hl">事業部</th><th class="hl">支店</th><th class="">売上</th></tr></thead><tbody><tr><td>東日本</td><td></td><td></td><td>1600</td></tr><tr><td>東日本</td><td>神奈川事業部</td><td></td><td>1100</td></tr><tr><td>東日本</td><td>神奈川事業部</td><td>横浜支店</td><td>700</td></tr><tr><td>東日本</td><td>神奈川事業部</td><td>川崎支店</td><td>400</td></tr><tr><td>東日本</td><td>千葉事業部</td><td></td><td>500</td></tr></tbody></table></div><div class="sample-note">列名「地域/事業部/支店」はLLMが各レベルの意味を判断して命名（命名に失敗した場合のみ既定名「大分類/中分類/小分類」にフォールバック）</div></div><div class="down-arrow">▼<span class="da-txt">ロールアップ行の除去</span></div><div class="sample-block"><div class="sample-label">最終形（本機能自身がロールアップ行を除去）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">地域</th><th class="">事業部</th><th class="">支店</th><th class="">売上</th></tr></thead><tbody><tr><td>東日本</td><td>神奈川事業部</td><td>横浜支店</td><td>700</td></tr><tr><td>東日本</td><td>神奈川事業部</td><td>川崎支店</td><td>400</td></tr><tr><td>東日本</td><td>千葉事業部</td><td></td><td>500</td></tr></tbody></table></div><div class="sample-note">東日本行・神奈川事業部行は、子行群の合計と数値が一致するロールアップ行と判定され、本機能自身（集計行の検出・削除・メタデータ保存機能とは別の専用ロジック）が展開直後に除去する。千葉事業部行は子行を持たないため除去されない</div></div>
+      <div class="sample-group-label">②区切り文字方式</div><div class="sample-block"><div class="sample-label">変換前（セル内の階層区切り文字）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">地域</th><th class="">売上</th></tr></thead><tbody><tr><td>東日本＞神奈川事業部＞横浜支店</td><td>700</td></tr><tr><td>東日本＞静岡事業部</td><td>400</td></tr><tr><td>東日本＞静岡事業部＞浜松支店</td><td>250</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">展開</span></div><div class="sample-block"><div class="sample-label">変換後（レベルごとのカラムに展開）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="hl">地域</th><th class="hl">事業部</th><th class="hl">支店</th><th class="">売上</th></tr></thead><tbody><tr><td>東日本</td><td>神奈川事業部</td><td>横浜支店</td><td>700</td></tr><tr><td>東日本</td><td>静岡事業部</td><td></td><td>400</td></tr><tr><td>東日本</td><td>静岡事業部</td><td>浜松支店</td><td>250</td></tr></tbody></table></div><div class="sample-note">非該当レベルは空文字で埋める（前方補完で誤って埋まらないようNoneにはしない）。列名「地域/事業部/支店」はLLMが命名</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 582" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">検出した表を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">インデントまたは階層区切り文字で</tspan><tspan x="280" dy="23">親子構造を持つ列があるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま</tspan><tspan x="660" dy="22">次の処理へ</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="354.0" width="320" height="76"/><text x="280" y="398.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">レベルごとのカラムに展開後、</tspan><tspan x="280" dy="22">ロールアップ行を自ら除去</tspan></text>
+<line class="fc-arrow" x1="280" y1="430" x2="280" y2="488" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="488.0" width="340" height="64" rx="32.0"/><text x="280" y="526.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">変換後の表を次の処理へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="385" width="48" height="22" rx="11"/>
+<text x="692" y="402" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,427 678,438 654,449 630,438"/>
+<text x="692" y="444" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="469" width="48" height="22"/>
+<text x="692" y="486" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+</div>
+</body>
+</html>

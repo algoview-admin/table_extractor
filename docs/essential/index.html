@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>業務フロー ドキュメント一覧</title>
+<style>
+:root {
+  --bg:#F6F7FB; --surface:#FFFFFF; --sur2:#F1F3F9;
+  --tx1:#101828; --tx2:#475467; --tx3:#98A2B3;
+  --bd:#E4E7EC; --bd2:#D0D5DD;
+  --terminal-fill:#D1E9FF; --terminal-line:#2E90FA;
+  --decision-fill:#D3F8DF; --decision-line:#12B76A;
+  --sh: 0 1px 3px rgba(16,24,40,.08), 0 6px 16px rgba(16,24,40,.06);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--tx1);
+  font-family:'Yu Gothic','Hiragino Sans',system-ui,sans-serif;
+  font-size:14px; line-height:1.6;
+}
+.page { max-width:1100px; margin:0 auto; padding:1.5rem 1.25rem 2.5rem; }
+.hero { margin-bottom:1.3rem; }
+.hero h1 { font-size:26px; margin:0 0 .25rem; color:var(--tx1); }
+.hero p { margin:0; color:var(--tx2); font-size:14px; }
+
+.card-grid {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:1rem;
+}
+.card {
+  display:block; background:var(--surface); border:1.5px solid var(--bd); border-radius:14px;
+  box-shadow:var(--sh); padding:1.2rem 1.3rem; text-decoration:none; color:inherit;
+  transition:border-color .13s, transform .13s;
+}
+.card:hover { border-color:var(--terminal-line); transform:translateY(-2px); }
+.card-eyebrow {
+  font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--terminal-line); margin-bottom:.4rem;
+}
+.card h2 { margin:0 0 .5rem; font-size:18px; color:var(--tx1); }
+.card p { margin:0; font-size:13.5px; color:var(--tx2); }
+.card-go { margin-top:.8rem; font-size:13px; font-weight:700; color:var(--terminal-line); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero">
+    <h1>業務フロー ドキュメント一覧</h1>
+    <p>テーブル整形（Step3）から複数テーブルの統合・選択（Step4〜6）までの業務フローをまとめたドキュメント一覧です。見たいフローを選択してください</p>
+  </div>
+  <div class="card-grid">
+    <a class="card" href="step3_additional_features_flowchart.html">
+      <div class="card-eyebrow">Step3・追加機能</div>
+      <h2>Step3 追加機能フローチャート</h2>
+      <p>直近追加された3機能（カラム名内階層区切りの分離・括弧書き注釈の分離・階層圧縮カラムの展開）に絞ったフロー</p>
+      <div class="card-go">開く →</div>
+    </a>
+    <a class="card" href="step3_processing_order_flowchart.html">
+      <div class="card-eyebrow">Step3・処理順</div>
+      <h2>Step3 処理順フローチャート</h2>
+      <p>テーブル整形（Step3）の全15機能を、実際の実行順に並べたフロー。行削除処理に共通で組み込まれた「階層整合性検証と原因判別機能」も付録として掲載</p>
+      <div class="card-go">開く →</div>
+    </a>
+    <a class="card" href="multi_table_integration_flowchart.html">
+      <div class="card-eyebrow">Step4〜6・統合と選択</div>
+      <h2>複数テーブルの統合と選択機能 フローチャート</h2>
+      <p>テーブル整形より後の工程（Step4 テーブル関係分析→Step5 新規テーブル案生成→Step6 テーブル選択）で行う、複数テーブルをまたいだ統合判断とユーザー選択の業務フロー</p>
+      <div class="card-go">開く →</div>
+    </a>
+  </div>
+</div>
+</body>
+</html>
