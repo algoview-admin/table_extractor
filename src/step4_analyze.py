@@ -94,10 +94,40 @@ def format_relation_facts(relations: List[Dict], tables: List[DetectedTable]) ->
     return "\n".join(lines)
 
 
+_SHEET_SUM_TOL = 0.03          # 合計一致の相対許容誤差（_match_ratio の tol と同値）
+_SHEET_MAX_CANDIDATES = 12     # 部分集合探索の対象シート数上限（組み合わせ爆発の安全弁）
+_SHEET_MIN_SOURCES = 2         # 集計元として必要な最小シート数
+
+
+def _find_sheet_sum_subset(
+    top_total: float, candidates: List[Tuple[str, float]]
+) -> Optional[Tuple[str, ...]]:
+    """candidates（シート名, 合計）の部分集合のうち、合計が top_total と
+    一致する（相対許容誤差 _SHEET_SUM_TOL 以内）ものを探す。
+
+    要素数が最小の一致を優先する（_drop_supersets と同じ「最小分解を優先する」
+    考え方）。合計サイズが大きくなりすぎないよう candidates は
+    _SHEET_MAX_CANDIDATES 件までに絞られている前提。
+    """
+    tolerance = max(1e-6, top_total * _SHEET_SUM_TOL)
+    for k in range(_SHEET_MIN_SOURCES, len(candidates) + 1):
+        for combo in combinations(candidates, k):
+            if abs(sum(v for _, v in combo) - top_total) <= tolerance:
+                return tuple(name for name, _ in combo)
+    return None
+
+
 def detect_sheet_levels(tables: List[DetectedTable]) -> List[Dict]:
     """
     同一スキーマのテーブルグループ内でsheet単位の数値合計を比較し、
     集計sheetの候補を特定する。
+
+    単に「他シートより値が大きい」だけでは集計シートと判定しない
+    （同一スキーマでも指標が異なれば数値のスケールが本質的に異なる。
+    例えば ID数シートは AP数シートより値が大きいだけで集計関係にはない）。
+    他シートの部分集合の合計が最大シートの合計と一致する場合のみ、集計
+    シートとして確定する（_find_relations_in_group と同じ「合計元の組み合わせ
+    を探索して検証する」考え方をシート単位に適用したもの）。
     """
     groups = _group_by_columns(tables)
 
@@ -120,15 +150,17 @@ def detect_sheet_levels(tables: List[DetectedTable]) -> List[Dict]:
 
         sorted_items = sorted(sheet_sums.items(), key=lambda x: x[1], reverse=True)
         top_sheet, top_total = sorted_items[0]
-        other_totals = [v for _, v in sorted_items[1:]]
-        avg_other = sum(other_totals) / len(other_totals)
+        candidates = sorted(sorted_items[1:], key=lambda x: x[1], reverse=True)
+        candidates = candidates[:_SHEET_MAX_CANDIDATES]
+        if len(candidates) < _SHEET_MIN_SOURCES:
+            continue
 
-        if avg_other > 0 and top_total >= avg_other * 1.5 and len(other_totals) >= 2:
-            aggregate_votes[top_sheet] = aggregate_votes.get(top_sheet, 0) + 1
-            if top_sheet not in smaller_peers:
-                smaller_peers[top_sheet] = set()
-            for other_sheet, _ in sorted_items[1:]:
-                smaller_peers[top_sheet].add(other_sheet)
+        source_sheets = _find_sheet_sum_subset(top_total, candidates)
+        if source_sheets is None:
+            continue
+
+        aggregate_votes[top_sheet] = aggregate_votes.get(top_sheet, 0) + 1
+        smaller_peers.setdefault(top_sheet, set()).update(source_sheets)
 
     return [
         {
