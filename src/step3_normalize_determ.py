@@ -936,6 +936,24 @@ def _agg_column_group_key(col_name: str) -> str:
     return s.split("_")[0] if "_" in s else ""
 
 
+def _to_float_or_none(v: Any) -> Optional[float]:
+    """v を float に変換できれば返し、できなければ None。
+
+    df.at[]/df.iloc[] は numpy.int64/float64 等をそのまま返し Python の
+    int/float に自動変換しないため（Series の for ループでは自動変換される
+    点と異なる）、numbers.Number で判定する。bool は数値として扱わない。
+    """
+    import numbers
+
+    import pandas as pd
+
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, numbers.Number) and not (isinstance(v, float) and pd.isna(v)):
+        return float(v)
+    return None
+
+
 def _is_column_sum_verified(
     df: Any,
     agg_col: str,
@@ -948,30 +966,16 @@ def _is_column_sum_verified(
     みなし False を返す（行の集計判定 _is_redundant_agg_row と同じ考え方で、
     内訳データが存在しない場合は集計列と誤認しない）。
     """
-    import numbers
-
-    import pandas as pd
-
     if len(sibling_cols) < 2:
         return False
-
-    def _num(v: Any) -> Optional[float]:
-        if isinstance(v, bool):
-            return None
-        # df.at[] は numpy.int64/float64 等をそのまま返し Python の int/float に
-        # 自動変換されないため（Series の for ループでは自動変換される点と異なる）、
-        # numbers.Number で判定する。
-        if isinstance(v, numbers.Number) and not (isinstance(v, float) and pd.isna(v)):
-            return float(v)
-        return None
 
     checked = 0
     matched = 0
     for idx in df.index:
-        agg_val = _num(df.at[idx, agg_col])
+        agg_val = _to_float_or_none(df.at[idx, agg_col])
         if agg_val is None:
             continue
-        sib_vals = [_num(df.at[idx, sc]) for sc in sibling_cols]
+        sib_vals = [_to_float_or_none(df.at[idx, sc]) for sc in sibling_cols]
         if any(v is None for v in sib_vals):
             continue
         checked += 1
@@ -984,6 +988,116 @@ def _is_column_sum_verified(
     return matched / checked >= match_ratio
 
 
+# ---------------------------------------------------------------------------
+# 階層整合性検証と原因判別機能
+# ---------------------------------------------------------------------------
+# 行を削除する処理（集計行の検出・削除・メタデータ保存機能、「うち」書き
+# 識別と別テーブル分離機能、階層圧縮カラムの展開のロールアップ行除去）が、
+# 削除を実行する直前に呼ぶ共通のサブ機能。集計値と、それに対応する明細行群の
+# 合計を突き合わせ、一致すれば PASS、不一致なら差分の方向から原因
+# （内訳あり／二重計上または単位ミス）を判別してメタデータとして記録する。
+# DataFrame には列を追加せず、判定結果は削除の可否には一切影響しない
+# （あくまで観測・記録のための処理）。
+
+_INTEGRITY_TOLERANCE_RATIO = 0.01  # 一致とみなす許容誤差（値の1%。_is_column_sum_verified・
+                                   # find_hierarchy_rollup_rows と同じ考え方）
+_INTEGRITY_CAUSE_SHORTFALL = "内訳あり（未表示項目）"
+_INTEGRITY_CAUSE_EXCESS = "二重計上または単位ミス"
+
+
+def verify_hierarchy_integrity(
+    df: Any, checks: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """集計値と明細行群の合計を突き合わせ、不整合があれば原因を判別する。
+
+    checks の各要素は次のいずれかの方法で明細行群を指定する:
+      - {"context": {ラベル列名: 値, ...}} — df 全体からこの条件（AND）に
+        一致する行を明細行群とみなす。集計行の除去（remove_aggregates）で
+        使う。集計行自身が持つラベル列の値（トリガー列）は含めない
+        （含めると明細行に一致しなくなるため。agg_removed_row_metadata の
+        docstring に記載の再現検証手順と同じ）。
+      - {"detail_indices": [df インデックス, ...]} — 明細行を直接指定する。
+        「うち」書き分離・階層圧縮カラムの展開で使う（検出処理が親子関係を
+        解決済みのため、位置指定の方が曖昧さがない）。
+    共通して次のキーを持つ:
+      "sum_column": 数値列名
+      "reported_value": 集計値（集計行が持っていた値）
+      "exclude_indices": Optional[明細行群から除外する df インデックスの集合]
+          （集計行自身や他の集計行が誤って明細に混入するのを防ぐ）
+      "context": （detail_indices 使用時も）結果に表示するラベル情報として
+          任意で付けられる
+
+    Returns: 各 check に対応する結果 dict のリスト。要素は
+        {<context のキー>: 値, ..., "reported", "calculated", "status"} に、
+        不一致の場合のみ "diff"（calculated - reported）と "cause" を追加。
+        明細行が見つからない・数値化できない等、検証不能な check は結果に
+        含めない（誤った FAIL を出さないため）。
+    """
+    import pandas as pd
+
+    if df is None or df.empty or not checks:
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for check in checks:
+        sum_column = check.get("sum_column")
+        if sum_column not in df.columns:
+            continue
+        reported = _to_float_or_none(check.get("reported_value"))
+        if reported is None:
+            continue
+        exclude = set(check.get("exclude_indices") or ())
+        context = check.get("context") or {}
+
+        detail_indices = check.get("detail_indices")
+        if detail_indices is not None:
+            detail_indices = [
+                i for i in detail_indices if i not in exclude and i in df.index
+            ]
+        else:
+            if any(col not in df.columns for col in context):
+                continue
+            mask = pd.Series(True, index=df.index)
+            for col, val in context.items():
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    mask &= df[col].isna()
+                else:
+                    mask &= df[col] == val
+            detail_indices = [i for i in df.index[mask] if i not in exclude]
+
+        if not detail_indices:
+            continue  # 明細行が見つからない → 検証不能
+
+        calculated = 0.0
+        counted = 0
+        for idx in detail_indices:
+            v = _to_float_or_none(df.at[idx, sum_column])
+            if v is None:
+                continue
+            calculated += v
+            counted += 1
+        if counted == 0:
+            continue  # 明細側に数値が一つもない → 検証不能
+
+        record: Dict[str, Any] = {k: _to_jsonable(v) for k, v in context.items()}
+        record["reported"] = _to_jsonable(check["reported_value"])
+        record["calculated"] = _to_jsonable(calculated)
+
+        tolerance = max(1e-6, abs(reported) * _INTEGRITY_TOLERANCE_RATIO)
+        diff = calculated - reported
+        if abs(diff) <= tolerance:
+            record["status"] = "PASS"
+        else:
+            record["status"] = "FAIL"
+            record["diff"] = _to_jsonable(diff)
+            record["cause"] = (
+                _INTEGRITY_CAUSE_SHORTFALL if diff < 0 else _INTEGRITY_CAUSE_EXCESS
+            )
+        results.append(record)
+
+    return results
+
+
 def remove_aggregates(
     df: Any,  # pd.DataFrame
     protected_indices: Optional[Any] = None,
@@ -992,6 +1106,7 @@ def remove_aggregates(
     List[Dict[str, Any]],
     List[str],
     List[int],
+    List[Dict[str, Any]],
     List[Dict[str, Any]],
     List[Dict[str, Any]],
 ]:
@@ -1033,6 +1148,9 @@ def remove_aggregates(
                                      "reported_value": 除去された値}
                                     列ごと削除されるとその列の値が完全に失われるため、
                                     後から参照できるよう全行分を記録する。
+        agg_integrity_check      — 削除実行前に集計値と明細行群の合計を突き合わせた
+                                    階層整合性検証の結果（verify_hierarchy_integrity
+                                    参照）。判定結果は削除の可否には影響しない。
     """
     import pandas as pd
 
@@ -1261,7 +1379,22 @@ def remove_aggregates(
 
     # ── 変更がなければ None を返してスキップを示す ────────────────
     if not removed_row_indices and not removed_cols:
-        return df, [], [], [], [], []
+        return df, [], [], [], [], [], []
+
+    # ── 削除実行前に、集計値と明細行群の合計を突き合わせて検証する ────
+    # 明細行の絞り込み条件は agg_removed_row_metadata の context からトリガー
+    # 列（key）自身の値を除いたもの（docstring に記載の再現検証手順と同じ）。
+    # 削除される全ての集計行（removed_row_indices）は明細から除外する。
+    integrity_checks = [
+        {
+            "context": {k: v for k, v in m["context"].items() if k != m["key"]},
+            "sum_column": m["sum_column"],
+            "reported_value": m["reported_value"],
+            "exclude_indices": set(removed_row_indices),
+        }
+        for m in agg_removed_row_metadata
+    ]
+    agg_integrity_check = verify_hierarchy_integrity(df, integrity_checks)
 
     cleaned = df.drop(index=removed_row_indices, columns=removed_cols, errors="ignore")
     cleaned = cleaned.reset_index(drop=True)
@@ -1273,6 +1406,7 @@ def remove_aggregates(
         removed_row_indices,
         agg_removed_row_metadata,
         agg_removed_col_metadata,
+        agg_integrity_check,
     )
 
 
@@ -1444,7 +1578,11 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
                        "rows"（{idx: (parent_value, child_label)}）, "match_count",
                        "parent_indices"（親として参照された df 上のインデックス集合。
                        remove_aggregates に保護対象として渡し、内訳テーブルが
-                       参照する親行が本体側から消えないようにするために使う）}
+                       参照する親行が本体側から消えないようにするために使う）,
+                       "child_parent_idx"（{子行のインデックス: 解決された親行の
+                       インデックス}。rows と同じキー集合を持つ。階層整合性検証
+                       （apply_uchi_split）が、親ごとに子行群をまとめて合計を
+                       突き合わせるために使う）}
       検出されなかった場合: None
     """
     import pandas as pd
@@ -1505,6 +1643,7 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
 
     resolved: Dict[Any, Tuple[Any, str]] = {}
     parent_indices: set = set()
+    child_parent_idx: Dict[Any, Any] = {}
     for idx, child_label in best_matches.items():
         pos = pos_of[idx]
         parent_value = None
@@ -1540,6 +1679,7 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
             resolved[idx] = (parent_value, child_label)
             if parent_idx is not None:
                 parent_indices.add(parent_idx)
+                child_parent_idx[idx] = parent_idx
 
     if not resolved:
         return None
@@ -1551,34 +1691,72 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
         "rows": resolved,
         "match_count": len(resolved),
         "parent_indices": parent_indices,
+        "child_parent_idx": child_parent_idx,
     }
 
 
-def apply_uchi_split(df: Any, info: Dict[str, Any]) -> Tuple[Any, Any, set]:
+def apply_uchi_split(
+    df: Any, info: Dict[str, Any]
+) -> Tuple[Any, Any, set, List[Dict[str, Any]]]:
     """detect_uchi_breakdown の検出結果を使って、うち内訳行をメインテーブルから
     除去し、親子関係を保った内訳テーブルを生成する。
 
-    Returns: (main_df, breakdown_df, protected_indices)
+    Returns: (main_df, breakdown_df, protected_indices, integrity_check)
       protected_indices — main_df（reset_index 後）上で、内訳テーブルが親として
       参照している行の新インデックス集合。remove_aggregates にそのまま渡すと、
       これらの行が「冗長な合計行」として誤って削除されるのを防げる。
+      integrity_check — 除去実行前に、親行の値と子（うち）行群の合計を
+      突き合わせた階層整合性検証の結果（verify_hierarchy_integrity 参照）。
+      判定結果は除去の可否には影響しない。
     """
     import pandas as pd
+    import pandas.api.types as _pat
 
     label_col = info["label_col"]
     parent_col_name = info["parent_col_name"]
     child_col_name = info["child_col_name"]
     rows: Dict[Any, Tuple[Any, str]] = info["rows"]
     parent_indices = info.get("parent_indices", set())
+    child_parent_idx: Dict[Any, Any] = info.get("child_parent_idx", {})
 
     dropped = set(rows.keys())
     remaining_index_order = [i for i in df.index if i not in dropped]
     new_pos = {old: new for new, old in enumerate(remaining_index_order)}
     protected_indices = {new_pos[p] for p in parent_indices if p in new_pos}
 
-    main_df = df.drop(index=list(dropped)).reset_index(drop=True)
-
     other_cols = [c for c in df.columns if c != label_col]
+
+    # ── 除去実行前に、親行の値と子（うち）行群の合計を突き合わせて検証する ──
+    # 親ごとに子行をまとめ、数値列ごとに1件の検証を行う（remove_aggregates と
+    # 同じ「除去行 × 数値列ごとに1件」の粒度）。context にはラベル列（数値
+    # 以外の列）のうち親行が持つ非欠損値を使う。
+    parent_to_children: Dict[Any, List[Any]] = {}
+    for child_idx, parent_idx in child_parent_idx.items():
+        parent_to_children.setdefault(parent_idx, []).append(child_idx)
+
+    numeric_cols = [c for c in other_cols if _pat.is_numeric_dtype(df[c])]
+    context_cols = [c for c in other_cols if c not in numeric_cols]
+
+    def _is_null_scalar(v: Any) -> bool:
+        return v is None or (isinstance(v, float) and pd.isna(v))
+
+    integrity_checks = [
+        {
+            "context": {
+                c: df.at[parent_idx, c]
+                for c in context_cols
+                if not _is_null_scalar(df.at[parent_idx, c])
+            },
+            "detail_indices": children,
+            "sum_column": col,
+            "reported_value": df.at[parent_idx, col],
+        }
+        for parent_idx, children in parent_to_children.items()
+        for col in numeric_cols
+    ]
+    integrity_check = verify_hierarchy_integrity(df, integrity_checks)
+
+    main_df = df.drop(index=list(dropped)).reset_index(drop=True)
     breakdown_rows = []
     for idx, (parent_value, child_label) in rows.items():
         row = df.loc[idx]
@@ -1597,7 +1775,7 @@ def apply_uchi_split(df: Any, info: Dict[str, Any]) -> Tuple[Any, Any, set]:
     )
     breakdown_df = breakdown_df[ordered_cols].reset_index(drop=True)
 
-    return main_df, breakdown_df, protected_indices
+    return main_df, breakdown_df, protected_indices, integrity_check
 
 
 # ---------------------------------------------------------------------------
@@ -2266,6 +2444,7 @@ def _apply_agg_and_unit_split(
         agg_row_positions,
         agg_row_meta,
         agg_col_meta,
+        agg_integrity,
     ) = remove_aggregates(df, protected_indices=protected_indices)
     t.pre_agg_df = df if (agg_rows or agg_cols) else None
     t.post_agg_df = cleaned_df if (agg_rows or agg_cols) else None
@@ -2274,6 +2453,7 @@ def _apply_agg_and_unit_split(
     t.agg_rows_removed_positions = agg_row_positions
     t.agg_removed_row_metadata = agg_row_meta
     t.agg_removed_col_metadata = agg_col_meta
+    t.agg_integrity_check = agg_integrity
 
     unit_split = detect_and_split_units(cleaned_df)
     if unit_split:
@@ -2787,7 +2967,7 @@ _HIER_ROLLUP_MIN_MATCH_RATIO = 0.8       # 検証できた数値列のうち一�
 
 def find_hierarchy_rollup_rows(
     df: Any, detection: Dict[str, Any]
-) -> Tuple[List[Any], List[Dict[str, Any]]]:
+) -> Tuple[List[Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """階層展開結果のうち、1段深い子行群の合計と数値が一致する行（ロールアップ行）を検出する。
 
     detection["rows"] は df と同じ行順で各行の階層レベル値を保持している
@@ -2803,12 +2983,14 @@ def find_hierarchy_rollup_rows(
     子の合計と数値が一致しない行（内訳データの一部欠落等）は、情報を失わない
     よう削除対象にしない。
 
-    Returns: (削除対象の df インデックスラベルのリスト, 監査用メタデータのリスト)
+    子を持つ全ての候補行について、削除の可否とは独立に
+    verify_hierarchy_integrity で数値列ごとの検証結果（PASS/FAIL・原因）を
+    記録する（削除されない行も含む。不一致の原因を確認できるようにするため）。
+
+    Returns: (削除対象の df インデックスラベルのリスト, 監査用メタデータのリスト,
+        階層整合性検証の結果リスト)
         メタデータ: {level_values, child_count, matched_columns}
     """
-    import numbers
-
-    import pandas as pd
     import pandas.api.types as _pat
 
     rows = detection["rows"]
@@ -2818,7 +3000,7 @@ def find_hierarchy_rollup_rows(
 
     numeric_cols = [c for c in df.columns if _pat.is_numeric_dtype(df[c])]
     if not numeric_cols:
-        return [], []
+        return [], [], []
 
     def _own_depth(row_vals: List[str]) -> int:
         for d in range(depth - 1, -1, -1):
@@ -2838,18 +3020,9 @@ def find_hierarchy_rollup_rows(
         key = tuple(row_vals[:d_r])
         children_index.setdefault(key, []).append(pos)
 
-    def _num(v: Any) -> Optional[float]:
-        # df.iloc[]/df.at[] は numpy.int64/float64 等をそのまま返し Python の
-        # int/float に自動変換しないため（Series の for ループとは異なる）、
-        # numbers.Number で判定する（_is_column_sum_verified と同じ理由）。
-        if isinstance(v, bool):
-            return None
-        if isinstance(v, numbers.Number) and not (isinstance(v, float) and pd.isna(v)):
-            return float(v)
-        return None
-
     to_remove: List[Any] = []
     metadata: List[Dict[str, Any]] = []
+    integrity_checks: List[Dict[str, Any]] = []
 
     for pos, row_vals in enumerate(rows):
         d = _own_depth(row_vals)
@@ -2861,14 +3034,26 @@ def find_hierarchy_rollup_rows(
         if not child_positions:
             continue  # 子が存在しない = 実質的な末端。削除しない
 
+        level_values = {n: v for n, v in zip(level_names, row_vals) if v}
+        detail_indices = [index_list[cp] for cp in child_positions]
+        for col in numeric_cols:
+            integrity_checks.append(
+                {
+                    "context": level_values,
+                    "detail_indices": detail_indices,
+                    "sum_column": col,
+                    "reported_value": df.iloc[pos][col],
+                }
+            )
+
         checked = 0
         matched = 0
         matched_cols: List[str] = []
         for col in numeric_cols:
-            parent_val = _num(df.iloc[pos][col])
+            parent_val = _to_float_or_none(df.iloc[pos][col])
             if parent_val is None:
                 continue
-            child_vals = [_num(df.iloc[cp][col]) for cp in child_positions]
+            child_vals = [_to_float_or_none(df.iloc[cp][col]) for cp in child_positions]
             if any(v is None for v in child_vals):
                 continue
             checked += 1
@@ -2883,13 +3068,14 @@ def find_hierarchy_rollup_rows(
         to_remove.append(index_list[pos])
         metadata.append(
             {
-                "level_values": {n: v for n, v in zip(level_names, row_vals) if v},
+                "level_values": level_values,
                 "child_count": len(child_positions),
                 "matched_columns": matched_cols,
             }
         )
 
-    return to_remove, metadata
+    integrity_check = verify_hierarchy_integrity(df, integrity_checks)
+    return to_remove, metadata, integrity_check
 
 
 def _default_level_names(depth: int, source_col: str) -> List[str]:
@@ -2969,8 +3155,11 @@ def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str
     t.pre_hier_expand_df = df
 
     expanded = expand_hierarchy_column(df, detection, level_names)
-    rollup_indices, rollup_metadata = find_hierarchy_rollup_rows(expanded, detection)
+    rollup_indices, rollup_metadata, hier_integrity = find_hierarchy_rollup_rows(
+        expanded, detection
+    )
     t.hier_rollup_removed_metadata = rollup_metadata
+    t.hier_integrity_check = hier_integrity
     if rollup_indices:
         expanded = expanded.drop(index=rollup_indices).reset_index(drop=True)
     t.post_hier_expand_df = expanded
@@ -3494,9 +3683,12 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         uchi_protected_indices: set = set()
         if uchi_info:
             t.pre_uchi_split_df = df
-            df, breakdown_df, uchi_protected_indices = apply_uchi_split(df, uchi_info)
+            df, breakdown_df, uchi_protected_indices, uchi_integrity = apply_uchi_split(
+                df, uchi_info
+            )
             t.uchi_split_info = uchi_info
             t.uchi_breakdown_df = breakdown_df
+            t.uchi_integrity_check = uchi_integrity
 
             child_id = f"{t.table_id}_uchi_breakdown"
             child_title = f"{t.title or t.table_id} 内訳テーブル"

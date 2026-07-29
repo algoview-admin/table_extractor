@@ -1,6 +1,6 @@
 import html as _html
 import json
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
 import streamlit as st
@@ -1176,6 +1176,12 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
             unsafe_allow_html=True,
         )
 
+    integrity_html = _integrity_check_details_html(
+        getattr(t, "hier_integrity_check", None) or []
+    )
+    if integrity_html:
+        st.markdown(_MHD_CSS + integrity_html, unsafe_allow_html=True)
+
 
 def _render_fill_cols_body(t: "DetectedTable") -> None:
     """グルーピング列 ffill の詳細（Streamlit ウィジェット版）。"""
@@ -1740,6 +1746,12 @@ def _render_uchi_split_body(t: "DetectedTable") -> None:
         unsafe_allow_html=True,
     )
 
+    integrity_html = _integrity_check_details_html(
+        getattr(t, "uchi_integrity_check", None) or []
+    )
+    if integrity_html:
+        st.markdown(_MHD_CSS + integrity_html, unsafe_allow_html=True)
+
 
 def _render_uchi_split_body_html(t: "DetectedTable") -> str:
     """「うち」書きの内訳を別テーブルへ分離した詳細（HTML 文字列版）。"""
@@ -1788,7 +1800,10 @@ def _render_uchi_split_body_html(t: "DetectedTable") -> str:
     breakdown_block = (
         f"<p style='margin:12px 0 6px;font-weight:600'>生成された内訳テーブル（{len(breakdown)} 行）</p>{breakdown_html}"
     )
-    return meta_html + grid_html + breakdown_block
+    integrity_html = _integrity_check_details_html(
+        getattr(t, "uchi_integrity_check", None) or []
+    )
+    return meta_html + grid_html + breakdown_block + integrity_html
 
 
 def _render_unit_split_body(t: "DetectedTable") -> None:
@@ -1900,6 +1915,48 @@ def _render_unit_split_body_html(t: "DetectedTable") -> str:
 
 
 _AGG_META_PREVIEW_N = 3  # 画面表示は重量化を避けるため代表件数のみに絞る（全件はエクスポート時に出力）
+
+
+def _integrity_check_details_html(records: List[Dict[str, Any]], label: str = "階層整合性検証") -> str:
+    """階層整合性検証と原因判別機能の結果を折りたたみ HTML として返す。空なら空文字列。
+
+    集計行の検出・削除・メタデータ保存機能、「うち」書き識別と別テーブル分離
+    機能、階層圧縮カラムの展開のいずれも、削除を実行する直前に
+    verify_hierarchy_integrity（集計値と明細行群の合計の突き合わせ）を呼んで
+    おり、その結果を保持しているだけで削除の可否には一切影響しない
+    （あくまで観測・記録のための処理）。
+
+    st.expander は入れ子にできないため（呼び出し元が既に expander 内に
+    いる）、_agg_meta_details_html と同じく <details> ベースの HTML を
+    ウィジェット・HTML 文字列の両方の描画箇所で共通利用する。既定で閉じた
+    状態で表示する。"""
+    if not records:
+        return ""
+
+    n_total = len(records)
+    n_fail = sum(1 for r in records if r.get("status") == "FAIL")
+
+    preview_json = json.dumps(
+        records[:_AGG_META_PREVIEW_N], ensure_ascii=False, indent=2, default=str
+    )
+    note = (
+        f"<p style='font-size:0.78em;opacity:0.7;margin:0 0 0.4em'>"
+        f"代表{_AGG_META_PREVIEW_N}件のプレビューです（{n_total} 件中）。"
+        f"全件はエクスポート時に JSON として出力されます。</p>"
+    )
+    body = (
+        note
+        + f"<pre style='white-space:pre-wrap;font-size:0.78em;overflow-x:auto;margin:0'>"
+        + f"{_html.escape(preview_json)}</pre>"
+    )
+
+    return _make_details_html(
+        f"🔍 メタデータ出力: {label}（{n_total} 件 / 不整合 {n_fail} 件）",
+        body,
+        open=False,
+        level=3,
+    )
+
 
 
 def _agg_meta_details_html(t: "DetectedTable") -> str:
@@ -2028,6 +2085,12 @@ def _render_agg_removal_body(t: "DetectedTable") -> None:
     if meta_details_html:
         st.markdown(_MHD_CSS + meta_details_html, unsafe_allow_html=True)
 
+    integrity_html = _integrity_check_details_html(
+        getattr(t, "agg_integrity_check", None) or []
+    )
+    if integrity_html:
+        st.markdown(_MHD_CSS + integrity_html, unsafe_allow_html=True)
+
     # before / after プレビュー（代表テーブルは全件スクロール）
     st.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
     removed_positions = set(getattr(t, "agg_rows_removed_positions", []))
@@ -2129,6 +2192,9 @@ def _render_agg_removal_body_html(t: "DetectedTable") -> str:
         )
 
     meta_html = _agg_meta_details_html(t)
+    integrity_html = _integrity_check_details_html(
+        getattr(t, "agg_integrity_check", None) or []
+    )
 
     PREVIEW = 10
     removed_positions = set(getattr(t, "agg_rows_removed_positions", []))
@@ -2157,7 +2223,7 @@ def _render_agg_removal_body_html(t: "DetectedTable") -> str:
 
     return (
         f"<p style='font-size:0.82em;opacity:0.7;margin:0 0 0.4em'>{_html.escape(caption)}</p>"
-        f"{cols_html}{rows_html_block}{meta_html}{preview_html}"
+        f"{cols_html}{rows_html_block}{meta_html}{integrity_html}{preview_html}"
     )
 
 

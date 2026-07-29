@@ -32,6 +32,7 @@ class DetectedTable:
     agg_rows_removed_positions: List[int] = field(default_factory=list) # 除去した行の元 DataFrame 上の整数インデックス
     agg_removed_row_metadata: List[Dict[str, Any]] = field(default_factory=list)  # 除去行の監査用メタデータ [{key, value, context, sum_column, reported_value}, ...]
     agg_removed_col_metadata: List[Dict[str, Any]] = field(default_factory=list)  # 除去列の監査用メタデータ [{removed_column, context, reported_value}, ...]
+    agg_integrity_check: List[Dict[str, Any]] = field(default_factory=list)  # 集計行の除去前に行った階層整合性検証の結果 [{<ラベル列>: 値, ..., reported, calculated, status, diff?, cause?}]
     filled_cols: List[str] = field(default_factory=list)                # ffill を適用したグルーピング列名
     pre_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 前 DataFrame（ffill 適用時のみ）
     post_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 直後（後続ステップ適用前）の DataFrame スナップショット
@@ -57,6 +58,7 @@ class DetectedTable:
     pre_uchi_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # うち分離前 DataFrame（内訳検出時のみ）
     uchi_split_info: Optional[Dict[str, Any]] = field(default=None)  # うち分離情報 {label_col, parent_col_name, child_col_name, rows, match_count}
     uchi_breakdown_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 生成された内訳テーブル DataFrame（親子列＋値列）
+    uchi_integrity_check: List[Dict[str, Any]] = field(default_factory=list)  # 「うち」書き分離前に行った階層整合性検証の結果（agg_integrity_check と同形式）
     is_step3_derived: bool = False  # Step3整形処理中に新規生成されたテーブルか（Step2の検出結果表示から除外するためのフラグ）
     raw_header_rows: Optional[List[List[Any]]] = field(default=None, repr=False)  # 多段ヘッダーの検出と解決機能（Step3）が列名統合に使う生ヘッダー行（結合前、2行以上の場合のみ。df は暫定的に先頭行のみの列名）
     raw_header_roles: Optional[List[str]] = field(default=None)  # raw_header_rows の各行の役割（"name"/"unit"）。単純統合のペアリングと、unit行を軸候補と誤認しないための判定の両方に使う
@@ -74,6 +76,7 @@ class DetectedTable:
     pre_hier_expand_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 階層展開前 DataFrame（展開適用時のみ）
     post_hier_expand_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 階層展開＋ロールアップ行除去の直後（後続ステップ適用前）の DataFrame スナップショット
     hier_rollup_removed_metadata: List[Dict[str, Any]] = field(default_factory=list)  # 階層圧縮カラムの展開時に除去したロールアップ行（子行群の合計と数値が一致する集計行）の監査用メタデータ [{level_values, child_count, matched_columns}]
+    hier_integrity_check: List[Dict[str, Any]] = field(default_factory=list)  # 階層圧縮カラムの展開でロールアップ行を除去する前に行った階層整合性検証の結果（削除されない行も含む。agg_integrity_check と同形式）
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:
