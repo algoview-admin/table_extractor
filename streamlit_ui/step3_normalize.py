@@ -1917,6 +1917,23 @@ def _render_unit_split_body_html(t: "DetectedTable") -> str:
 _AGG_META_PREVIEW_N = 3  # 画面表示は重量化を避けるため代表件数のみに絞る（全件はエクスポート時に出力）
 
 
+def _json_preview_html(json_str: str) -> str:
+    """JSON文字列を、改行・インデントが確実に保持されるHTMLに変換する。
+
+    <pre style='white-space:pre-wrap'> ＋ 生の "\\n" だけに頼ると、
+    st.markdown(unsafe_allow_html=True) がテキストを markdown として処理する
+    過程で改行・連続スペースが潰れてしまうことがある。<br> と &nbsp; に
+    明示的に変換しておけば、markdown処理を経ても改行・インデントが失われない。
+    """
+    escaped = _html.escape(json_str)
+    html_lines = []
+    for line in escaped.split("\n"):
+        stripped = line.lstrip(" ")
+        n_indent = len(line) - len(stripped)
+        html_lines.append("&nbsp;" * n_indent + stripped)
+    return "<br>".join(html_lines)
+
+
 def _integrity_check_details_html(records: List[Dict[str, Any]], label: str = "階層整合性検証") -> str:
     """階層整合性検証と原因判別機能の結果を折りたたみ HTML として返す。空なら空文字列。
 
@@ -1946,8 +1963,8 @@ def _integrity_check_details_html(records: List[Dict[str, Any]], label: str = "�
     )
     body = (
         note
-        + f"<pre style='white-space:pre-wrap;font-size:0.78em;overflow-x:auto;margin:0'>"
-        + f"{_html.escape(preview_json)}</pre>"
+        + f"<div style='font-family:monospace;font-size:0.78em;overflow-x:auto'>"
+        + f"{_json_preview_html(preview_json)}</div>"
     )
 
     return _make_details_html(
@@ -1991,8 +2008,8 @@ def _agg_meta_details_html(t: "DetectedTable") -> str:
     )
     body = (
         note
-        + f"<pre style='white-space:pre-wrap;font-size:0.78em;overflow-x:auto;margin:0'>"
-        + f"{_html.escape(preview_json)}</pre>"
+        + f"<div style='font-family:monospace;font-size:0.78em;overflow-x:auto'>"
+        + f"{_json_preview_html(preview_json)}</div>"
     )
 
     n_total = n_row + n_col
