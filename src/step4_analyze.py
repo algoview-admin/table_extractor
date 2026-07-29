@@ -1462,6 +1462,51 @@ def _analyze_chunked(
     return _merge_raws(batch_raws, phase2_raw, tables, auto_recs=auto_recs)
 
 
+def _dedupe_sheet_prefix(sheet_name: str, dn: str) -> str:
+    """AI が生成した表示名 dn に、シート名 sheet_name の意味が既に含まれて
+    いる場合は、その分を前置しない（冗長な連結を避ける）。
+
+    display_name には常にシート識別情報を含めたいが（AI がサマリーテーブル
+    のシート名を省略することがあるため）、単純な部分文字列一致だけでは
+    「支店別（プラン数）」と「プラン数販売実績（エリア別）」のような、
+    語彙は違うが意味が重複するケースを検出できず、両方をそのまま連結した
+    冗長な名前になってしまう。
+
+    シート名を区切り文字（括弧・アンダースコア・ハイフン・中黒・スラッシュ）
+    でトークン分割し、各トークンが dn に既に表現されているかを判定する:
+      - トークンが dn にそのまま部分文字列として含まれる場合
+      - トークンが「〜別」で終わる区分軸を表す語で、dn 側にも「〜別」で
+        終わる語が含まれる場合（"支店別" と "エリア別" は語彙が違っても
+        区分軸としての役割が同じとみなす）
+    全トークンが表現済みなら dn をそのまま返す。一部のみ表現済みなら、
+    表現されていないトークンだけを前置する。重複が一切なければ、従来通り
+    シート名全体を前置する（disjoint な場合の区別用セーフティネットは維持）。
+    """
+    import re as _re
+
+    split_re = _re.compile(r"[（）()_\-－・/]+")
+
+    tokens = [tok.strip() for tok in split_re.split(sheet_name) if tok.strip()]
+    if not tokens:
+        return dn if sheet_name in dn else f"{sheet_name} {dn}"
+
+    dn_has_axis_word = any(
+        tok.strip().endswith("別") for tok in split_re.split(dn) if tok.strip()
+    )
+
+    residual = [
+        tok
+        for tok in tokens
+        if tok not in dn and not (tok.endswith("別") and dn_has_axis_word)
+    ]
+
+    if not residual:
+        return dn  # 全トークンが意味として既に表現済み → 前置しない
+    if len(residual) == len(tokens):
+        return f"{sheet_name} {dn}"  # 重複が一切ない → 従来通りシート名全体を前置
+    return f"{' '.join(residual)} {dn}"  # 一部のみ重複 → 未表現の分だけ前置
+
+
 def _parse_response(
     raw: Dict[str, Any], tables: List[DetectedTable]
 ) -> AIAnalysisResult:
@@ -1482,13 +1527,15 @@ def _parse_response(
         tid = ta.get("table_id", "")
         if tid not in valid_ids:
             continue
-        # display_name に常にシート名が含まれるようにする。
+        # display_name に常にシート識別情報が含まれるようにする。
         # AI がサマリーテーブルのシート名を省略することがあるため、
         # UI が異なるシートのテーブルを一目で区別できるようここで補完する。
+        # ただし単純な部分文字列一致ではなく、意味の重複を考慮した
+        # _dedupe_sheet_prefix で判定し、冗長な連結を避ける。
         dn = ta.get("display_name") or tid
         dt = id_to_table.get(tid)
-        if dt and dt.sheet_name and dt.sheet_name not in dn:
-            dn = f"{dt.sheet_name} {dn}"
+        if dt and dt.sheet_name:
+            dn = _dedupe_sheet_prefix(dt.sheet_name, dn)
         table_analyses.append(
             TableAnalysisResult(
                 table_id=tid,
