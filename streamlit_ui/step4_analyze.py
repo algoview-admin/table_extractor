@@ -277,8 +277,14 @@ def _detect_redundant_axes(
 ) -> dict:
     """統合で追加する新カラムのうち、既存データから導出可能な冗長な軸を検出する。
 
-    2通りの根拠のいずれかで冗長と判定する（テーブルごとに片方が成立すればよい
+    3通りの根拠のいずれかで冗長と判定する（テーブルごとに片方が成立すればよい
     わけではなく、いずれか一方の根拠が全テーブルに一貫して成立する場合のみ）:
+      0. 新カラム名そのものが、全テーブルに既に実在するカラム名と完全一致する
+         （例: 新カラム名として「オプション種別」が提案されたが、各テーブルに
+         既に同名の列が存在する）。この場合、値の照合を待たずに自明に冗長と
+         判定する。同名で新規カラムを挿入しようとすると
+         "cannot insert X, already exists" で失敗するため、必ず先に検出する
+         必要がある。
       1. 新カラム値に含まれる4桁年（YYYY）が、既存カラムの値に部分一致で
          含まれている（例: 新カラム値 "2024年度" と既存カラム値 "2024"）。
       2. 新カラム値そのものが、既存カラムの値と完全一致する（例: 新カラム
@@ -310,8 +316,29 @@ def _detect_redundant_axes(
     def _cell_matches(cell: str, token: str, exact: bool) -> bool:
         return cell == token if exact else token in cell
 
+    def _mutually_distinguishable(val_sets: list) -> bool:
+        for i in range(len(val_sets)):
+            for j in range(i + 1, len(val_sets)):
+                if val_sets[i] & val_sets[j]:
+                    return False
+        return True
+
     redundant: dict = {}
     for ci, col_name in enumerate(col_names):
+        # ── 根拠0（最優先）: 新カラム名そのものが全テーブルに既に実在する ──
+        # 同名の列へ df.insert() すると "cannot insert X, already exists" で
+        # 必ず失敗するため、区別可能性の判定を待たず無条件で冗長とみなし
+        # 挿入をスキップする（区別可能性が低くても、既存列の値をそのまま
+        # 使う方がクラッシュより望ましい）。
+        if len(ir.table_ids) >= 2 and all(
+            (t := tables_dict.get(tid)) is not None
+            and t.effective_df is not None
+            and str(col_name) in t.effective_df.columns
+            for tid in ir.table_ids
+        ):
+            redundant[ci] = {str(col_name)}
+            continue
+
         # まず年の部分一致（従来の判定）を試し、成立しなければ値の完全一致を試す
         for exact in (False, True):
             all_found = True
@@ -358,16 +385,7 @@ def _detect_redundant_axes(
 
             # 統合後も各テーブルの行が既存カラムで自然に区別できるか確認する
             # → 各テーブルで検出された値集合が互いに重複しない場合のみ冗長とみなす
-            distinguishable = True
-            for i in range(len(table_val_sets)):
-                for j in range(i + 1, len(table_val_sets)):
-                    if table_val_sets[i] & table_val_sets[j]:
-                        distinguishable = False
-                        break
-                if not distinguishable:
-                    break
-
-            if distinguishable:
+            if _mutually_distinguishable(table_val_sets):
                 redundant[ci] = trigger_cols
                 break  # この軸は冗長と確定。もう一方の判定モードは試さない
     return redundant
