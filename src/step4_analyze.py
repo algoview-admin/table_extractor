@@ -1536,6 +1536,38 @@ def _dedupe_sheet_prefix(sheet_name: str, dn: str) -> str:
     return f"{' '.join(residual)} {dn}"  # 一部のみ重複 → 未表現の分だけ前置
 
 
+def _disambiguate_display_names(
+    table_analyses: List["TableAnalysisResult"], id_to_table: Dict[str, DetectedTable]
+) -> None:
+    """display_name が複数テーブル間で衝突する場合のみ、シート識別情報を
+    補って一意にする（table_analyses の各要素を in-place で更新する）。
+
+    display_name の生成自体はLLMに委ねている（SYSTEM_PROMPTの
+    【display_name生成ルール】参照）。表記ゆれ・言い回しの違いによる意味の
+    重複（例: シート名「年度別売上推移」とタイトル由来の名前
+    「支店別 年度売上推移（2022-2025）」— "年度別"と"年度"のように語彙が
+    完全一致しない）を検出するのは本質的にLLMでないと判断できず、決定論的な
+    パターンマッチングをいくら増やしても際限がない。
+
+    そのため決定論的な後処理では「他テーブルと表示名が衝突しているか」という
+    機械的に判定可能な条件に限定する。これは、この関数が元々担っていた
+    「AIがサマリーテーブルのシート名を省略し、UIで異なるシートのテーブルを
+    区別できなくなる」という問題を、より狭く・確実に解決する（衝突して
+    いない大多数のテーブルは、AIが生成した名前をそのまま尊重する）。
+    """
+    groups: Dict[str, List["TableAnalysisResult"]] = {}
+    for ta in table_analyses:
+        groups.setdefault(ta.display_name.strip(), []).append(ta)
+
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        for ta in members:
+            dt = id_to_table.get(ta.table_id)
+            if dt and dt.sheet_name:
+                ta.display_name = _dedupe_sheet_prefix(dt.sheet_name, ta.display_name)
+
+
 def _parse_response(
     raw: Dict[str, Any], tables: List[DetectedTable]
 ) -> AIAnalysisResult:
@@ -1556,15 +1588,12 @@ def _parse_response(
         tid = ta.get("table_id", "")
         if tid not in valid_ids:
             continue
-        # display_name に常にシート識別情報が含まれるようにする。
-        # AI がサマリーテーブルのシート名を省略することがあるため、
-        # UI が異なるシートのテーブルを一目で区別できるようここで補完する。
-        # ただし単純な部分文字列一致ではなく、意味の重複を考慮した
-        # _dedupe_sheet_prefix で判定し、冗長な連結を避ける。
+        # display_name の生成自体はLLMに委ねる（SYSTEM_PROMPTの
+        # 【display_name生成ルール】参照。意味の重複を避けた簡潔な名前を
+        # 期待できる）。ここでは素通しし、複数テーブル間で名前が衝突する
+        # 場合の補完のみを後段の _disambiguate_display_names で行う
+        # （詳細は同関数のdocstring参照）。
         dn = ta.get("display_name") or tid
-        dt = id_to_table.get(tid)
-        if dt and dt.sheet_name:
-            dn = _dedupe_sheet_prefix(dt.sheet_name, dn)
         table_analyses.append(
             TableAnalysisResult(
                 table_id=tid,
@@ -1590,6 +1619,8 @@ def _parse_response(
                 reasoning=ta.get("reasoning", ""),
             )
         )
+
+    _disambiguate_display_names(table_analyses, id_to_table)
 
     # 全ての集計軸において最小粒度にあるテーブル。
     # 最小粒度のデータのみがパイプラインの後続に流れるよう、
