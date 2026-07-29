@@ -391,6 +391,41 @@ def _detect_redundant_axes(
     return redundant
 
 
+def _align_columns_to_reference(df: "pd.DataFrame", reference_cols: list) -> "pd.DataFrame":
+    """df の列を reference_cols の順序に合わせて並べ替える。
+
+    統合元テーブルは同一スキーマ（列名の集合）を持つはずだが、各テーブルの
+    テーブル整形処理（外部メタデータ由来カラムのアンカー位置決定等）が
+    テーブルごとに独立して列順を決めているため、テーブル間で列の並び順が
+    異なることがある。pd.concat は列名が一致していれば暗黙に「最初の
+    フレームの列順」を採用するが、これは pandas の内部仕様に依存した
+    偶然の挙動であり、意図した設計ではない。呼び出し側で明示的に基準列順
+    （通常は統合対象の最初のテーブルの列順）を指定し、他の全フレームを
+    それに合わせて並べ替えてから concat することで、どのテーブルの列順が
+    採用されるかを明確にする。
+
+    reference_cols に無い df 独自の列は、元の相対順序を保ったまま末尾に
+    追加する（列名や列数が完全には一致しない場合の安全策）。
+    """
+    ordered = [c for c in reference_cols if c in df.columns]
+    remaining = [c for c in df.columns if c not in ordered]
+    return df[ordered + remaining]
+
+
+def _align_frames_to_first(frames: list) -> list:
+    """frames の2番目以降を、先頭フレームの列順に合わせて並べ替える。
+
+    先頭テーブルの列順（テーブル整形処理が決定した順序）を統合後の
+    基準として明示的に採用する。
+    """
+    if len(frames) < 2:
+        return frames
+    reference_cols = list(frames[0].columns)
+    return [frames[0]] + [
+        _align_columns_to_reference(f, reference_cols) for f in frames[1:]
+    ]
+
+
 def _group_irs_by_similarity(irs, tables_dict):
     """リストのリストを返す: 各内部リストは類似IRのグループ。
 
@@ -1431,6 +1466,7 @@ def _render_integration_before_after(
         return
 
     try:
+        frames = _align_frames_to_first(frames)
         combined = pd.concat(frames, ignore_index=True)
         df_str = combined.astype(str)
         valid_cols = [c for c in col_names if c in df_str.columns]
@@ -1812,6 +1848,7 @@ def _build_final_tables():
             if not _frames_bft:
                 continue
             try:
+                _frames_bft = _align_frames_to_first(_frames_bft)
                 _merged_bft = pd.concat(_frames_bft, ignore_index=True)
             except Exception:
                 continue
@@ -1935,6 +1972,7 @@ def _build_final_tables():
         if not frames:
             continue
         try:
+            frames = _align_frames_to_first(frames)
             merged_df = pd.concat(frames, ignore_index=True)
         except Exception:
             for tid in ir.table_ids:
