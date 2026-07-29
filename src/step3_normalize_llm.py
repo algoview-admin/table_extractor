@@ -615,6 +615,16 @@ def apply_external_metadata(
     primary_axis = dim_cols[0] if dim_cols else None
     ordered = list(dim_cols)
     pending = list(resolved)
+    # 同一 anchor に対して複数項目が position="after" で挿入される場合の
+    # 直近挿入位置を記録する（anchor 名 -> ordered 上のインデックス）。
+    # 「anchor の直後」へ毎回 index() で挿入すると、後から処理した項目が
+    # 先に挿入済みの項目より anchor に近い位置へ割り込み、LLM が items で
+    # 示した順序（＝広い区分→狭い区分の意図）が反転してしまうため、
+    # 同一 anchor への2件目以降は「直近に挿入した項目の直後」に積み増す。
+    # position="before" 側は index() を毎回引き直しても anchor 自体が
+    # 挿入のたびに右へ動くため、既存の同anchor項目は自然に左側に残り
+    # 順序が反転しない（この非対称性のため after 側のみ対応が必要）。
+    after_cursor: Dict[str, int] = {}
     for _ in range(len(pending) + 1):
         if not pending:
             break
@@ -631,8 +641,14 @@ def apply_external_metadata(
                 progressed = True
                 continue
             if anchor in ordered:
-                idx = ordered.index(anchor)
-                ordered.insert(idx if position == "before" else idx + 1, item["column_name"])
+                if position == "after" and anchor in after_cursor:
+                    idx = after_cursor[anchor]
+                else:
+                    idx = ordered.index(anchor)
+                insert_at = idx if position == "before" else idx + 1
+                ordered.insert(insert_at, item["column_name"])
+                if position == "after":
+                    after_cursor[anchor] = insert_at
                 progressed = True
                 continue
             # anchor が他の未配置メタ項目を指している → 次パスへ持ち越す
