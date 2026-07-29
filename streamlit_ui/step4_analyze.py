@@ -277,77 +277,62 @@ def _detect_redundant_axes(
 ) -> dict:
     """統合で追加する新カラムのうち、既存データから導出可能な冗長な軸を検出する。
 
-    新カラム値に含まれる4桁年（YYYY）が、各テーブルの既存カラムのいずれかに
-    すでに含まれている場合、そのカラムは冗長と判定する。
+    2通りの根拠のいずれかで冗長と判定する（テーブルごとに片方が成立すればよい
+    わけではなく、いずれか一方の根拠が全テーブルに一貫して成立する場合のみ）:
+      1. 新カラム値に含まれる4桁年（YYYY）が、既存カラムの値に部分一致で
+         含まれている（例: 新カラム値 "2024年度" と既存カラム値 "2024"）。
+      2. 新カラム値そのものが、既存カラムの値と完全一致する（例: 新カラム
+         「オプション区分」の値「拡張サポートオプション」が、各テーブルに
+         既に存在する「オプション種別」列の値と一致する）。
+         これにより、統合元テーブルが既にテーブルを識別する列（ファイル外
+         メタデータからの派生カラム生成機能等で追加済みの列を含む）を
+         持っている場合、同じ意味の列を重複して作らず既存列を流用できる。
+
+    いずれの根拠でも、各テーブルで検出された「該当する既存カラムの値集合」が
+    テーブル間で互いに重複しない場合のみ冗長とみなす（統合後も各テーブルの
+    行が既存カラムで自然に区別できることを保証するため）。
 
     Returns: {col_names_index: {triggering_col_name, ...}} — 冗長と判定した軸インデックスと
              その判断理由となった既存カラム名のセット。in 演算子でインデックス確認可能。
     """
     import re as _r
 
+    def _axis_val(ci: int, tid: str) -> str:
+        vals = multi_vals.get(tid) or []
+        if ci < len(vals):
+            return str(vals[ci])
+        return str(ir.new_column_values.get(tid, ""))
+
+    def _year_token(val: str) -> Optional[str]:
+        m = _r.search(r"(19|20)\d{2}", val)
+        return m.group(0) if m else None
+
+    def _cell_matches(cell: str, token: str, exact: bool) -> bool:
+        return cell == token if exact else token in cell
+
     redundant: dict = {}
     for ci, col_name in enumerate(col_names):
-        # 全テーブルについて「新カラム値の年が既存カラムに存在するか」を確認
-        all_found = True
-        any_table = False
-        trigger_cols: set = set()  # 判断理由となった既存カラム名
-        for tid in ir.table_ids:
-            t = tables_dict.get(tid)
-            if t is None or t.effective_df is None:
-                all_found = False
-                break
-            val = (
-                (multi_vals.get(tid) or [])[ci]
-                if ci < len(multi_vals.get(tid) or [])
-                else ir.new_column_values.get(tid, "")
-            )
-            year_m = _r.search(r"(19|20)\d{2}", str(val))
-            if not year_m:
-                all_found = False
-                break
-            year = year_m.group(0)
-            df = t.effective_df
-            found_in_col = False
-            for ec in df.columns:
-                # 新カラム名と同一のカラムは除外（自己参照防止）
-                if str(ec) == str(col_name):
-                    continue
-                non_null = [
-                    str(v)
-                    for v in df[ec].dropna()
-                    if str(v).lower() not in ("nan", "none", "")
-                ]
-                if not non_null:
-                    continue
-                match_ratio = sum(1 for v in non_null if year in v) / len(non_null)
-                if match_ratio >= 0.5:
-                    found_in_col = True
-                    trigger_cols.add(str(ec))
-                    break
-            if not found_in_col:
-                all_found = False
-                break
-            any_table = True
-        if all_found and any_table and len(ir.table_ids) >= 2:
-            # 統合後も各テーブルの行が既存カラムで自然に区別できるか確認する
-            # → 各テーブルで検出された「年を含むカラム」の値が互いに重複しない場合のみ冗長とみなす
-            year_val_sets: list = []
-            distinguishable = True
+        # まず年の部分一致（従来の判定）を試し、成立しなければ値の完全一致を試す
+        for exact in (False, True):
+            all_found = True
+            any_table = False
+            trigger_cols: set = set()
+            table_val_sets: list = []
             for tid in ir.table_ids:
                 t = tables_dict.get(tid)
-                val = (
-                    (multi_vals.get(tid) or [])[ci]
-                    if ci < len(multi_vals.get(tid) or [])
-                    else ir.new_column_values.get(tid, "")
-                )
-                year_m = _r.search(r"(19|20)\d{2}", str(val))
-                if not year_m:
-                    distinguishable = False
+                if t is None or t.effective_df is None:
+                    all_found = False
                     break
-                year = year_m.group(0)
+                raw_val = _axis_val(ci, tid)
+                token = raw_val.strip() if exact else _year_token(raw_val)
+                if not token:
+                    all_found = False
+                    break
                 df = t.effective_df
-                vals_with_year: set = set()
+                found_in_col = False
+                matched_vals: set = set()
                 for ec in df.columns:
+                    # 新カラム名と同一のカラムは除外（自己参照防止）
                     if str(ec) == str(col_name):
                         continue
                     non_null = [
@@ -357,20 +342,34 @@ def _detect_redundant_axes(
                     ]
                     if not non_null:
                         continue
-                    if sum(1 for v in non_null if year in v) / len(non_null) >= 0.5:
-                        vals_with_year.update(non_null)
-                year_val_sets.append(vals_with_year)
-            # 各テーブルの値集合が互いに重複しなければ自然に区別可能
-            if distinguishable and len(year_val_sets) >= 2:
-                for i in range(len(year_val_sets)):
-                    for j in range(i + 1, len(year_val_sets)):
-                        if year_val_sets[i] & year_val_sets[j]:
-                            distinguishable = False
-                            break
-                    if not distinguishable:
+                    matches = [v for v in non_null if _cell_matches(v, token, exact)]
+                    if len(matches) / len(non_null) >= 0.5:
+                        found_in_col = True
+                        trigger_cols.add(str(ec))
+                        matched_vals.update(matches)
+                if not found_in_col:
+                    all_found = False
+                    break
+                table_val_sets.append(matched_vals)
+                any_table = True
+
+            if not (all_found and any_table and len(ir.table_ids) >= 2):
+                continue
+
+            # 統合後も各テーブルの行が既存カラムで自然に区別できるか確認する
+            # → 各テーブルで検出された値集合が互いに重複しない場合のみ冗長とみなす
+            distinguishable = True
+            for i in range(len(table_val_sets)):
+                for j in range(i + 1, len(table_val_sets)):
+                    if table_val_sets[i] & table_val_sets[j]:
+                        distinguishable = False
                         break
+                if not distinguishable:
+                    break
+
             if distinguishable:
                 redundant[ci] = trigger_cols
+                break  # この軸は冗長と確定。もう一方の判定モードは試さない
     return redundant
 
 
