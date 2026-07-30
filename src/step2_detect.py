@@ -451,7 +451,13 @@ def _detect_table_regions(
 
         if rt == _RT_EMPTY:
             consec_empty += 1
-            if cur["data_rows"] and consec_empty >= 2:
+            # 全列が文字列のみの表（各行が _classify_row で col_hdr と分類され
+            # cur["data_rows"] に一件も積まれないケース）も、十分な行数が
+            # 積まれていれば（_flush と同じ基準: header_rows>=2）空白行境界で
+            # 正しく区切る。これが無いと、全文字列の表の直後に別のブロックが
+            # 続く場合に両者が1つの領域へ結合されてしまう。
+            has_substance = cur["data_rows"] or len(cur["header_rows"]) >= 2
+            if has_substance and consec_empty >= 2:
                 _flush(cur, last_filled, regions)
                 cur = _mk()
                 pending_titles = []
@@ -506,12 +512,28 @@ def _detect_table_regions(
                 # 表幅が狭く（tbl_width<=4）候補行が確立済みの表幅を過不足なく
                 # 満たしている場合は、疎な副見出しとは逆の「既存データ行と同じ
                 # 形状」を示す強いシグナルのため、データ行として救済する。
-                is_narrow_full_row = tbl_width <= 4 and fill_density >= 0.9
+                #
+                # 表幅が広い（tbl_width>4）場合も同様の誤検出は起こりうる
+                # （例: 数値列主体の表に、全列とも文字列値を持つ行が混在する
+                # ケース）。ただし全列充填というだけでは、正当な2段目ヘッダー
+                # （例: 全列に同一の単位「千円」が並ぶ単位行）も見分けが付かない
+                # ため、値の異なり率（distinct_ratio）を追加の判定材料にする。
+                # 単位行等の正当なヘッダーは同一値の繰り返しで異なり率が低く、
+                # 実際のデータ行は行内の値がほぼ全て異なるため異なり率が高い。
+                row_values = [
+                    str(grid[r][c]).strip()
+                    for c in range(cur["col_start"], cur["col_end"] + 1)
+                    if _is_filled(grid[r][c])
+                ]
+                distinct_ratio = len(set(row_values)) / len(row_values) if row_values else 0
+                is_data_like_full_row = fill_density >= 0.9 and (
+                    tbl_width <= 4 or distinct_ratio >= 0.5
+                )
 
                 if tbl_width > 0 and (
                     row_width / tbl_width < 0.5
                     or fill_density < 0.30
-                    or is_narrow_full_row
+                    or is_data_like_full_row
                 ):
                     cur["data_rows"].append(r)
                     _upd_cols(cur, r)
@@ -602,15 +624,9 @@ def _classify_table_quality(
         for _, row in df.iterrows()
         if sum(1 for v in row if v is not None and str(v).strip()) / n_cols >= 0.25
     )
-    if dense_rows < 2:
+    # 密なデータ行が1件もない場合のみ除外する（1行だけの正当なテーブルを許容）
+    if dense_rows < 1:
         return "discard"
-
-    if df.shape[0] <= 5 and df.shape[1] >= 5:
-        num_ct = sum(
-            int(pd.to_numeric(df[c], errors="coerce").notna().sum()) for c in df.columns
-        )
-        if num_ct == 0:
-            return "discard"
 
     txt_ct = lng_ct = 0
     max_len = 0
@@ -822,7 +838,7 @@ def _detect_tables_in_grid(
             band_start,
             band_end,
             max_col,
-            gap_threshold=2,
+            gap_threshold=1,
             row_widths=row_widths,
             content_rows=content_rows,
         )
@@ -864,6 +880,7 @@ def _detect_tables_in_grid(
                     df=df,
                     title=effective_title,
                     notes=reg.get("trailing_notes", []),
+                    detection_df=df.copy(),
                     raw_df=raw_df,
                     raw_header_rows=raw_header_rows,
                     raw_header_roles=raw_header_roles,
@@ -902,8 +919,18 @@ def detect_tables(
 # ---------------------------------------------------------------------------
 
 def get_original_df(t: DetectedTable):
-    """整形処理適用前の生 DataFrame を返す。"""
+    """整形処理適用前の生 DataFrame を返す。
+
+    detection_df（Step2検出直後の生データ。全テーブルで設定）を最優先とする。
+    pre_fill_df・pre_agg_df は Step3 のパイプライン内部スナップショットで
+    あり、階層圧縮カラムの展開等 Step3 の前半処理を経た後の状態のため、
+    detection_df が取得できる通常ケースでは使わない（Step2 の「元データ」
+    表示に Step3 処理済みの列構造が混入するのを防ぐ）。detection_df が
+    存在しない場合（Step2 を経由せず生成されたテーブル等）のみ、従来通り
+    raw_df 以下にフォールバックする。
+    """
     for candidate in [
+        getattr(t, "detection_df", None),
         t.raw_df,
         getattr(t, "pre_fill_df", None),
         t.pre_agg_df,

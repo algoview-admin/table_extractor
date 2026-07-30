@@ -155,6 +155,14 @@ def _build_value_grid(ws, ws_formulas=None) -> Tuple[List[List[Any]], int, int]:
 
     - 結合セルの値は結合範囲全体に伝播される。
     - *ws_formulas* が指定された場合、キャッシュ値が None のセルを数式から再評価する。
+    - セルの「インデントを増やす」書式（cell.alignment.indent）が設定された
+      文字列セルは、先頭に半角スペース2つ×インデント段数を付加する。Excel
+      ネイティブのインデント書式は cell.value に一切反映されないため、これを
+      行わないと階層圧縮カラムの展開機能のインデント方式（_detect_hierarchy_by_indent、
+      step3_normalize_determ.py）が先頭空白のシグナルを一切検出できず、
+      インデントで階層を表現した表（Excelで最も自然な作り方）が常に
+      無視されてしまう。ここで既存の「先頭空白の段差」表現に正規化して
+      おくことで、Step3側の検出ロジックは変更不要になる。
     """
     max_row = ws.max_row or 0
     max_col = ws.max_column or 0
@@ -167,7 +175,12 @@ def _build_value_grid(ws, ws_formulas=None) -> Tuple[List[List[Any]], int, int]:
     for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
         for cell in row:
             if cell.value is not None:
-                grid[cell.row][cell.column] = cell.value
+                value = cell.value
+                if isinstance(value, str):
+                    indent = getattr(cell.alignment, "indent", None) or 0
+                    if indent > 0:
+                        value = (" " * (int(indent) * 2)) + value
+                grid[cell.row][cell.column] = value
 
     # openpyxl の内部表現では結合セルの値は先頭セルにしか存在しない。
     # 伝播させないと step2 が結合範囲を空セルと誤判定するため、ここで補正する。
@@ -245,8 +258,15 @@ def _parse_csv_cell(raw: str) -> Any:
     行分類（タイトル行・ヘッダー行・データ行の判定）が Excel のネイティブ型付き
     セル前提の一部ロジックと食い違う。ここで型を復元しておくことで、CSV も
     Excel と全く同じ grid ベースの検出パイプライン（detect_tables）に載せられる。
+
+    末尾の空白のみ trim し、先頭の空白は保持する（rstrip。両側を strip すると
+    階層圧縮カラムの展開機能のインデント方式（先頭空白の段差で階層を表現する
+    セル値）のシグナルが消えてしまうため。Excel経由（_build_value_grid）では
+    セル値をそのまま使うため先頭空白は元々保持されており、CSV経由だけこの
+    処理が必要）。空文字判定・数値変換への影響はない（int()/float() は前後の
+    空白を許容するため）。
     """
-    s = raw.strip()
+    s = raw.rstrip()
     if s == "":
         return None
     try:

@@ -1,3 +1,4 @@
+import html as _html
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -12,6 +13,49 @@ from src.step2_detect import (
     group_tables_by_sheet,
 )
 from src.models import DetectedTable
+
+
+def _render_original_df(df: "pd.DataFrame") -> None:
+    """検出直後の生データを表示する。
+
+    st.dataframe はグリッド描画時にセル先頭の半角スペースを視覚的に
+    保持しない（階層圧縮カラムの展開機能が検出対象とする「先頭空白の
+    段差」がここでは見えなくなり、元データの確認という目的を果たせない）
+    ため、先頭の半角スペースを &nbsp; に変換したHTMLテーブルで表示する。
+    """
+    has_leading_space = any(
+        isinstance(v, str) and v[:1] == " "
+        for col in df.columns
+        for v in df[col].astype(str)
+    )
+    if not has_leading_space:
+        st.dataframe(df.astype(str), use_container_width=True, hide_index=True)
+        return
+
+    def _cell_html(v: object) -> str:
+        s = str(v)
+        stripped = s.lstrip(" ")
+        n_leading = len(s) - len(stripped)
+        return "&nbsp;" * n_leading + _html.escape(stripped)
+
+    headers = "".join(
+        f"<th style='padding:4px 10px;text-align:left;border-bottom:2px solid rgba(66,153,225,0.5);"
+        f"white-space:nowrap;font-weight:600;font-size:13px'>{_html.escape(str(c))}</th>"
+        for c in df.columns
+    )
+    rows = "".join(
+        "<tr>" + "".join(
+            f"<td style='padding:4px 10px;font-size:13px;white-space:nowrap;"
+            f"border-bottom:1px solid rgba(255,255,255,0.06)'>{_cell_html(v)}</td>"
+            for v in row
+        ) + "</tr>"
+        for _, row in df.iterrows()
+    )
+    st.markdown(
+        f"<div style='overflow-x:auto'><table style='border-collapse:separate;border-spacing:0;width:100%'>"
+        f"<thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def step2():
@@ -76,11 +120,7 @@ def step2():
                 )
                 orig = get_original_df(t)
                 if orig is not None:
-                    st.dataframe(
-                        orig.astype(str),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                    _render_original_df(orig)
                 st.divider()
 
     c1, c2 = st.columns([1, 4])

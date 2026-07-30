@@ -62,8 +62,14 @@ def make_transpose_client() -> Tuple[Any, str]:
 
     step4_analyze.py の _make_client() と同等のロジックだが、Step3 は
     Step4 のプライベート関数に依存させたくないため独立実装している。
+
+    OPENAI_API_TYPE が明示的に設定されていればそれに従う。未設定の場合は
+    .env に実際に設定されている方（AZURE_OPENAI_API_KEY があれば Azure、
+    なければ OpenAI）を自動選択する。
     """
-    api_type = os.getenv("OPENAI_API_TYPE", "openai").strip().lower()
+    api_type = os.getenv("OPENAI_API_TYPE", "").strip().lower()
+    if not api_type:
+        api_type = "azure" if os.getenv("AZURE_OPENAI_API_KEY") else "openai"
 
     if api_type == "azure":
         from openai import AzureOpenAI

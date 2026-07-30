@@ -24,6 +24,7 @@ class DetectedTable:
     df: Optional[pd.DataFrame] = field(default=None, repr=False)
     title: Optional[str] = None  # テーブルの直上で検出されたセクションタイトル行
     notes: List[str] = field(default_factory=list)  # テーブル末尾に続く注釈・脚注行
+    detection_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Step2検出直後・Step3の整形処理を一切適用していない生DataFrame（ヘッダー行数に関わらず全テーブルで設定。Step2画面の「元データ」表示専用）
     raw_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 整形前 DataFrame（多段ヘッダー整形時のみ）
     pre_agg_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 集計除去前 DataFrame
     post_agg_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 集計除去直後（単位分離適用前）の DataFrame スナップショット。UI表示が後続ステップ（単位分離・無効カラム・ファイル外メタデータ生成等）の変更を巻き込まないようにするため
