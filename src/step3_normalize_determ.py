@@ -74,7 +74,13 @@ def _detect_row_language(row: List[Any], n_cols: int) -> str:
         return "other"
 
     def _has_cjk(s: str) -> bool:
-        return any("぀" <= c <= "鿿" or "豈" <= c <= "﫿" for c in s)
+        """
+        \u3040-\u9fff: ひらがな・カタカナ・CJK統合漢字（3ブロックを1範囲で近似）
+        \uf900-\ufaff: CJK互換漢字
+        範囲の境界はリテラル文字ではなくエスケープで書く（見た目が同じ別の
+        符号位置に静かに化けて範囲がずれるのを防ぐため）
+        """
+        return any("\u3040" <= c <= "\u9fff" or "\uf900" <= c <= "\ufaff" for c in s)
 
     cjk_cells = sum(1 for t in texts if _has_cjk(t))
     ascii_cells = sum(
