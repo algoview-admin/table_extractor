@@ -1,3 +1,4 @@
+import dataclasses
 import html as _html
 import json
 from typing import Any, Dict, List, Optional, Set
@@ -620,7 +621,12 @@ def _render_pivot_body(t: "DetectedTable") -> None:
     key_cols = info.get("key_cols", [])
     attr_col = info.get("attr_col", "")
     value_col = info.get("value_col", "")
-    attributes = info.get("attributes", [])
+    # post_pivot_df の列は常に key_cols + 実際に昇格した属性のみ（apply_pivot_kv の
+    # out_cols 構成）なので、ここから逆算する。pivot_info["attributes"] は検出時の
+    # 全候補（変換規模の事前予測機能の再選択のために不変で保持する）であり、
+    # 「上位N種のみ」適用時は実際に昇格した列と一致しないため使わない。
+    key_col_set = set(key_cols)
+    attributes = [c for c in after.columns if c not in key_col_set]
     record_count = info.get("record_count", 0)
 
     def _badge(text: str, color: str) -> str:
@@ -685,7 +691,9 @@ def _render_pivot_body_html(t: "DetectedTable") -> str:
     key_cols = info.get("key_cols", [])
     attr_col = info.get("attr_col", "")
     value_col = info.get("value_col", "")
-    attributes = info.get("attributes", [])
+    # _render_pivot_body と同じ理由で post_pivot_df の列から逆算する。
+    key_col_set = set(key_cols)
+    attributes = [c for c in after.columns if c not in key_col_set]
     record_count = info.get("record_count", 0)
 
     def _badge(text: str, color: str) -> str:
@@ -733,6 +741,34 @@ def _render_pivot_body_html(t: "DetectedTable") -> str:
     return meta_html + grid_html
 
 
+# 変換規模の事前予測プロンプトで決定を再選択したとき、_apply_post_pivot_pipeline/
+# _apply_cross_table_detection が書き込むフィールドを一度リセットしてから
+# 再実行する必要がある（さもないと前回の決定時の階層展開・うち分離等の
+# 検出結果が新しい選択後も残り続け、矛盾したメタデータになる）。保持すべき
+# フィールド（テーブルの識別情報、Step1/2由来の生データ、Pivot検出自体の
+# 結果）だけを明示的なホワイトリストにし、それ以外は dataclass の既定値に
+# 戻す（新しいフィールドが将来追加された場合も、既定でリセットされる安全側に
+# 倒れる）。
+_PIVOT_RESELECT_PRESERVED_FIELDS = {
+    "table_id", "sheet_name", "start_row", "end_row", "start_col", "end_col",
+    "title", "notes", "detection_df", "raw_df", "raw_header_rows", "raw_header_roles",
+    "header_merge_discarded_row_indices", "is_step3_derived",
+    "pre_pivot_df", "pivot_info", "pivot_scale_warning",
+}
+
+
+def _reset_post_pivot_fields(t: "DetectedTable") -> None:
+    """再選択の前に、Pivot判定より後のStep3処理が書き込んだフィールドを
+    dataclassの既定値に戻す（_PIVOT_RESELECT_PRESERVED_FIELDS参照）。"""
+    for f in dataclasses.fields(t):
+        if f.name in _PIVOT_RESELECT_PRESERVED_FIELDS:
+            continue
+        if f.default_factory is not dataclasses.MISSING:
+            setattr(t, f.name, f.default_factory())
+        else:
+            setattr(t, f.name, f.default)
+
+
 def _resolve_pivot_scale_decision(
     t: "DetectedTable", choice: str, top_n: int, tables: List["DetectedTable"]
 ) -> None:
@@ -740,9 +776,19 @@ def _resolve_pivot_scale_decision(
     このテーブル（および新規生成された内訳テーブル）のStep3後続処理・
     クロス集計検出をまとめて実行する。tables は st.session_state.detected_tables
     と同一参照であるため、新規テーブルの追加はそのままセッション状態に反映される。
+
+    再選択（決定を変更してこの関数が2回目以降呼ばれるケース）にも対応する。
+    pivot_info は検出時の全属性候補を保持する不変スナップショットとして扱い
+    （「上位N種のみ」を選んでもここでは書き換えない）、再選択時に異なるNを
+    指定してもフルの候補集合から改めてランキングできるようにする。
     """
+    _reset_post_pivot_fields(t)
+    # 前回の決定でうち分離が生成した内訳テーブルが残っていれば除去する
+    # （再選択のたびに同じtable_idの内訳テーブルが重複生成されるのを防ぐ）
+    stale_child_id = f"{t.table_id}_uchi_breakdown"
+    tables[:] = [x for x in tables if x.table_id != stale_child_id]
+
     df = t.pre_pivot_df
-    info = t.pivot_info
     llm_client, llm_model = make_transpose_client()
 
     if choice == "cancel":
@@ -750,14 +796,14 @@ def _resolve_pivot_scale_decision(
         t.pivot_decision = "cancel"
     else:
         if choice == "limit":
-            ranked = rank_pivot_attributes_by_frequency(df, info)
-            info = limit_pivot_attributes(info, ranked, top_n)
-            t.pivot_info = info
+            ranked = rank_pivot_attributes_by_frequency(df, t.pivot_info)
+            limited_info = limit_pivot_attributes(t.pivot_info, ranked, top_n)
             t.pivot_limited_to_top_n = top_n
             t.pivot_decision = "limit"
+            df = apply_pivot_kv(df, limited_info)
         else:
             t.pivot_decision = "continue"
-        df = apply_pivot_kv(df, info)
+            df = apply_pivot_kv(df, t.pivot_info)
         t.post_pivot_df = df
 
     new_tables: List["DetectedTable"] = []
@@ -824,22 +870,31 @@ def _render_pivot_scale_prompt(t: "DetectedTable") -> None:
 
 
 def _render_pivot_scale_decision_note(t: "DetectedTable") -> None:
-    """確定済みの変換規模の事前予測の決定を1行の監査ログとして表示する。"""
+    """確定済みの変換規模の事前予測の決定を1行の監査ログとして表示する。
+    「再選択する」ボタンで pivot_decision を未決定に戻し、プロンプトを
+    再度表示できるようにする（決定は何度でもやり直せる）。"""
     warn = t.pivot_scale_warning or {}
     n_attrs = warn.get("n_attrs", 0)
     label = f"**`{t.table_id}`**" + (f" 🏷️ `{t.title}`" if t.title else "")
     if t.pivot_decision == "cancel":
-        st.markdown(f"{label} — ❌ 中止（元の縦持ち形式のまま。属性 {n_attrs} 種類）")
+        status = f"{label} — ❌ 中止（元の縦持ち形式のまま。属性 {n_attrs} 種類）"
     elif t.pivot_decision == "limit":
-        st.markdown(
+        status = (
             f"{label} — ✂️ 上位 **{t.pivot_limited_to_top_n}** 種のみPivot適用"
             f"（検出時 {n_attrs} 種類中。詳細は下記「Pivot 検出と変換機能」参照）"
         )
     else:
-        st.markdown(
+        status = (
             f"{label} — ✅ 続行（{n_attrs} 種類すべてPivot適用。"
             "詳細は下記「Pivot 検出と変換機能」参照）"
         )
+    col_a, col_b = st.columns([5, 1])
+    with col_a:
+        st.markdown(status)
+    with col_b:
+        if st.button("再選択する", key=f"pivot_scale_reselect_{t.table_id}"):
+            t.pivot_decision = None
+            st.rerun()
 
 
 def _paren_split_badge(text: str, color: str) -> str:
