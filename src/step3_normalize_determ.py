@@ -37,6 +37,7 @@ from .step3_normalize_llm import (
     apply_transpose,
     detect_annotation_column_names,
     detect_category_axis,
+    detect_column_collision_rename,
     detect_dimension_axes,
     detect_hierarchy_level_names,
     detect_transpose,
@@ -292,6 +293,32 @@ def _dedup_columns(columns: List[str]) -> List[str]:
             seen[col] = 0
             result.append(col)
     return result
+
+
+def resolve_column_name_collision(
+    candidate_name: str, existing_columns: Any, exclude: Optional[str] = None
+) -> str:
+    """candidate_name が existing_columns と衝突する場合、"_1","_2"...の連番で
+    機械的に一意化する（apply_paren_annotations・expand_hierarchy_column・
+    detect_column_hierarchy_split に重複実装されていた同一ロジックを統一）。
+
+    衝突しない場合は candidate_name をそのまま返す。exclude を指定すると、
+    その名前とはそもそも衝突とみなさない（apply_paren_annotations が
+    「新カラム名が分離元の列自身の名前と一致する場合はリネームしない」
+    という既存挙動を保つために使う）。
+
+    existing_columns は呼び出し側が所有する集合をそのまま渡すことを想定する
+    （本関数は状態を持たない純粋関数のため、複数の新規列名を連続して解決する
+    場合は、確定するたびに戻り値を呼び出し側で existing_columns へ追加する
+    こと）。
+    """
+    existing = existing_columns if isinstance(existing_columns, set) else set(existing_columns)
+    unique = candidate_name
+    n = 0
+    while unique in existing and unique != exclude:
+        n += 1
+        unique = f"{candidate_name}_{n}"
+    return unique
 
 
 # ---------------------------------------------------------------------------
@@ -2140,6 +2167,56 @@ def resolve_value_col_name(
     return "値", "fallback", "辞書・LLMのいずれでも値列名を特定できませんでした"
 
 
+def resolve_column_collision(
+    candidate_name: str,
+    existing_columns: Any,
+    axis_var_name: Optional[str] = None,
+    title: Optional[str] = None,
+    client: Any = None,
+    model: Optional[str] = None,
+) -> Tuple[Optional[str], str, str, str]:
+    """新規生成列名（candidate_name）が既存列名（existing_columns）と衝突する
+    かを判定し、衝突する場合は列衝突検出機能として双方の最終列名を解決する。
+
+    優先順位: 1. 衝突が無ければ何もしない
+              2. client 指定時のみ LLM（detect_column_collision_rename）で
+                 双方に意味の異なる名前を提案させる
+              3. LLM不使用・失敗時は既存列名を機械的に一意化して退避し、
+                 新規列名はそのまま使う
+
+    フォールバック時に必ず既存側をリネームするのは、Wide_to_long/クロス集計の
+    縦持ち変換（stack_wide_to_long/stack_cross_table）が内部で「新規列名を
+    キーにDataFrameへ代入する」実装のため、既存列を同名のまま残すと
+    新規列の代入時に既存データが黙って上書きされて消えてしまうため
+    （新規側だけをリネームしても、内部の代入は元の新規列名で行われるため
+    間に合わない。既存側を先に退避させることが唯一の安全な方法）。
+
+    Returns: (existing_col_new_name_or_None, new_col_final_name,
+              naming_source, naming_reason)
+      naming_source: "none"（衝突なし） | "llm" | "fallback"
+    """
+    existing = existing_columns if isinstance(existing_columns, set) else set(existing_columns)
+    if candidate_name not in existing:
+        return None, candidate_name, "none", ""
+
+    if client is not None:
+        result = detect_column_collision_rename(
+            candidate_name, axis_var_name, title, client, model
+        )
+        if result:
+            return (
+                result["existing_name"], result["new_name"],
+                "llm", result.get("reasoning", ""),
+            )
+
+    fallback_existing_name = resolve_column_name_collision(candidate_name, existing)
+    return (
+        fallback_existing_name, candidate_name, "fallback",
+        "LLMが利用できない、または意味的な区別を提案できなかったため、"
+        "既存列名を機械的に一意化して退避しました",
+    )
+
+
 def _classify_columns_by_delimiter(
     candidate_cols: List[str],
 ) -> Optional[Dict[str, Tuple[str, str, str]]]:
@@ -2803,11 +2880,7 @@ def apply_paren_annotations(df: Any, applied: List[Dict[str, Any]]) -> Any:
         out_cols[str(col)] = labels
 
         new_col = str(c["new_col"]).strip()
-        unique = new_col
-        n = 0
-        while unique in taken and unique != str(col):
-            n += 1
-            unique = f"{new_col}_{n}"
+        unique = resolve_column_name_collision(new_col, taken, exclude=str(col))
         taken.add(unique)
         out_cols[unique] = annotations
 
@@ -3096,11 +3169,7 @@ def expand_hierarchy_column(df: Any, detection: Dict[str, Any], level_names: Lis
 
     unique_names: List[str] = []
     for name in level_names:
-        unique = name
-        n = 0
-        while unique in taken:
-            n += 1
-            unique = f"{name}_{n}"
+        unique = resolve_column_name_collision(name, taken)
         taken.add(unique)
         unique_names.append(unique)
 
@@ -3469,11 +3538,7 @@ def detect_column_hierarchy_split(df: Any) -> Optional[Dict[str, Any]]:
         taken.discard(name)
         new_names: List[str] = []
         for p in parts:
-            unique = p
-            n = 0
-            while unique in taken:
-                n += 1
-                unique = f"{p}_{n}"
+            unique = resolve_column_name_collision(p, taken)
             taken.add(unique)
             new_names.append(unique)
 
@@ -3764,6 +3829,47 @@ def _apply_post_pivot_pipeline(
     t.df = _apply_invalid_col_defaults(t, t.df)
 
 
+def _resolve_stacking_collisions(
+    t: Any,
+    label_cols: List[str],
+    candidate_names: List[str],
+    axis_name: Optional[str],
+    llm_client: Any,
+    llm_model: str,
+) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
+    """列衝突検出機能: candidate_names（Wide_to_longのindicators、または
+    クロス集計の[var_name, value_name]）のうち label_cols と衝突するものを
+    resolve_column_collision で解決する。衝突した既存列は t.df 上でその場で
+    リネームし label_cols も更新する（stack_wide_to_long/stack_cross_table が
+    参照する id_vars 自体を事前に非衝突名へ変えておくため）。新規側の最終
+    列名は rename_map として返し、呼び出し側が stack_*() の戻り値に対して
+    事後リネームで反映する（stack_wide_to_long/stack_cross_table 自体の
+    変更は不要）。
+    """
+    rename_map: Dict[str, str] = {}
+    collision_log: List[Dict[str, Any]] = []
+    for name in candidate_names:
+        if not name or name not in label_cols:
+            continue
+        existing_new, new_final, source, reason = resolve_column_collision(
+            name, label_cols, axis_var_name=axis_name, title=t.title,
+            client=llm_client, model=llm_model,
+        )
+        if existing_new:
+            t.df = t.df.rename(columns={name: existing_new})
+            label_cols[label_cols.index(name)] = existing_new
+        if new_final != name:
+            rename_map[name] = new_final
+        collision_log.append({
+            "original_name": name,
+            "existing_new_name": existing_new,
+            "new_col_final_name": new_final,
+            "naming_source": source,
+            "naming_reason": reason,
+        })
+    return rename_map, collision_log
+
+
 def _apply_cross_table_detection(
     t: Any,
     llm_client: Any,
@@ -3837,8 +3943,16 @@ def _apply_cross_table_detection(
 
     if wtl_info:
         t.pre_wide_to_long_df = t.df
+        rename_map, collision_log = _resolve_stacking_collisions(
+            t, wtl_info["label_cols"], list(wtl_info.get("indicators", [])),
+            wtl_info.get("axis_var_name"), llm_client, llm_model,
+        )
+        if collision_log:
+            wtl_info["collision_renames"] = collision_log
         t.wide_to_long_info = wtl_info
         stacked = stack_wide_to_long(t.df, wtl_info)
+        if rename_map:
+            stacked = stacked.rename(columns=rename_map)
         axis_var_name = wtl_info.get("axis_var_name", "")
         if axis_var_name and axis_var_name in stacked.columns:
             agg_mask = stacked[axis_var_name].astype(str).apply(_is_agg_label)
@@ -3849,8 +3963,17 @@ def _apply_cross_table_detection(
 
     info = cross_info
     if info:
+        rename_map, collision_log = _resolve_stacking_collisions(
+            t, info["label_cols"],
+            [n for n in [info.get("var_name"), info.get("value_name")] if n],
+            info.get("var_name"), llm_client, llm_model,
+        )
+        if collision_log:
+            info["collision_renames"] = collision_log
         t.stack_info = info
         stacked = stack_cross_table(t.df, info)
+        if rename_map:
+            stacked = stacked.rename(columns=rename_map)
         var_name = info.get("var_name", "")
         if var_name and var_name in stacked.columns:
             agg_mask = stacked[var_name].astype(str).apply(_is_agg_label)

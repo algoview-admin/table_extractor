@@ -475,6 +475,95 @@ def detect_value_column_name(
 
 
 # ---------------------------------------------------------------------------
+# 列衝突検出機能（Stack/Wide_to_longで新規追加される列名が既存列と衝突する場合）
+# ---------------------------------------------------------------------------
+#
+# src/step3_normalize_determ.py の resolve_column_collision が、Wide_to_long/
+# クロス集計で新規生成する列名（指標名・値列名）が既存のラベル列と完全一致
+# する場合にのみ呼ぶ。単純に "_1" と連番を振るだけでは「どちらが元の値で
+# どちらが新しく縦持ち変換で分解された値か」が列名から読み取れなくなるため、
+# 双方に意味の異なる名前を付け直せるかどうかの判断にのみ LLM を用いる。
+
+_COLUMN_COLLISION_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
+表の変換によって新しく追加される列の名前が、その表に既に存在する列の名前と
+完全に一致してしまうケースについて、双方を区別できる分かりやすい列名を
+提案し、指定された JSON 形式のみで回答してください（説明文は不要）。"""
+
+_COLUMN_COLLISION_USER_PROMPT = """以下の表で、列名の衝突が発生しています。
+
+{title_line}
+衝突している列名: {colliding_name}
+- 既存列: 変換前からこの表に存在していた列（集計期間・集計範囲などの
+  前提はタイトルや表の文脈から推測してください）
+- 新規列: {new_col_context}
+
+【判定基準】
+- 既存列・新規列それぞれが実際に何を表しているかを文脈から推測し、
+  両者を区別できる名前を1つずつ提案してください
+  （例: 既存が全期間の合計、新規が軸ごとの合計なら「全期間合計」「{axis_hint}合計」等）。
+- 意味の違いを自信を持って判断できない場合は、無理に具体的な名前を
+  ひねり出さず、is_valid=false としてください。
+
+JSON形式で回答してください:
+{{"is_valid": true または false, "existing_name": "既存列の新しい名前（日本語）。is_valid=falseの場合はnull", "new_name": "新規列の新しい名前（日本語）。is_valid=falseの場合はnull", "reasoning": "判断理由（日本語、1〜2文）"}}"""
+
+
+def detect_column_collision_rename(
+    colliding_name: str,
+    axis_var_name: Optional[str],
+    title: Optional[str],
+    client: Any,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """既存列と新規生成列が同名で衝突する場合に、双方が区別できる意味の異なる
+    列名をLLMに提案させる。axis_var_name は新規列が属する軸名（例: "年"）で、
+    新規側の命名根拠として渡す。
+
+    ネットワークエラー・JSON パース失敗・LLMが判断不能とした場合は None を
+    返し、呼び出し側は機械的な連番付与にフォールバックする。
+
+    Returns:
+      提案できた場合: {"existing_name": str, "new_name": str, "reasoning": str}
+      判定不能な場合: None
+    """
+    axis_hint = axis_var_name or "区分ごとの"
+    new_col_context = (
+        f"「{axis_var_name}」ごとに縦持ち変換で分解された値"
+        if axis_var_name
+        else "縦持ち変換で新たに分解された値"
+    )
+    title_line = f"表タイトル: {title}" if title else ""
+    messages = [
+        {"role": "system", "content": _COLUMN_COLLISION_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _COLUMN_COLLISION_USER_PROMPT.format(
+                title_line=title_line, colliding_name=colliding_name,
+                new_col_context=new_col_context, axis_hint=axis_hint,
+            ),
+        },
+    ]
+    try:
+        content = _call_transpose_api(client, model, messages)
+        raw = json.loads(content)
+    except Exception:
+        return None
+
+    if not isinstance(raw, dict) or not raw.get("is_valid"):
+        return None
+    existing_name = str(raw.get("existing_name") or "").strip()
+    new_name = str(raw.get("new_name") or "").strip()
+    if not existing_name or not new_name or existing_name == new_name:
+        return None
+
+    return {
+        "existing_name": existing_name,
+        "new_name": new_name,
+        "reasoning": str(raw.get("reasoning") or ""),
+    }
+
+
+# ---------------------------------------------------------------------------
 # ファイル外メタデータからの派生カラム生成機能
 # ---------------------------------------------------------------------------
 #

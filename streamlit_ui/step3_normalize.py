@@ -1388,6 +1388,31 @@ def _naming_provenance_label(source: Optional[str], reason: Optional[str] = None
     return f"既定名：{_html.escape(reason)}" if reason else "既定名"
 
 
+def _collision_warning_html(collision_renames: Optional[List[Dict[str, Any]]]) -> str:
+    """列衝突検出機能: 新規生成列名が既存列名と衝突した場合の警告を組み立てる
+    （resolve_column_collision の判定結果、src/step3_normalize_determ.py 参照）。
+    naming_sourceに応じたラベルは_naming_provenance_labelを再利用する。"""
+    if not collision_renames:
+        return ""
+    lines = []
+    for c in collision_renames:
+        naming = _naming_provenance_label(c.get("naming_source"), c.get("naming_reason"))
+        original = _html.escape(str(c.get("original_name", "")))
+        existing_new = c.get("existing_new_name")
+        new_final = _html.escape(str(c.get("new_col_final_name", "")))
+        if existing_new:
+            detail = f"既存列を「{_html.escape(str(existing_new))}」に、新規列を「{new_final}」に変更"
+        else:
+            detail = f"新規列を「{new_final}」に変更（既存列はそのまま）"
+        lines.append(
+            "<div style='margin:4px 0 10px;padding:6px 10px;background:rgba(251,191,36,0.12);"
+            "border:1px solid rgba(251,191,36,0.4);border-radius:4px;font-size:13px'>"
+            f"⚠️ 列名衝突を検出: 「{original}」が既存列と衝突 → {detail}（{naming}）"
+            "</div>"
+        )
+    return "".join(lines)
+
+
 def _render_fill_cols_body(t: "DetectedTable") -> None:
     """グルーピング列 ffill の詳細（Streamlit ウィジェット版）。"""
     pre = t.pre_fill_df
@@ -1589,6 +1614,7 @@ def _render_stack_body(t: "DetectedTable") -> None:
     value_naming = _naming_provenance_label(
         info.get("value_name_source"), info.get("value_name_reason")
     )
+    collision_renames = info.get("collision_renames")
     meta_lines = [
         f"ラベル列: {label_html}",
         f"時系列カラム: {time_html}（計 {len(time_cols)} 列）",
@@ -1600,6 +1626,7 @@ def _render_stack_body(t: "DetectedTable") -> None:
             f"年コンテキスト（タイトル/ファイル名から補完）: <b>{year_ctx}年</b>"
         )
 
+    st.markdown(_collision_warning_html(collision_renames), unsafe_allow_html=True)
     st.markdown(
         "<div style='margin:4px 0 12px;line-height:2'>"
         + "<br>".join(meta_lines)
@@ -1607,8 +1634,14 @@ def _render_stack_body(t: "DetectedTable") -> None:
         unsafe_allow_html=True,
     )
 
+    def _final_name(name: str) -> str:
+        for c in (collision_renames or []):
+            if c.get("original_name") == name:
+                return c.get("new_col_final_name") or name
+        return name
+
     time_col_set = set(time_cols)
-    new_col_set = {var_name, value_name}
+    new_col_set = {_final_name(var_name), _final_name(value_name)}
     if year_ctx and info.get("time_kind") == "month":
         new_col_set.add("年")
 
@@ -1668,8 +1701,10 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     value_naming = _naming_provenance_label(
         info.get("value_name_source"), info.get("value_name_reason")
     )
+    collision_renames = info.get("collision_renames")
     year_line = f"<br>年コンテキスト: <b>{year_ctx}年</b>" if year_ctx else ""
     meta_html = (
+        _collision_warning_html(collision_renames) +
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"ラベル列: {label_html}<br>"
         f"時系列カラム: {time_html}（計 {len(time_cols)} 列）<br>"
@@ -1678,8 +1713,14 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
         f"{year_line}</div>"
     )
 
+    def _final_name(name: str) -> str:
+        for c in (collision_renames or []):
+            if c.get("original_name") == name:
+                return c.get("new_col_final_name") or name
+        return name
+
     time_col_set = set(time_cols)
-    new_col_set = {var_name, value_name}
+    new_col_set = {_final_name(var_name), _final_name(value_name)}
     if year_ctx and info.get("time_kind") == "month":
         new_col_set.add("年")
 
@@ -1818,6 +1859,7 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
     axis_naming = _naming_provenance_label(
         info.get("axis_var_name_source"), info.get("axis_var_name_reason")
     )
+    collision_renames = info.get("collision_renames")
     meta_lines = [
         f"ラベル列: {label_html}",
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）",
@@ -1826,6 +1868,7 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
         f"指標列（{len(indicators)} 列に分離）",
     ]
 
+    st.markdown(_collision_warning_html(collision_renames), unsafe_allow_html=True)
     st.markdown(
         "<div style='margin:4px 0 12px;line-height:2'>"
         + "<br>".join(meta_lines)
@@ -1834,7 +1877,10 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
     )
 
     compound_col_set = set(parsed_cols.keys())
-    new_col_set = {axis_var_name} | set(indicators)
+    final_indicators = {
+        (c.get("new_col_final_name") or c.get("original_name")) for c in (collision_renames or [])
+    } | (set(indicators) - {c.get("original_name") for c in (collision_renames or [])})
+    new_col_set = {axis_var_name} | final_indicators
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -1890,7 +1936,9 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
     axis_naming = _naming_provenance_label(
         info.get("axis_var_name_source"), info.get("axis_var_name_reason")
     )
+    collision_renames = info.get("collision_renames")
     meta_html = (
+        _collision_warning_html(collision_renames) +
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"ラベル列: {label_html}<br>"
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）<br>"
@@ -1901,7 +1949,10 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
     )
 
     compound_col_set = set(parsed_cols.keys())
-    new_col_set = {axis_var_name} | set(indicators)
+    final_indicators = {
+        (c.get("new_col_final_name") or c.get("original_name")) for c in (collision_renames or [])
+    } | (set(indicators) - {c.get("original_name") for c in (collision_renames or [])})
+    new_col_set = {axis_var_name} | final_indicators
 
     pre_html = _df_to_html(wide, max_height=340, highlight_col_names=compound_col_set)
     post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)

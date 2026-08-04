@@ -164,3 +164,28 @@ def test_resolve_value_col_name_uses_llm_when_dictionary_misses(llm_client):
     assert source in ("llm", "fallback")
     if source == "llm":
         assert reason != "" or name != ""
+
+
+# --- 列衝突検出機能: 衝突した既存列・新規列双方の意味的リネーム（LLM） -------
+
+
+def test_detect_column_collision_rename(llm_client):
+    client, model = llm_client
+    # 「合計」が既存列（全期間の合計）と新規のWide_to_long指標（年ごとの合計）
+    # の両方に使われている、明確に区別可能なケース。
+    result = llm.detect_column_collision_rename("合計", "年", None, client, model)
+    assert result is not None
+    assert isinstance(result["existing_name"], str) and result["existing_name"]
+    assert isinstance(result["new_name"], str) and result["new_name"]
+    assert result["existing_name"] != result["new_name"]
+
+
+def test_resolve_column_collision_uses_llm_when_available(llm_client):
+    client, model = llm_client
+    existing_new, new_final, source, reason = det.resolve_column_collision(
+        "合計", {"合計", "件数"}, axis_var_name="年", client=client, model=model,
+    )
+    assert source in ("llm", "fallback")
+    if source == "llm":
+        assert existing_new is not None and existing_new != "合計"
+        assert new_final != "合計"

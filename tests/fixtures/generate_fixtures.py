@@ -451,6 +451,32 @@ def gen_step3_wide_to_long_test():
 
 
 # ---------------------------------------------------------------------------
+# 12b. step3_column_collision_test.xlsx（列衝突検出機能）
+# ---------------------------------------------------------------------------
+def gen_step3_column_collision_test():
+    wb = _new_wb()
+
+    # シート1: Wide_to_long — 既存の「合計」列と、指標名「合計」が衝突する
+    # （指標を2種類以上にしてTier1の閾値を満たす: 合計・件数）
+    ws1 = wb.create_sheet("Wide_to_long衝突")
+    rows1 = [
+        ["合計", "2023年合計", "2023年件数", "2024年合計", "2024年件数"],
+        [300, 120, 5, 180, 7],
+    ]
+    _write_rows(ws1, rows1)
+
+    # シート2: クロス集計 — 既存の「年」列と、軸名「年」が衝突する
+    ws2 = wb.create_sheet("クロス集計衝突")
+    rows2 = [
+        ["年", "2023年", "2024年", "2025年"],
+        ["基準年", 100, 120, 140],
+    ]
+    _write_rows(ws2, rows2)
+
+    wb.save(_path("step3_column_collision_test.xlsx"))
+
+
+# ---------------------------------------------------------------------------
 # 13. step3_crosstab_test.xlsx
 # ---------------------------------------------------------------------------
 def gen_step3_crosstab_test():
@@ -566,6 +592,7 @@ def main():
         gen_step3_unit_split_test,
         gen_step3_invalid_columns_test,
         gen_step3_wide_to_long_test,
+        gen_step3_column_collision_test,
         gen_step3_crosstab_test,
         gen_external_metadata_test,
         gen_step3_transpose_test,

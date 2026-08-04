@@ -476,3 +476,79 @@ def test_wide_to_long_tier2_records_naming_provenance():
     t = _table("step3_wide_to_long_test.xlsx", "区切り文字")
     result = det.detect_wide_to_long(t.df, t.title, "step3_wide_to_long_test.xlsx")
     assert result["axis_var_name_source"] in ("computed", "fallback")
+
+
+# --- 列衝突検出機能: resolve_column_name_collision / resolve_column_collision ---
+
+
+def test_resolve_column_name_collision_no_conflict():
+    assert det.resolve_column_name_collision("売上", {"支店", "利益"}) == "売上"
+
+
+def test_resolve_column_name_collision_suffixes_on_conflict():
+    assert det.resolve_column_name_collision("合計", {"合計"}) == "合計_1"
+    assert det.resolve_column_name_collision("合計", {"合計", "合計_1"}) == "合計_2"
+
+
+def test_resolve_column_name_collision_exclude_self():
+    # exclude と一致する場合は衝突とみなさない（apply_paren_annotations が
+    # 分離元の列自身の名前と一致する場合にリネームしない既存挙動を保つ）
+    assert det.resolve_column_name_collision("商品", {"商品"}, exclude="商品") == "商品"
+
+
+def test_resolve_column_collision_no_conflict():
+    existing_new, new_final, source, reason = det.resolve_column_collision(
+        "件数", {"支店", "合計"}
+    )
+    assert existing_new is None
+    assert new_final == "件数"
+    assert source == "none"
+
+
+def test_resolve_column_collision_fallback_renames_existing():
+    # client未指定時は、新規列名は変更せず既存列名の方を機械的に一意化する
+    # （既存側を残すと、Wide_to_long/クロス集計の縦持ち変換内部で新規列の
+    # 代入により既存データが上書きされて消えてしまうため）
+    existing_new, new_final, source, reason = det.resolve_column_collision(
+        "合計", {"合計", "件数"}
+    )
+    assert existing_new == "合計_1"
+    assert new_final == "合計"
+    assert source == "fallback"
+    assert reason
+
+
+def test_wide_to_long_collision_preserves_both_columns_without_llm():
+    # 実データ相当: 既存の「合計」列とWide_to_long指標「合計」が衝突する
+    # ケースで、client未指定（LLMなし）でも双方のデータが失われないことを
+    # end-to-endで検証する（_apply_cross_table_detection経由）。
+    t = _table("step3_column_collision_test.xlsx", "Wide_to_long衝突")
+    det._apply_cross_table_detection(t, None, None, "step3_column_collision_test.xlsx", {})
+
+    assert t.wide_to_long_info is not None
+    collisions = t.wide_to_long_info.get("collision_renames")
+    assert collisions and collisions[0]["original_name"] == "合計"
+    assert collisions[0]["existing_new_name"] == "合計_1"
+    assert collisions[0]["naming_source"] == "fallback"
+
+    stacked = t.stacked_df
+    assert set(stacked.columns) == {"合計_1", "年", "合計", "件数"}
+    # 既存列（合計_1）の値は元の300のまま、指標列（合計）は年ごとの値を保持
+    assert (stacked["合計_1"] == 300).all()
+    assert sorted(stacked["合計"].tolist()) == [120, 180]
+
+
+def test_cross_table_collision_preserves_both_columns_without_llm():
+    # 既存の「年」列とクロス集計の軸名「年」が衝突するケース。
+    t = _table("step3_column_collision_test.xlsx", "クロス集計衝突")
+    det._apply_cross_table_detection(t, None, None, "step3_column_collision_test.xlsx", {})
+
+    assert t.stack_info is not None
+    collisions = t.stack_info.get("collision_renames")
+    assert collisions and collisions[0]["original_name"] == "年"
+    assert collisions[0]["existing_new_name"] == "年_1"
+
+    stacked = t.stacked_df
+    assert set(stacked.columns) == {"年_1", "年", "値"}
+    assert (stacked["年_1"] == "基準年").all()
+    assert sorted(stacked["値"].tolist()) == [100, 120, 140]
