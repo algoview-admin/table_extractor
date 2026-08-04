@@ -129,3 +129,38 @@ def test_full_hierarchy_expand_pipeline_with_llm_naming(llm_client):
     assert list(out.columns[-1:]) == ["売上"]
     assert len(list(out.columns)) == 4  # レベル3つ + 売上
     assert len(out) == 3  # ロールアップ2行（東日本・神奈川事業部）が除去済み
+
+
+# --- 列名生成規則機能: 値列名のLLM生成（静的辞書VALUE_KEYWORDSに無い語彙） -------
+
+
+def test_detect_value_column_name(llm_client):
+    client, model = llm_client
+    # "来客数"はVALUE_KEYWORDS（売上/予算/実績/件数/人数/金額/数量/利益/費用/
+    # コスト）に無く、静的辞書では解決できない値列名。支店別の来客数集計という
+    # 明確な文脈のため、LLMによる命名に成功することを期待する。
+    result = llm.detect_value_column_name(
+        ["支店"], "2024年度 各店舗の来客数集計", client, model
+    )
+    assert result is not None
+    assert isinstance(result["value_name"], str)
+    assert result["value_name"] != ""
+
+
+def test_detect_value_column_name_no_context_returns_none():
+    # title/context_tokensが両方とも無い場合はLLMを呼ばずNoneを返す
+    # （判断材料が無い呼び出しを避けるコスト制御。LLM APIを使わないため
+    # llm_client fixture不要で常時実行できる）。
+    result = llm.detect_value_column_name([], None, client=None, model=None)
+    assert result is None
+
+
+def test_resolve_value_col_name_uses_llm_when_dictionary_misses(llm_client):
+    client, model = llm_client
+    name, source, reason = det.resolve_value_col_name(
+        title="2024年度 各店舗の来客数集計", context_tokens=["支店"],
+        client=client, model=model,
+    )
+    assert source in ("llm", "fallback")
+    if source == "llm":
+        assert reason != "" or name != ""

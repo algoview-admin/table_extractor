@@ -394,6 +394,87 @@ def detect_category_axis(
 
 
 # ---------------------------------------------------------------------------
+# 値列名の生成（列名生成規則機能: 静的辞書で決まらない値列名をLLMで補う）
+# ---------------------------------------------------------------------------
+#
+# src/step3_normalize_determ.py の resolve_value_col_name が、表タイトルと
+# VALUE_KEYWORDS（静的辞書）の一致で値列名を決められなかった場合にのみ
+# 呼ばれる。detect_category_axis と同様、構造の発見自体はさせず、
+# 与えられた文脈（表タイトル・区分列名）から値列の意味を命名させるだけに
+# 役割を限定する。
+
+_VALUE_COLUMN_NAME_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
+横持ち表を縦持ちに変換する際に新規生成される「値列」（集計された数値の列）に
+ふさわしい名称を判定し、指定された JSON 形式のみで回答してください
+（説明文は不要）。"""
+
+_VALUE_COLUMN_NAME_USER_PROMPT = """以下は、横持ち表を縦持ちに変換する際に
+新規生成される値列（数値）の文脈情報です。
+
+{title_line}
+（参考）表に含まれる区分・ラベル列名: {context_tokens}
+
+【判定基準】
+- 表タイトルや区分列名から、値列が何を表す数値か明確に読み取れる場合のみ
+  value_name に具体的な名称（例: 売上、原価、来店者数）を設定してください。
+- 何を集計した数値か判断できない場合は value_name を null にしてください。
+- 少しでも判断に迷う場合は null としてよい。
+
+JSON形式で回答してください:
+{{"value_name": "値列の名称（日本語）。判断できない場合はnull", "reasoning": "判断理由（日本語、1〜2文）"}}"""
+
+
+def detect_value_column_name(
+    context_tokens: List[str],
+    title: Optional[str],
+    client: Any,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """Stack/Wide_to_longで新規生成される値列の列名をLLMに判定・命名させる。
+
+    context_tokens: 参考情報として渡す、表に含まれる区分・ラベル列名。
+    title が無く context_tokens も空の場合は LLM を呼ばず None を返す
+    （判断材料が無い呼び出しはコスト的に無意味なため）。
+
+    ネットワークエラー・JSON パース失敗等は握りつぶして None を返し、
+    1テーブルの失敗が検出処理全体を落とさないようにする。
+
+    Returns:
+      命名できた場合: {"value_name": str, "reasoning": str}
+      判定不能な場合: None
+    """
+    if not title and not context_tokens:
+        return None
+
+    title_line = f"表タイトル: {title}" if title else ""
+    messages = [
+        {"role": "system", "content": _VALUE_COLUMN_NAME_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _VALUE_COLUMN_NAME_USER_PROMPT.format(
+                title_line=title_line, context_tokens=context_tokens,
+            ),
+        },
+    ]
+    try:
+        content = _call_transpose_api(client, model, messages)
+        raw = json.loads(content)
+    except Exception:
+        return None
+
+    if not isinstance(raw, dict):
+        return None
+    value_name = str(raw.get("value_name") or "").strip()
+    if not value_name:
+        return None
+
+    return {
+        "value_name": value_name,
+        "reasoning": str(raw.get("reasoning") or ""),
+    }
+
+
+# ---------------------------------------------------------------------------
 # ファイル外メタデータからの派生カラム生成機能
 # ---------------------------------------------------------------------------
 #

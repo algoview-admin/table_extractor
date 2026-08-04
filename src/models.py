@@ -78,6 +78,7 @@ class DetectedTable:
     post_hier_expand_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 階層展開＋ロールアップ行除去の直後（後続ステップ適用前）の DataFrame スナップショット
     hier_rollup_removed_metadata: List[Dict[str, Any]] = field(default_factory=list)  # 階層圧縮カラムの展開時に除去したロールアップ行（子行群の合計と数値が一致する集計行）の監査用メタデータ [{level_values, child_count, matched_columns}]
     hier_integrity_check: List[Dict[str, Any]] = field(default_factory=list)  # 階層圧縮カラムの展開でロールアップ行を除去する前に行った階層整合性検証の結果（削除されない行も含む。agg_integrity_check と同形式）
+    col_name_gen_log: List[Dict[str, Any]] = field(default_factory=list)  # 列名生成規則機能が新規列名を決定した記録 [{context: "wide_to_long"|"cross_table"|"multi_axis_header", column_kind: "axis"|"value", generated_name, naming_source: "dictionary"|"computed"|"llm"|"fallback", naming_reason}]（wide_to_long_info/stack_info等の最終列名そのものとは別に、命名根拠だけを集約した監査ログ）
 
     @property
     def effective_df(self) -> Optional[pd.DataFrame]:

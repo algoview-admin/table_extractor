@@ -336,3 +336,69 @@ def test_stack_cross_table():
     out = det.stack_cross_table(t.df, info)
     assert list(out.columns) == ["支店", "年", "値"]
     assert out.shape[0] == 6  # 2支店 × 3年
+
+
+# --- 列名生成規則機能: resolve_axis_var_name / resolve_value_col_name ---------
+
+
+def test_resolve_axis_var_name_dictionary_source():
+    name, source, reason = det.resolve_axis_var_name(time_kind="year")
+    assert name == "年"
+    assert source == "dictionary"
+    assert reason == ""
+
+
+def test_resolve_axis_var_name_computed_source():
+    name, source, reason = det.resolve_axis_var_name(
+        tokens=["東京支社", "大阪支社", "名古屋支社"]
+    )
+    assert name == "支社"
+    assert source == "computed"
+
+
+def test_resolve_axis_var_name_fallback_with_time_kind():
+    # time_kindが辞書に存在しない場合は"期間"（時系列文脈の既定名）
+    name, source, reason = det.resolve_axis_var_name(time_kind="__unknown_kind__")
+    assert name == det._VAR_NAME_FALLBACK
+    assert source == "fallback"
+    assert reason
+
+
+def test_resolve_axis_var_name_fallback_without_time_kind():
+    # 共通接辞も取れない非時系列トークンは"区分"（汎用カテゴリの既定名）
+    name, source, reason = det.resolve_axis_var_name(tokens=["ABC", "XYZ"])
+    assert name == det._AXIS_GENERIC_VAR_NAME
+    assert source == "fallback"
+
+
+def test_resolve_value_col_name_dictionary_source():
+    name, source, reason = det.resolve_value_col_name(title="2024年度 売上実績")
+    assert name == "売上"
+    assert source == "dictionary"
+    assert reason == ""
+
+
+def test_resolve_value_col_name_fallback_without_client():
+    name, source, reason = det.resolve_value_col_name(title="意味の無いタイトル")
+    assert name == "値"
+    assert source == "fallback"
+    assert reason
+
+
+def test_detect_cross_table_records_naming_provenance():
+    t = _table("step3_crosstab_test.xlsx")
+    result = det.detect_cross_table(t.df, t.title, "step3_crosstab_test.xlsx")
+    assert result["var_name_source"] == "dictionary"
+    assert result["value_name_source"] in ("dictionary", "fallback")
+
+
+def test_wide_to_long_tier1_records_naming_provenance():
+    t = _table("step3_wide_to_long_test.xlsx", "時系列語彙")
+    result = det.detect_wide_to_long(t.df, t.title, "step3_wide_to_long_test.xlsx")
+    assert result["axis_var_name_source"] == "dictionary"
+
+
+def test_wide_to_long_tier2_records_naming_provenance():
+    t = _table("step3_wide_to_long_test.xlsx", "区切り文字")
+    result = det.detect_wide_to_long(t.df, t.title, "step3_wide_to_long_test.xlsx")
+    assert result["axis_var_name_source"] in ("computed", "fallback")

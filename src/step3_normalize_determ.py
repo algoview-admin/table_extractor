@@ -40,6 +40,7 @@ from .step3_normalize_llm import (
     detect_dimension_axes,
     detect_hierarchy_level_names,
     detect_transpose,
+    detect_value_column_name,
     extract_external_metadata,
     make_transpose_client,
 )
@@ -712,7 +713,7 @@ def apply_multi_axis_header(
             ]
             time_kinds = {_classify_col_time(v) for v in col_values}
             if col_values and len(time_kinds) == 1 and None not in time_kinds:
-                new_name = _VAR_NAME_MAP.get(next(iter(time_kinds)), _VAR_NAME_FALLBACK)
+                new_name, _, _ = resolve_axis_var_name(time_kind=next(iter(time_kinds)))
         renamed_label_names.append(new_name)
     label_col_names = renamed_label_names
 
@@ -1817,6 +1818,8 @@ def detect_cross_table(
     df: Any,
     title: Optional[str] = None,
     filename: Optional[str] = None,
+    client: Any = None,
+    model: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     DataFrame がクロス集計形式（月・四半期・年度等を列に持つ横持ち）かを検出する。
@@ -1826,6 +1829,9 @@ def detect_cross_table(
       - 時系列列が 2 列以上ある
 
     月のみ列（1月〜12月）の場合は title / filename から年を補完する。
+
+    client/model が渡された場合、値列名の解決（resolve_value_col_name）が
+    静的辞書で決まらないときにLLMへ確認する（列名生成規則機能）。
 
     Returns:
       検出された場合は変換情報 dict、検出されなかった場合は None
@@ -1856,22 +1862,23 @@ def detect_cross_table(
     if time_kind == "month":
         year_context = _extract_year_context(title, filename)
 
-    var_name = _VAR_NAME_MAP.get(time_kind, _VAR_NAME_FALLBACK)
-
-    # 値列名の推定（タイトルキーワード優先、なければ "値"）
-    value_name = "値"
-    if title:
-        for kw, name in _VALUE_KEYWORDS.items():
-            if kw in title:
-                value_name = name
-                break
+    var_name, var_name_source, var_name_reason = resolve_axis_var_name(
+        time_kind=time_kind, tokens=time_cols, title=title, client=client, model=model,
+    )
+    value_name, value_name_source, value_name_reason = resolve_value_col_name(
+        title=title, context_tokens=label_cols, client=client, model=model,
+    )
 
     return {
         "label_cols": label_cols,
         "time_cols": time_cols,
         "time_kind": time_kind,
         "var_name": var_name,
+        "var_name_source": var_name_source,
+        "var_name_reason": var_name_reason,
         "value_name": value_name,
+        "value_name_source": value_name_source,
+        "value_name_reason": value_name_reason,
         "year_context": year_context,
     }
 
@@ -2000,6 +2007,80 @@ def _common_affix_axis_name(tokens: List[str]) -> Optional[str]:
     prefix = _common_prefix(tokens)
     best = suffix if len(suffix) >= len(prefix) else prefix
     return best or None
+
+
+# ---------------------------------------------------------------------------
+# 列名生成規則機能（Stack/Wide_to_longで新規追加される列名の解決）
+# ---------------------------------------------------------------------------
+# detect_cross_table・detect_wide_to_long（Tier1/Tier2）・
+# apply_multi_axis_header のプレースホルダー補正が個別に持っていた
+# 「静的辞書 → データからの計算 → LLM → 既定名」という命名ロジックを
+# 1つの窓口に統一する。Wide_to_long Tier3は候補の妥当性検証とLLM命名が
+# 一体化した detect_category_axis を直接使うため対象外（二重LLM呼び出しを
+# 避けるため）。
+
+
+def resolve_axis_var_name(
+    time_kind: Optional[str] = None,
+    tokens: Optional[List[str]] = None,
+    other_axis_hint: Optional[List[str]] = None,
+    title: Optional[str] = None,
+    client: Any = None,
+    model: Optional[str] = None,
+) -> Tuple[str, str, str]:
+    """軸（variable相当）列名を解決する。
+
+    優先順位: 1. time_kind が既知なら静的辞書（VAR_NAME_MAP）
+              2. tokens 同士の共通接辞（_common_affix_axis_name、データからの計算）
+              3. client 指定時のみ LLM（detect_category_axis）
+              4. 既定名（time_kind 既知なら "期間"、未知なら "区分"。
+                 いずれも辞書・計算・LLMの全てが判定できなかった場合の
+                 意味の薄い最終手段であり、元データの情報を追加しない）
+
+    Returns: (列名, naming_source, naming_reason)
+      naming_source: "dictionary" | "computed" | "llm" | "fallback"
+    """
+    if time_kind:
+        name = _VAR_NAME_MAP.get(time_kind)
+        if name:
+            return name, "dictionary", ""
+    if tokens:
+        computed = _common_affix_axis_name(tokens)
+        if computed:
+            return computed, "computed", ""
+    if client is not None and tokens:
+        result = detect_category_axis(tokens, other_axis_hint, title, client, model)
+        if result:
+            return result["axis_name"], "llm", result.get("reasoning", "")
+    fallback = _VAR_NAME_FALLBACK if time_kind else _AXIS_GENERIC_VAR_NAME
+    return fallback, "fallback", "辞書・計算・LLMのいずれでも軸名を特定できませんでした"
+
+
+def resolve_value_col_name(
+    title: Optional[str] = None,
+    context_tokens: Optional[List[str]] = None,
+    client: Any = None,
+    model: Optional[str] = None,
+) -> Tuple[str, str, str]:
+    """値列（Stack/Wide_to_longで生成される数値列）の列名を解決する。
+    resolve_axis_var_name と対になる窓口。
+
+    優先順位: 1. タイトル文字列と静的辞書（VALUE_KEYWORDS）のキーワード一致
+              2. client 指定時のみ LLM（detect_value_column_name）
+              3. 既定名 "値"
+
+    Returns: (列名, naming_source, naming_reason)
+      naming_source: "dictionary" | "llm" | "fallback"
+    """
+    if title:
+        for kw, name in _VALUE_KEYWORDS.items():
+            if kw in title:
+                return name, "dictionary", ""
+    if client is not None:
+        result = detect_value_column_name(context_tokens or [], title, client, model)
+        if result:
+            return result["value_name"], "llm", result.get("reasoning", "")
+    return "値", "fallback", "辞書・LLMのいずれでも値列名を特定できませんでした"
 
 
 def _classify_columns_by_delimiter(
@@ -2225,7 +2306,10 @@ def detect_wide_to_long(
         _WIDE_TO_LONG_MATCH_RATIO, _WIDE_TO_LONG_COMPLETENESS,
     )
     if grid:
-        grid["axis_var_name"] = _VAR_NAME_MAP.get(grid["axis_kind"], _VAR_NAME_FALLBACK)
+        axis_var_name, source, reason = resolve_axis_var_name(time_kind=grid["axis_kind"])
+        grid["axis_var_name"] = axis_var_name
+        grid["axis_var_name_source"] = source
+        grid["axis_var_name_reason"] = reason
         return grid
 
     axis_min_table_cols = 4 if relaxed else _AXIS_MIN_TABLE_COLS
@@ -2250,8 +2334,13 @@ def detect_wide_to_long(
             axis_min_cardinality, reject_pure_digit_side=True,
         )
         if grid:
-            common_name = _common_affix_axis_name(grid["axis_tokens"])
-            grid["axis_var_name"] = common_name or _AXIS_GENERIC_VAR_NAME
+            axis_var_name, source, reason = resolve_axis_var_name(
+                tokens=grid["axis_tokens"], other_axis_hint=grid["indicators"],
+                title=title, client=client, model=model,
+            )
+            grid["axis_var_name"] = axis_var_name
+            grid["axis_var_name_source"] = source
+            grid["axis_var_name_reason"] = reason
             return grid
 
     # ── Tier3: 区切り文字なし複合列名 + LLM確認（clientが渡された場合のみ）──
@@ -2275,6 +2364,8 @@ def detect_wide_to_long(
     if not axis_result:
         return None
     grid["axis_var_name"] = axis_result["axis_name"]
+    grid["axis_var_name_source"] = "llm"
+    grid["axis_var_name_reason"] = axis_result.get("reasoning", "")
     return grid
 
 
@@ -3769,7 +3860,10 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
             relaxed=t.multi_axis_candidates_declined,
         )
         cross_info = (
-            None if wtl_info else detect_cross_table(t.df, title=t.title, filename=filename)
+            None if wtl_info else detect_cross_table(
+                t.df, title=t.title, filename=filename,
+                client=llm_client, model=llm_model,
+            )
         )
         if wtl_info is None and cross_info is None:
             continue
@@ -3806,6 +3900,13 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         if wtl_info:
             t.pre_wide_to_long_df = t.df
             t.wide_to_long_info = wtl_info
+            t.col_name_gen_log.append({
+                "context": "wide_to_long",
+                "column_kind": "axis",
+                "generated_name": wtl_info.get("axis_var_name", ""),
+                "naming_source": wtl_info.get("axis_var_name_source", ""),
+                "naming_reason": wtl_info.get("axis_var_name_reason", ""),
+            })
             stacked = stack_wide_to_long(t.df, wtl_info)
             axis_var_name = wtl_info.get("axis_var_name", "")
             if axis_var_name and axis_var_name in stacked.columns:
@@ -3818,6 +3919,20 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         info = cross_info
         if info:
             t.stack_info = info
+            t.col_name_gen_log.append({
+                "context": "cross_table",
+                "column_kind": "axis",
+                "generated_name": info.get("var_name", ""),
+                "naming_source": info.get("var_name_source", ""),
+                "naming_reason": info.get("var_name_reason", ""),
+            })
+            t.col_name_gen_log.append({
+                "context": "cross_table",
+                "column_kind": "value",
+                "generated_name": info.get("value_name", ""),
+                "naming_source": info.get("value_name_source", ""),
+                "naming_reason": info.get("value_name_reason", ""),
+            })
             stacked = stack_cross_table(t.df, info)
             var_name = info.get("var_name", "")
             if var_name and var_name in stacked.columns:
