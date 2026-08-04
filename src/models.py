@@ -49,6 +49,9 @@ class DetectedTable:
     pre_pivot_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Pivot変換前 DataFrame（(属性,値)ペア検出時のみ）
     post_pivot_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # Pivot変換直後（後続ステップ適用前）の DataFrame スナップショット
     pivot_info: Optional[Dict[str, Any]] = field(default=None)  # Pivot検出情報 {key_cols, attr_col, value_col, attributes, record_count}
+    pivot_scale_warning: Optional[Dict[str, Any]] = field(default=None)  # Pivot事前予測情報 {n_attrs, output_columns, exceeds_excel_limit, needs_warning}（PIVOT_PERFORMANCE_WARNING_THRESHOLD超過時のみ設定。設定中はpivot_decision確定までこのテーブルの後続Step3処理を保留する）
+    pivot_decision: Optional[str] = field(default=None)  # Pivot事前予測プロンプトでのユーザー決定（"continue"|"limit"|"cancel"）。pivot_scale_warning設定時のみ意味を持つ。Noneなら未決定＝保留中
+    pivot_limited_to_top_n: Optional[int] = field(default=None)  # pivot_decisionが"limit"の場合に実際に適用した上位N（表示用）
     invalid_col_candidates: Optional[List[Dict[str, Any]]] = field(default=None)  # 無効カラム候補 [{name, position, reason, nonnull_count, is_empty, is_unnamed, default_selected}]（不変。検出時点のスナップショット）
     pre_invalid_col_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 無効カラム候補検出時点の全列を保持した DataFrame（不変。復元・再選択の基準）
     invalid_cols_removed: List[Dict[str, Any]] = field(default_factory=list)  # 現在削除されている無効カラム [{name, reason}]（既定は全欠損列を自動削除、ユーザーがチェックボックスで調整可能）

@@ -302,6 +302,33 @@ def _dedup_columns(columns: List[str]) -> List[str]:
 # 不要（属性名をそのまま列名に採用するだけ）な純構造変換のため、LLMは使わない。
 # Transpose・軸展開より前（normalize_tables 内）で適用する。
 
+PIVOT_EXCEL_MAX_COLUMNS = 16384  # Excel(.xlsx)の1シートあたり最大列数。警告文言用の
+# 予測値であり、本アプリに現状Excel書き出し機能は無いため実際の書き出し失敗を
+# 防ぐものではない。
+PIVOT_PERFORMANCE_WARNING_THRESHOLD = 200  # Pivotが生成する列数がこれを超えたら、
+# Excel上限よりずっと手前でも警告対象とする目安値。Step3の各結果はブラウザ上に
+# HTMLテーブルとして全列プレビュー描画されるため、実務上は数百列を超えた時点で
+# 描画・スクロールが目に見えて重くなる。要調整であれば本定数を変更する。
+
+
+def evaluate_pivot_scale(info: Dict[str, Any]) -> Dict[str, Any]:
+    """Pivot検出情報から、実際に横持ち DataFrame を構築せずに生成列数を見積もり、
+    警告要否を判定する。detect_pivot_kv 発火直後・apply_pivot_kv 実行前に呼ぶ。
+
+    Returns:
+        {n_attrs, output_columns, exceeds_excel_limit, needs_warning}
+    """
+    n_attrs = len(info["attributes"])
+    output_columns = len(info["key_cols"]) + n_attrs
+    exceeds_excel_limit = output_columns > PIVOT_EXCEL_MAX_COLUMNS
+    needs_warning = exceeds_excel_limit or n_attrs > PIVOT_PERFORMANCE_WARNING_THRESHOLD
+    return {
+        "n_attrs": n_attrs,
+        "output_columns": output_columns,
+        "exceeds_excel_limit": exceeds_excel_limit,
+        "needs_warning": needs_warning,
+    }
+
 
 def detect_pivot_kv(df: Any) -> Optional[Dict[str, Any]]:
     """DataFrame が (属性名, 値) のペアで繰り返される縦持ち表であるかを検出する。
@@ -442,6 +469,36 @@ def apply_pivot_kv(df: Any, info: Dict[str, Any]) -> Any:
 
     out_cols = _dedup_columns([str(c) for c in list(key_cols) + list(attributes)])
     return pd.DataFrame(out_rows, columns=out_cols).reset_index(drop=True)
+
+
+def rank_pivot_attributes_by_frequency(df: Any, info: Dict[str, Any]) -> List[Tuple[str, int]]:
+    """pivot_info の attributes（初出順）を、属性列内の出現回数の降順に並べ替える。
+
+    変換規模の事前予測機能で「上位N種のみPivot」が選ばれた場合に、頻度上位N件を
+    特定するために使う（detect_pivot_kv の attributes は初出順であって頻度順では
+    ないため）。同数の場合は初出順を維持する（Python の sort は安定ソート）。
+    """
+    from collections import Counter
+
+    counts = Counter(str(v).strip() for v in df[info["attr_col"]])
+    return sorted(
+        ((a, counts.get(a, 0)) for a in info["attributes"]),
+        key=lambda pair: -pair[1],
+    )
+
+
+def limit_pivot_attributes(
+    info: Dict[str, Any], ranked: List[Tuple[str, int]], top_n: int
+) -> Dict[str, Any]:
+    """rank_pivot_attributes_by_frequency の結果から頻度上位 top_n 件を選び、
+    その属性のみを列に昇格するよう絞り込んだ新しい info を返す（元の info は
+    変更しない）。列の並びは絞り込み後も attributes の初出順を維持する
+    （頻度順に並べ替えると元の表と無関係な列順になり比較しづらいため）。
+    apply_pivot_kv はこの info をそのまま渡せば動作する（out_cols の生成が
+    attributes リストのみを参照するため、apply_pivot_kv 自体の変更は不要）。
+    """
+    top_set = {name for name, _ in ranked[:top_n]}
+    return {**info, "attributes": [a for a in info["attributes"] if a in top_set]}
 
 
 # ---------------------------------------------------------------------------
@@ -3510,7 +3567,305 @@ def _apply_col_split_defaults(t: Any, df: Any) -> Any:
     return apply_column_hierarchy_split(df, selected)
 
 
-def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
+def _apply_post_pivot_pipeline(
+    t: Any,
+    df: Any,
+    *,
+    pivot_fired: bool,
+    llm_client: Any,
+    llm_model: str,
+    new_tables: List[Any],
+) -> None:
+    """normalize_tables() のPivot判定より後、無効カラム削除までのStep3
+    per-table処理一式（軸展開・Transpose～無効カラム削除）を1テーブル分だけ
+    適用する。pivot_fired は detect_pivot_kv が発火したか（実際にPivotを
+    適用したかに関わらず）を表し、真の場合は軸展開・Transpose判定をスキップ
+    する（Pivot発火時は軸構造を持たないため。変換規模の事前予測機能で
+    「上位N種のみ」「中止」を選んだ場合も、発火した事実自体は変わらないため
+    同様にスキップする）。
+
+    normalize_tables() のメインループ本体と、変換規模の事前予測機能で保留に
+    なっていたテーブルの決定確定後（streamlit_ui/step3_normalize.py）の
+    両方から呼ばれる共通処理として抽出している。t を in-place で更新し、
+    うち分離が生成した内訳テーブルを new_tables に追加する
+    （new_tables の集計処理・tables への追加は呼び出し側の責務）。
+    """
+    from .models import DetectedTable
+
+    # 多段ヘッダーの検出と解決機能（軸展開）の構造判定は決定論的でLLMを
+    # 使わないため、Transposeより先に（無条件で）行っておく。①が書いた
+    # "_"連結済みの列名（例: "東京_売上"）は単一のエンティティ名のように
+    # 見えてしまい、Transpose判定用LLMが実際には多軸ヘッダーの表を
+    # 「向きが逆」と誤判定する可能性がある。誤判定されると
+    # transpose_result が真になり、以降②が対象外になって軸展開の
+    # 機会を永久に失ってしまうため、構造的に軸候補がある（＝すでに
+    # 多段ヘッダーとして解決すべき対象だと分かっている）表は
+    # Transpose判定そのものをスキップする。Pivot発火時も同様の理由で
+    # スキップする。
+    axis_info = (
+        detect_multi_axis_header(t.raw_header_rows, roles=t.raw_header_roles)
+        if t.raw_header_rows and not pivot_fired
+        else None
+    )
+    has_axis_structure = axis_info is not None and (
+        axis_info["candidate_idxs"] or axis_info["dropped_idxs"]
+    )
+
+    transpose_result = None
+    if not pivot_fired and not has_axis_structure:
+        transpose_result = detect_transpose(df, llm_client, llm_model)
+        if transpose_result:
+            t.pre_transpose_df = df
+            df = apply_transpose(df, transpose_result["entity_axis_name"])
+            t.transpose_info = transpose_result
+            t.post_transpose_df = df
+
+    # 多段ヘッダーの検出と解決機能（軸展開）: 単純統合の結果を、独立した
+    # カテゴリ軸の交差と判定できた場合のみ縦持ち展開で上書きする。
+    # Transpose適用時は raw_header_rows が元の（転置前の）列構造を指す
+    # ため対象外とする（上記のスキップにより、軸候補がある表では
+    # transpose_result は常に None になる）
+    if not transpose_result and axis_info is not None:
+        if axis_info["candidate_idxs"]:
+            axis_values = [
+                axis_info["values"][i] for i in axis_info["candidate_idxs"]
+            ]
+            axis_result = detect_dimension_axes(
+                axis_values, t.title, llm_client, llm_model
+            )
+            if axis_result is not None:
+                t.pre_multi_axis_df = df
+                df = apply_multi_axis_header(df, axis_info, axis_result)
+                t.multi_axis_info = {
+                    **axis_result,
+                    "dropped_labels": [
+                        axis_info["values"][i][0]
+                        for i in axis_info["dropped_idxs"]
+                        if axis_info["values"][i]
+                    ],
+                }
+            else:
+                # 軸候補は構造的に見つかったが、LLMが独立軸として妥当と
+                # 判定しなかった（または呼び出し失敗）。列名は複合列名の
+                # ままだが、少なくとも「偶然の一致ではなく構造的に妥当な
+                # 候補があった」ことは確定しているため、後段のWide_to_long
+                # 検出（Tier2）がこの情報を使って閾値を緩和できるようにする。
+                t.multi_axis_candidates_declined = True
+        elif axis_info["dropped_idxs"]:
+            # LLM不要: 除外可能な行（単一値の注記行・時系列の冗長な
+            # 上位グルーピング行）を除いた素直な列名に置き換える。
+            # これにより後段のクロス集計/Wide_to_long検出が複合列名に
+            # 阻害されず正しく機能するようになる。
+            surviving_idxs = [
+                i
+                for i in range(len(t.raw_header_rows))
+                if i not in axis_info["dropped_idxs"]
+            ]
+            if surviving_idxs:
+                surviving_rows = [
+                    axis_info["ffilled_rows"][i] for i in surviving_idxs
+                ]
+                surviving_roles = (
+                    [t.raw_header_roles[i] for i in surviving_idxs]
+                    if t.raw_header_roles
+                    else ["name"] * len(surviving_idxs)
+                )
+                merged_cols, used_local_idx = merge_header_rows(
+                    surviving_rows,
+                    surviving_roles,
+                    len(surviving_rows[0]),
+                )
+                new_cols = _dedup_columns(merged_cols)
+                df = df.copy()
+                df.columns = new_cols
+                used_original_idx = {surviving_idxs[li] for li in used_local_idx}
+                t.header_merge_discarded_row_indices = {
+                    i - 1
+                    for i in range(1, len(t.raw_header_rows))
+                    if i not in used_original_idx
+                }
+
+    # カラム名内階層区切りの分離: 1.〜4.が raw_header_rows を基準に列構造を
+    # 確定させた後に行う（先に列を増やすと raw_header_rows と df の列数が
+    # ずれ、軸展開が適用できなくなる）。以降の処理および Wide_to_long 検出は
+    # 列名を手掛かりにするため、ここで列名を原子的にしておく。
+    df = _apply_col_split_defaults(t, df)
+
+    # 括弧書き注釈の分離: 上記と同じく1列に押し込まれた複数属性をほどく
+    # 処理のため隣接して行う。検出（括弧注釈の抽出・単位混在の除外）は
+    # 決定論的だが、新カラム名の決定と分離の妥当性判定はLLMに委ねる
+    # （失敗・否定時は分離しない）。
+    paren_result = detect_paren_annotations(df)
+    if paren_result:
+        named = detect_annotation_column_names(
+            paren_result["columns"], t.title, llm_client, llm_model
+        )
+        if named:
+            t.pre_paren_split_df = df
+            df = apply_paren_annotations(df, named)
+            t.paren_split_info = {
+                "columns": [
+                    {
+                        "source_col": c["source_col"],
+                        "new_col": c["new_col"],
+                        "distinct_annotations": c["distinct_annotations"],
+                        "match_count": c["match_count"],
+                        "reasoning": c["reasoning"],
+                    }
+                    for c in named
+                ]
+            }
+            t.post_paren_split_df = df
+
+    # 階層圧縮カラムの展開: 上記と同じく1列に押し込まれた情報をほどく
+    # 処理のため隣接して行う。ffill（前方補完）より前に行い、非該当
+    # レベルは空文字で埋める（None だと後続の ffill が親レベル行の
+    # 空欄を後続行の値で埋めてしまい、階層構造が壊れるため）。
+    df = _apply_hier_expand_defaults(t, df, llm_client, llm_model)
+
+    pre_fill_df_candidate = df
+    df, filled_cols = fill_grouping_cols(df)
+    t.filled_cols = filled_cols
+    t.pre_fill_df = pre_fill_df_candidate if filled_cols else None
+    t.post_fill_df = df if filled_cols else None
+
+    uchi_info = detect_uchi_breakdown(df)
+    uchi_protected_indices: set = set()
+    if uchi_info:
+        t.pre_uchi_split_df = df
+        df, breakdown_df, uchi_protected_indices, uchi_integrity = apply_uchi_split(
+            df, uchi_info
+        )
+        t.uchi_split_info = uchi_info
+        t.uchi_breakdown_df = breakdown_df
+        t.uchi_integrity_check = uchi_integrity
+
+        child_id = f"{t.table_id}_uchi_breakdown"
+        child_title = f"{t.title or t.table_id} 内訳テーブル"
+        new_tables.append(
+            DetectedTable(
+                table_id=child_id,
+                sheet_name=t.sheet_name,
+                start_row=t.start_row,
+                end_row=t.end_row,
+                start_col=t.start_col,
+                end_col=t.end_col,
+                df=breakdown_df,
+                title=child_title,
+                is_step3_derived=True,
+            )
+        )
+
+    t.df = _apply_agg_and_unit_split(t, df, protected_indices=uchi_protected_indices)
+
+    # 無効カラム（全欠損列・無名列）の検出・既定削除。他の整形処理と
+    # 同様に既定では自動適用し、UI側でユーザーが列ごとに調整できる
+    # （pre_invalid_col_df を保持するため不可逆にはならない）。
+    t.df = _apply_invalid_col_defaults(t, t.df)
+
+
+def _apply_cross_table_detection(
+    t: Any,
+    llm_client: Any,
+    llm_model: str,
+    filename: Optional[str],
+    external_meta_cache: Dict[Tuple[Optional[str], str, Tuple[str, ...], str], Optional[Dict[str, Any]]],
+) -> None:
+    """1テーブル分のクロス集計形式（Wide_to_long/クロス集計）検出・縦持ち変換
+    ＋ファイル外メタデータ抽出を行う。normalize_tables() の全テーブル一括
+    ループと、変換規模の事前予測機能で保留になっていたテーブルの決定確定後
+    （streamlit_ui/step3_normalize.py）の両方から呼ばれる共通処理として抽出。
+    external_meta_cache は呼び出し元がライフタイムを管理する（保留解消の
+    再実行でも同じ dict を渡すことで、(filename, sheet_name, dim_cols,
+    axis_name) が一致するテーブル間でLLM呼び出しをキャッシュ共有できる）。
+    """
+    if t.df is None or t.df.empty:
+        return
+
+    def _get_external_meta(
+        t: Any, dim_cols: List[str], axis_name: str, value_name: str
+    ) -> Optional[Dict[str, Any]]:
+        cache_key = (filename, t.sheet_name, tuple(dim_cols), axis_name)
+        if cache_key not in external_meta_cache:
+            external_meta_cache[cache_key] = extract_external_metadata(
+                filename, t.sheet_name, t.title, dim_cols, axis_name, value_name,
+                llm_client, llm_model,
+            )
+        return external_meta_cache[cache_key]
+
+    wtl_info = detect_wide_to_long(
+        t.df, title=t.title, filename=filename, client=llm_client, model=llm_model,
+        relaxed=t.multi_axis_candidates_declined,
+    )
+    cross_info = (
+        None if wtl_info else detect_cross_table(
+            t.df, title=t.title, filename=filename,
+            client=llm_client, model=llm_model,
+        )
+    )
+    if wtl_info is None and cross_info is None:
+        return
+
+    target_info = wtl_info if wtl_info else cross_info
+    if wtl_info:
+        axis_name = wtl_info.get("axis_var_name") or "区分"
+        value_name = ", ".join(wtl_info.get("indicators", [])) or "値"
+    else:
+        axis_name = cross_info.get("var_name") or "区分"
+        value_name = cross_info.get("value_name") or "値"
+
+    meta_result = _get_external_meta(
+        t, list(target_info["label_cols"]), axis_name, value_name
+    )
+    meta_items = meta_result.get("items") if meta_result else None
+    if meta_items:
+        t.pre_external_meta_df = t.df
+        t.df, ordered_label_cols = apply_external_metadata(
+            t.df, meta_items, target_info["label_cols"], axis_name
+        )
+        t.external_meta_info = {
+            "columns": meta_items,
+            "filename": filename,
+            "sheet_name": t.sheet_name,
+            "reasoning": meta_result.get("reasoning", "") if meta_result else "",
+        }
+        target_info["label_cols"] = ordered_label_cols
+        # ファイル外メタデータから年度を抽出済みの場合、既存のクロス集計側の年補完
+        # （_extract_year_context 由来の「年」列挿入）による二重付与を防ぐ。
+        if cross_info is not None and any(m.get("is_year") for m in meta_items):
+            cross_info["year_context"] = None
+
+    if wtl_info:
+        t.pre_wide_to_long_df = t.df
+        t.wide_to_long_info = wtl_info
+        stacked = stack_wide_to_long(t.df, wtl_info)
+        axis_var_name = wtl_info.get("axis_var_name", "")
+        if axis_var_name and axis_var_name in stacked.columns:
+            agg_mask = stacked[axis_var_name].astype(str).apply(_is_agg_label)
+            if agg_mask.any():
+                stacked = stacked[~agg_mask].reset_index(drop=True)
+        t.stacked_df = stacked
+        return
+
+    info = cross_info
+    if info:
+        t.stack_info = info
+        stacked = stack_cross_table(t.df, info)
+        var_name = info.get("var_name", "")
+        if var_name and var_name in stacked.columns:
+            agg_mask = stacked[var_name].astype(str).apply(_is_agg_label)
+            if agg_mask.any():
+                stacked = stacked[~agg_mask].reset_index(drop=True)
+        t.stacked_df = stacked
+
+
+def normalize_tables(
+    tables: List[Any],
+    filename: Optional[str] = None,
+    external_meta_cache: Optional[
+        Dict[Tuple[Optional[str], str, Tuple[str, ...], str], Optional[Dict[str, Any]]]
+    ] = None,
+) -> None:
     """検出済みテーブル（DetectedTable）に Step3 の整形処理一式を適用する。
 
     各テーブルに対し、次の順序で処理する（各処理の出力が次の処理の入力になる）:
@@ -3523,7 +3878,15 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
          そのまま列名に採用するだけで命名判断が不要なためLLMは使わない。
          1.が確定させた列構造を作り変える純構造変換のため、3./4.より前に行う。
          発火した表は軸構造を持たないため、以降の軸展開・Transpose判定は
-         対象外になる
+         対象外になる。変換規模の事前予測機能: 生成列数が
+         PIVOT_PERFORMANCE_WARNING_THRESHOLD を超える場合は Pivot を適用せず
+         t.pivot_scale_warning に予測結果を記録し、このテーブルの3.以降の
+         処理（クロス集計検出まで含む）を完全に保留する。ユーザーが
+         streamlit_ui/step3_normalize.py で続行/上位N種のみ/中止を選択して
+         t.pivot_decision を確定させるまで t.df は未Pivotの縦持ちのまま
+         残る（決定確定後は _apply_post_pivot_pipeline/
+         _apply_cross_table_detection をそのテーブルにだけ再度適用して
+         保留を解消する）
       3. Transpose検出・変換（LLM、step3_normalize_llm）— 他の処理はこの表が
          正しい向き（エンティティ＝行、属性＝列）であることを前提とするため
          1.・2.の直後に行う。ただし、4.の構造判定（決定論的・LLM不使用）を
@@ -3635,183 +3998,31 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         # ため、軸展開判定・Transpose判定より前に行う。発火した表は KV ペア
         # 表（2列 or キー列+2列）であり多段ヘッダー軸構造を持たないため、
         # 以降の軸展開・Transpose判定は対象外にする。
+        #
+        # 変換規模の事前予測機能: 生成列数が閾値を超える場合、ユーザーが
+        # 続行/上位N種のみ/中止を選ぶまでこのテーブルの以降のStep3処理
+        # （軸展開〜クロス集計検出）を完全に保留する。UI側の決定確定処理
+        # （streamlit_ui/step3_normalize.py の _resolve_pivot_scale_decision）が
+        # _apply_post_pivot_pipeline/_apply_cross_table_detection を直接呼んで
+        # 保留を解消する。
         pivot_result = detect_pivot_kv(df)
         if pivot_result:
             t.pre_pivot_df = df
-            df = apply_pivot_kv(df, pivot_result)
             t.pivot_info = pivot_result
+            scale = evaluate_pivot_scale(pivot_result)
+            if scale["needs_warning"]:
+                t.pivot_scale_warning = scale
+                t.df = df.copy()
+                continue
+            df = apply_pivot_kv(df, pivot_result)
             t.post_pivot_df = df
 
-        # 多段ヘッダーの検出と解決機能（軸展開）の構造判定は決定論的でLLMを
-        # 使わないため、Transposeより先に（無条件で）行っておく。①が書いた
-        # "_"連結済みの列名（例: "東京_売上"）は単一のエンティティ名のように
-        # 見えてしまい、Transpose判定用LLMが実際には多軸ヘッダーの表を
-        # 「向きが逆」と誤判定する可能性がある。誤判定されると
-        # transpose_result が真になり、以降②が対象外になって軸展開の
-        # 機会を永久に失ってしまうため、構造的に軸候補がある（＝すでに
-        # 多段ヘッダーとして解決すべき対象だと分かっている）表は
-        # Transpose判定そのものをスキップする。Pivot発火時も同様の理由で
-        # スキップする。
-        axis_info = (
-            detect_multi_axis_header(t.raw_header_rows, roles=t.raw_header_roles)
-            if t.raw_header_rows and not pivot_result
-            else None
+        _apply_post_pivot_pipeline(
+            t, df,
+            pivot_fired=bool(pivot_result),
+            llm_client=llm_client, llm_model=llm_model,
+            new_tables=new_tables,
         )
-        has_axis_structure = axis_info is not None and (
-            axis_info["candidate_idxs"] or axis_info["dropped_idxs"]
-        )
-
-        transpose_result = None
-        if not pivot_result and not has_axis_structure:
-            transpose_result = detect_transpose(df, llm_client, llm_model)
-            if transpose_result:
-                t.pre_transpose_df = df
-                df = apply_transpose(df, transpose_result["entity_axis_name"])
-                t.transpose_info = transpose_result
-                t.post_transpose_df = df
-
-        # 多段ヘッダーの検出と解決機能（軸展開）: 単純統合の結果を、独立した
-        # カテゴリ軸の交差と判定できた場合のみ縦持ち展開で上書きする。
-        # Transpose適用時は raw_header_rows が元の（転置前の）列構造を指す
-        # ため対象外とする（上記のスキップにより、軸候補がある表では
-        # transpose_result は常に None になる）
-        if not transpose_result and axis_info is not None:
-            if axis_info["candidate_idxs"]:
-                axis_values = [
-                    axis_info["values"][i] for i in axis_info["candidate_idxs"]
-                ]
-                axis_result = detect_dimension_axes(
-                    axis_values, t.title, llm_client, llm_model
-                )
-                if axis_result is not None:
-                    t.pre_multi_axis_df = df
-                    df = apply_multi_axis_header(df, axis_info, axis_result)
-                    t.multi_axis_info = {
-                        **axis_result,
-                        "dropped_labels": [
-                            axis_info["values"][i][0]
-                            for i in axis_info["dropped_idxs"]
-                            if axis_info["values"][i]
-                        ],
-                    }
-                else:
-                    # 軸候補は構造的に見つかったが、LLMが独立軸として妥当と
-                    # 判定しなかった（または呼び出し失敗）。列名は複合列名の
-                    # ままだが、少なくとも「偶然の一致ではなく構造的に妥当な
-                    # 候補があった」ことは確定しているため、後段のWide_to_long
-                    # 検出（Tier2）がこの情報を使って閾値を緩和できるようにする。
-                    t.multi_axis_candidates_declined = True
-            elif axis_info["dropped_idxs"]:
-                # LLM不要: 除外可能な行（単一値の注記行・時系列の冗長な
-                # 上位グルーピング行）を除いた素直な列名に置き換える。
-                # これにより後段のクロス集計/Wide_to_long検出が複合列名に
-                # 阻害されず正しく機能するようになる。
-                surviving_idxs = [
-                    i
-                    for i in range(len(t.raw_header_rows))
-                    if i not in axis_info["dropped_idxs"]
-                ]
-                if surviving_idxs:
-                    surviving_rows = [
-                        axis_info["ffilled_rows"][i] for i in surviving_idxs
-                    ]
-                    surviving_roles = (
-                        [t.raw_header_roles[i] for i in surviving_idxs]
-                        if t.raw_header_roles
-                        else ["name"] * len(surviving_idxs)
-                    )
-                    merged_cols, used_local_idx = merge_header_rows(
-                        surviving_rows,
-                        surviving_roles,
-                        len(surviving_rows[0]),
-                    )
-                    new_cols = _dedup_columns(merged_cols)
-                    df = df.copy()
-                    df.columns = new_cols
-                    used_original_idx = {surviving_idxs[li] for li in used_local_idx}
-                    t.header_merge_discarded_row_indices = {
-                        i - 1
-                        for i in range(1, len(t.raw_header_rows))
-                        if i not in used_original_idx
-                    }
-
-        # カラム名内階層区切りの分離: 1.〜4.が raw_header_rows を基準に列構造を
-        # 確定させた後に行う（先に列を増やすと raw_header_rows と df の列数が
-        # ずれ、軸展開が適用できなくなる）。以降の処理および Wide_to_long 検出は
-        # 列名を手掛かりにするため、ここで列名を原子的にしておく。
-        df = _apply_col_split_defaults(t, df)
-
-        # 括弧書き注釈の分離: 上記と同じく1列に押し込まれた複数属性をほどく
-        # 処理のため隣接して行う。検出（括弧注釈の抽出・単位混在の除外）は
-        # 決定論的だが、新カラム名の決定と分離の妥当性判定はLLMに委ねる
-        # （失敗・否定時は分離しない）。
-        paren_result = detect_paren_annotations(df)
-        if paren_result:
-            named = detect_annotation_column_names(
-                paren_result["columns"], t.title, llm_client, llm_model
-            )
-            if named:
-                t.pre_paren_split_df = df
-                df = apply_paren_annotations(df, named)
-                t.paren_split_info = {
-                    "columns": [
-                        {
-                            "source_col": c["source_col"],
-                            "new_col": c["new_col"],
-                            "distinct_annotations": c["distinct_annotations"],
-                            "match_count": c["match_count"],
-                            "reasoning": c["reasoning"],
-                        }
-                        for c in named
-                    ]
-                }
-                t.post_paren_split_df = df
-
-        # 階層圧縮カラムの展開: 上記と同じく1列に押し込まれた情報をほどく
-        # 処理のため隣接して行う。ffill（前方補完）より前に行い、非該当
-        # レベルは空文字で埋める（None だと後続の ffill が親レベル行の
-        # 空欄を後続行の値で埋めてしまい、階層構造が壊れるため）。
-        df = _apply_hier_expand_defaults(t, df, llm_client, llm_model)
-
-        pre_fill_df_candidate = df
-        df, filled_cols = fill_grouping_cols(df)
-        t.filled_cols = filled_cols
-        t.pre_fill_df = pre_fill_df_candidate if filled_cols else None
-        t.post_fill_df = df if filled_cols else None
-
-        uchi_info = detect_uchi_breakdown(df)
-        uchi_protected_indices: set = set()
-        if uchi_info:
-            t.pre_uchi_split_df = df
-            df, breakdown_df, uchi_protected_indices, uchi_integrity = apply_uchi_split(
-                df, uchi_info
-            )
-            t.uchi_split_info = uchi_info
-            t.uchi_breakdown_df = breakdown_df
-            t.uchi_integrity_check = uchi_integrity
-
-            child_id = f"{t.table_id}_uchi_breakdown"
-            child_title = f"{t.title or t.table_id} 内訳テーブル"
-            new_tables.append(
-                DetectedTable(
-                    table_id=child_id,
-                    sheet_name=t.sheet_name,
-                    start_row=t.start_row,
-                    end_row=t.end_row,
-                    start_col=t.start_col,
-                    end_col=t.end_col,
-                    df=breakdown_df,
-                    title=child_title,
-                    is_step3_derived=True,
-                )
-            )
-
-        t.df = _apply_agg_and_unit_split(t, df, protected_indices=uchi_protected_indices)
-
-        # 無効カラム（全欠損列・無名列）の検出・既定削除。他の整形処理と
-        # 同様に既定では自動適用し、UI側でユーザーが列ごとに調整できる
-        # （pre_invalid_col_df を保持するため不可逆にはならない）。
-        t.df = _apply_invalid_col_defaults(t, t.df)
 
     # ── うち内訳テーブルにも集計除去・単位分離を適用する ────────────
     # Transpose・グルーピング列前方補完・うち検出自身は対象外（既に整形済みの
@@ -3825,97 +4036,19 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
     # ── クロス集計検出（テーブル間で独立、全テーブル走査後に一括適用）────
     # Wide_to_long（軸×複数指標の複合列名。軸は時系列に限らない）を先に試す。
     # 指標が1種類のみの場合は None を返す設計のため、detect_cross_table
-    # （単一指標）とは互いに排他的に発火する。
-    #
-    # ファイル外メタデータからの派生カラム生成機能（ファイル名・シート名にしか
-    # 現れない付帯情報の抽出）は、縦持ち変換される表にのみ適用する（対象外の
-    # 表にまで無条件で列を増やすのは過剰なため）。よってここで縦持ち検出
-    # （wtl_info/cross_info）が確定した後にのみ実行する。各派生カラムは
-    # 既存の区分列・集計軸との包含関係（例: サービス名→帳票プランの前、
-    # 年度→月の前）に基づいて LLM が判定した位置（anchor/position）へ
-    # apply_external_metadata が差し込み、返る新しい区分列の並びを
-    # label_cols に反映することで、既存の stack_wide_to_long/stack_cross_table
-    # がそのまま縦持ち後もその並びを保持する。LLM 呼び出しは
-    # (filename, sheet_name, 区分列構成, 集計軸名) 単位でキャッシュし、
-    # 同一シート内で同じ表構造の複数テーブルは使い回す。
-    external_meta_cache: Dict[Tuple[Optional[str], str, Tuple[str, ...], str], Optional[Dict[str, Any]]] = {}
-
-    def _get_external_meta(
-        t: Any, dim_cols: List[str], axis_name: str, value_name: str
-    ) -> Optional[Dict[str, Any]]:
-        cache_key = (filename, t.sheet_name, tuple(dim_cols), axis_name)
-        if cache_key not in external_meta_cache:
-            external_meta_cache[cache_key] = extract_external_metadata(
-                filename, t.sheet_name, t.title, dim_cols, axis_name, value_name,
-                llm_client, llm_model,
-            )
-        return external_meta_cache[cache_key]
+    # （単一指標）とは互いに排他的に発火する。ファイル外メタデータからの
+    # 派生カラム生成（LLM呼び出し）は (filename, sheet_name, 区分列構成,
+    # 集計軸名) 単位でキャッシュし、同一シート内の同じ表構造の複数テーブルで
+    # 使い回す（_apply_cross_table_detection 内部の _get_external_meta 参照）。
+    # external_meta_cache が呼び出し元から渡されなかった場合は本呼び出し限りの
+    # 新規dictにする（変換規模の事前予測機能の保留解消時は
+    # streamlit_ui/step3_normalize.py がセッション永続dictを渡し、
+    # 複数回の解消にまたがってキャッシュを共有する）。
+    if external_meta_cache is None:
+        external_meta_cache = {}
 
     for t in tables:
-        if t.df is None or t.df.empty:
+        if t.pivot_scale_warning is not None and t.pivot_decision is None:
+            # 変換規模の事前予測機能で保留中のテーブルはクロス集計検出も対象外
             continue
-
-        wtl_info = detect_wide_to_long(
-            t.df, title=t.title, filename=filename, client=llm_client, model=llm_model,
-            relaxed=t.multi_axis_candidates_declined,
-        )
-        cross_info = (
-            None if wtl_info else detect_cross_table(
-                t.df, title=t.title, filename=filename,
-                client=llm_client, model=llm_model,
-            )
-        )
-        if wtl_info is None and cross_info is None:
-            continue
-
-        target_info = wtl_info if wtl_info else cross_info
-        if wtl_info:
-            axis_name = wtl_info.get("axis_var_name") or "区分"
-            value_name = ", ".join(wtl_info.get("indicators", [])) or "値"
-        else:
-            axis_name = cross_info.get("var_name") or "区分"
-            value_name = cross_info.get("value_name") or "値"
-
-        meta_result = _get_external_meta(
-            t, list(target_info["label_cols"]), axis_name, value_name
-        )
-        meta_items = meta_result.get("items") if meta_result else None
-        if meta_items:
-            t.pre_external_meta_df = t.df
-            t.df, ordered_label_cols = apply_external_metadata(
-                t.df, meta_items, target_info["label_cols"], axis_name
-            )
-            t.external_meta_info = {
-                "columns": meta_items,
-                "filename": filename,
-                "sheet_name": t.sheet_name,
-                "reasoning": meta_result.get("reasoning", "") if meta_result else "",
-            }
-            target_info["label_cols"] = ordered_label_cols
-            # ファイル外メタデータから年度を抽出済みの場合、既存のクロス集計側の年補完
-            # （_extract_year_context 由来の「年」列挿入）による二重付与を防ぐ。
-            if cross_info is not None and any(m.get("is_year") for m in meta_items):
-                cross_info["year_context"] = None
-
-        if wtl_info:
-            t.pre_wide_to_long_df = t.df
-            t.wide_to_long_info = wtl_info
-            stacked = stack_wide_to_long(t.df, wtl_info)
-            axis_var_name = wtl_info.get("axis_var_name", "")
-            if axis_var_name and axis_var_name in stacked.columns:
-                agg_mask = stacked[axis_var_name].astype(str).apply(_is_agg_label)
-                if agg_mask.any():
-                    stacked = stacked[~agg_mask].reset_index(drop=True)
-            t.stacked_df = stacked
-            continue
-
-        info = cross_info
-        if info:
-            t.stack_info = info
-            stacked = stack_cross_table(t.df, info)
-            var_name = info.get("var_name", "")
-            if var_name and var_name in stacked.columns:
-                agg_mask = stacked[var_name].astype(str).apply(_is_agg_label)
-                if agg_mask.any():
-                    stacked = stacked[~agg_mask].reset_index(drop=True)
-            t.stacked_df = stacked
+        _apply_cross_table_detection(t, llm_client, llm_model, filename, external_meta_cache)

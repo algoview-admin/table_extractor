@@ -61,6 +61,80 @@ def test_detect_and_apply_pivot_kv():
     assert out.loc[out["支店"] == "大阪", "利益"].iloc[0] == 15
 
 
+# --- 変換規模の事前予測機能: evaluate_pivot_scale / rank・limit_pivot_attributes --
+
+
+def test_evaluate_pivot_scale_small_no_warning():
+    info = {"key_cols": ["支店"], "attributes": ["売上", "利益"]}
+    scale = det.evaluate_pivot_scale(info)
+    assert scale == {
+        "n_attrs": 2, "output_columns": 3,
+        "exceeds_excel_limit": False, "needs_warning": False,
+    }
+
+
+def test_evaluate_pivot_scale_performance_warning_boundary():
+    # 閾値ちょうどは警告しない、閾値+1は警告する（境界値）
+    at_threshold = {"key_cols": [], "attributes": [f"a{i}" for i in range(det.PIVOT_PERFORMANCE_WARNING_THRESHOLD)]}
+    assert det.evaluate_pivot_scale(at_threshold)["needs_warning"] is False
+
+    over_threshold = {"key_cols": [], "attributes": [f"a{i}" for i in range(det.PIVOT_PERFORMANCE_WARNING_THRESHOLD + 1)]}
+    scale = det.evaluate_pivot_scale(over_threshold)
+    assert scale["needs_warning"] is True
+    assert scale["exceeds_excel_limit"] is False
+
+
+def test_evaluate_pivot_scale_exceeds_excel_limit():
+    info = {"key_cols": [], "attributes": [f"a{i}" for i in range(det.PIVOT_EXCEL_MAX_COLUMNS + 1)]}
+    scale = det.evaluate_pivot_scale(info)
+    assert scale["exceeds_excel_limit"] is True
+    assert scale["needs_warning"] is True
+
+
+def test_rank_pivot_attributes_by_frequency():
+    import pandas as pd
+    df = pd.DataFrame({"attr": ["A", "B", "A", "C", "A", "B"], "value": [1, 2, 3, 4, 5, 6]})
+    info = {"attr_col": "attr", "attributes": ["A", "B", "C"]}
+    ranked = det.rank_pivot_attributes_by_frequency(df, info)
+    assert ranked == [("A", 3), ("B", 2), ("C", 1)]
+
+
+def test_limit_pivot_attributes_preserves_original_order():
+    info = {"attributes": ["A", "B", "C", "D"]}
+    ranked = [("B", 5), ("D", 3), ("A", 2), ("C", 1)]
+    limited = det.limit_pivot_attributes(info, ranked, top_n=2)
+    # 頻度上位2件はB,Dだが、列順は元のattributes初出順（A,B,C,D）の中で
+    # B,Dのみ残した順序になる（頻度順に並べ替えないことを確認）
+    assert limited["attributes"] == ["B", "D"]
+
+
+def test_normalize_tables_blocks_large_pivot(monkeypatch):
+    # 変換規模の事前予測機能: PIVOT_PERFORMANCE_WARNING_THRESHOLDを超えるPivotは
+    # normalize_tables()内で自動適用されず、以降のStep3処理（うち分離〜
+    # クロス集計検出）が完全に保留されることをend-to-endで検証する。
+    # このテーブルはブロックされるため実際のLLM呼び出しは発生しない
+    # （client未設定を許容するのはこの理由のため、テスト時はmake_transpose_client
+    # 自体をモックしてAPI認証情報を不要にする）。
+    monkeypatch.setattr(det, "make_transpose_client", lambda: (None, None))
+
+    tables = tables_by_sheet("step3_pivot_scale_test.xlsx")
+    t = tables["PivotScale"]
+    all_tables = [t]
+    det.normalize_tables(all_tables, "step3_pivot_scale_test.xlsx")
+
+    assert t.pivot_scale_warning is not None
+    assert t.pivot_scale_warning["n_attrs"] == 201
+    assert t.pivot_scale_warning["needs_warning"] is True
+    assert t.pivot_decision is None
+    assert list(t.df.columns) == ["拠点", "属性", "値"]
+    assert len(t.df) == 402
+    assert t.uchi_split_info is None
+    assert t.invalid_col_candidates is None
+    assert t.wide_to_long_info is None
+    assert t.stack_info is None
+    assert len(all_tables) == 1  # うち分離等が走っていないため派生テーブルも増えない
+
+
 # --- C3: 多段ヘッダー軸展開（構造検出のみ） ----------------------------------
 
 

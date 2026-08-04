@@ -9,10 +9,19 @@ import streamlit.components.v1 as components
 from streamlit_ui.shared import _go_to, _inject_splitter_js, _splitter_marker
 from src.models import DetectedTable
 from src.step3_normalize_determ import (
+    PIVOT_EXCEL_MAX_COLUMNS,
+    _apply_agg_and_unit_split,
+    _apply_cross_table_detection,
+    _apply_invalid_col_defaults,
+    _apply_post_pivot_pipeline,
     _is_agg_label,
     apply_column_hierarchy_split,
+    apply_pivot_kv,
+    limit_pivot_attributes,
     normalize_tables,
+    rank_pivot_attributes_by_frequency,
 )
+from src.step3_normalize_llm import make_transpose_client
 
 _TH_STYLE = (
     "position:sticky;top:0;z-index:2;"
@@ -626,6 +635,11 @@ def _render_pivot_body(t: "DetectedTable") -> None:
     attr_html = " ".join(_badge(c, "156,163,175") for c in [attr_col, value_col])
     new_col_html = " ".join(_badge(c, "52,211,153") for c in attributes)
 
+    limited_n = getattr(t, "pivot_limited_to_top_n", None)
+    if limited_n is not None:
+        original_n = (t.pivot_scale_warning or {}).get("n_attrs", len(attributes))
+        st.caption(f"✂️ 変換規模の事前予測により上位 {limited_n} 種のみ適用（検出時 {original_n} 種類中）")
+
     st.markdown(
         "<div style='margin:4px 0 12px;line-height:2'>"
         f"キー列: {key_html}<br>"
@@ -685,7 +699,18 @@ def _render_pivot_body_html(t: "DetectedTable") -> str:
     key_html = " ".join(_badge(c, "156,163,175") for c in key_cols) or "（なし）"
     attr_html = " ".join(_badge(c, "156,163,175") for c in [attr_col, value_col])
     new_col_html = " ".join(_badge(c, "52,211,153") for c in attributes)
+
+    limited_n = getattr(t, "pivot_limited_to_top_n", None)
+    limited_note = ""
+    if limited_n is not None:
+        original_n = (t.pivot_scale_warning or {}).get("n_attrs", len(attributes))
+        limited_note = (
+            f"<p style='margin:0 0 6px;font-size:12px;opacity:0.8'>"
+            f"✂️ 変換規模の事前予測により上位 {limited_n} 種のみ適用"
+            f"（検出時 {original_n} 種類中）</p>"
+        )
     meta_html = (
+        limited_note +
         "<div style='margin:4px 0 12px;line-height:2'>"
         f"キー列: {key_html}<br>"
         f"属性列/値列: {attr_html}<br>"
@@ -706,6 +731,115 @@ def _render_pivot_body_html(t: "DetectedTable") -> str:
         "</div>"
     )
     return meta_html + grid_html
+
+
+def _resolve_pivot_scale_decision(
+    t: "DetectedTable", choice: str, top_n: int, tables: List["DetectedTable"]
+) -> None:
+    """変換規模の事前予測プロンプトでのユーザー決定を確定し、保留していた
+    このテーブル（および新規生成された内訳テーブル）のStep3後続処理・
+    クロス集計検出をまとめて実行する。tables は st.session_state.detected_tables
+    と同一参照であるため、新規テーブルの追加はそのままセッション状態に反映される。
+    """
+    df = t.pre_pivot_df
+    info = t.pivot_info
+    llm_client, llm_model = make_transpose_client()
+
+    if choice == "cancel":
+        df = df.copy()
+        t.pivot_decision = "cancel"
+    else:
+        if choice == "limit":
+            ranked = rank_pivot_attributes_by_frequency(df, info)
+            info = limit_pivot_attributes(info, ranked, top_n)
+            t.pivot_info = info
+            t.pivot_limited_to_top_n = top_n
+            t.pivot_decision = "limit"
+        else:
+            t.pivot_decision = "continue"
+        df = apply_pivot_kv(df, info)
+        t.post_pivot_df = df
+
+    new_tables: List["DetectedTable"] = []
+    _apply_post_pivot_pipeline(
+        t, df, pivot_fired=True,
+        llm_client=llm_client, llm_model=llm_model,
+        new_tables=new_tables,
+    )
+    for ct in new_tables:
+        ct.df = _apply_agg_and_unit_split(ct, ct.df)
+        ct.df = _apply_invalid_col_defaults(ct, ct.df)
+    tables.extend(new_tables)
+
+    cache = st.session_state.setdefault("pivot_external_meta_cache", {})
+    for target in [t, *new_tables]:
+        _apply_cross_table_detection(
+            target, llm_client, llm_model, st.session_state.filename, cache
+        )
+
+
+def _render_pivot_scale_prompt(t: "DetectedTable") -> None:
+    """変換規模の事前予測結果を表示し、st.form経由で続行/上位N/中止の決定を
+    受け取るブロッキングUI。送信されるまで、このテーブルの後続Step3処理は
+    normalize_tables()側で保留され続ける。"""
+    warn = t.pivot_scale_warning
+    info = t.pivot_info
+    n_attrs = warn["n_attrs"]
+
+    limit_note = (
+        f"Excelの列上限（{PIVOT_EXCEL_MAX_COLUMNS}列）を超えます"
+        if warn["exceeds_excel_limit"]
+        else f"Excelの列上限（{PIVOT_EXCEL_MAX_COLUMNS}列）は超えませんが、"
+        "処理・プレビュー表示が低速になる可能性があります"
+    )
+    st.warning(
+        f"属性列 `{info['attr_col']}` に **{n_attrs}** 種類の値があります。"
+        f"Pivotを実行すると **{warn['output_columns']}** 列のテーブルが"
+        f"生成されます。{limit_note}。"
+    )
+
+    with st.form(key=f"pivot_scale_form_{t.table_id}"):
+        choice = st.radio(
+            "この表のPivotをどう処理しますか？",
+            options=["continue", "limit", "cancel"],
+            format_func=lambda v: {
+                "continue": f"続行（{n_attrs} 種類すべてPivotする）",
+                "limit": "上位N種のみPivotする",
+                "cancel": "中止（元の縦持ち形式のまま残す）",
+            }[v],
+            key=f"pivot_scale_choice_{t.table_id}",
+        )
+        top_n = st.number_input(
+            "上位何種類をPivotしますか？（「上位N種のみ」選択時のみ使用）",
+            min_value=1, max_value=n_attrs, value=min(50, n_attrs),
+            key=f"pivot_scale_topn_{t.table_id}",
+        )
+        submitted = st.form_submit_button("この表の処理を確定する")
+
+    if submitted:
+        _resolve_pivot_scale_decision(
+            t, choice, int(top_n), st.session_state.detected_tables
+        )
+        st.rerun()
+
+
+def _render_pivot_scale_decision_note(t: "DetectedTable") -> None:
+    """確定済みの変換規模の事前予測の決定を1行の監査ログとして表示する。"""
+    warn = t.pivot_scale_warning or {}
+    n_attrs = warn.get("n_attrs", 0)
+    label = f"**`{t.table_id}`**" + (f" 🏷️ `{t.title}`" if t.title else "")
+    if t.pivot_decision == "cancel":
+        st.markdown(f"{label} — ❌ 中止（元の縦持ち形式のまま。属性 {n_attrs} 種類）")
+    elif t.pivot_decision == "limit":
+        st.markdown(
+            f"{label} — ✂️ 上位 **{t.pivot_limited_to_top_n}** 種のみPivot適用"
+            f"（検出時 {n_attrs} 種類中。詳細は下記「Pivot 検出と変換機能」参照）"
+        )
+    else:
+        st.markdown(
+            f"{label} — ✅ 続行（{n_attrs} 種類すべてPivot適用。"
+            "詳細は下記「Pivot 検出と変換機能」参照）"
+        )
 
 
 def _paren_split_badge(text: str, color: str) -> str:
@@ -2290,15 +2424,33 @@ def step_format():
     if not st.session_state.get("tables_normalized"):
         with st.spinner("テーブルを整形中です..."):
             try:
-                normalize_tables(tables, st.session_state.filename)
+                cache = st.session_state.setdefault("pivot_external_meta_cache", {})
+                normalize_tables(tables, st.session_state.filename, external_meta_cache=cache)
                 st.session_state.tables_normalized = True
             except Exception as e:
                 st.error(f"❌ テーブル整形エラー: {e}")
                 return
 
+    tables_pending_pivot_decision = [
+        t for t in tables
+        if getattr(t, "pivot_scale_warning", None) is not None
+        and getattr(t, "pivot_decision", None) is None
+    ]
+    resolved_pivot_scale_tables = [
+        t for t in tables
+        if getattr(t, "pivot_scale_warning", None) is not None
+        and getattr(t, "pivot_decision", None) is not None
+    ]
+
     if st.session_state.auto_processing:
-        st.session_state.step = 4
-        st.rerun()
+        if tables_pending_pivot_decision:
+            # 大規模Pivotの決定はユーザー入力必須のため、自動実行中でもここで
+            # 停止する（streamlit_ui/step5_suggest.py の半自動停止と同じ方針）
+            st.session_state.auto_processing = False
+            st.session_state.auto_completed = True
+        else:
+            st.session_state.step = 4
+            st.rerun()
 
     formatted = [t for t in tables if t.raw_df is not None]
     unformatted = [t for t in tables if t.raw_df is None]
@@ -2308,7 +2460,10 @@ def step_format():
     stacked_all = [t for t in tables if getattr(t, "stacked_df", None) is not None]
     unit_split_applied = [t for t in tables if getattr(t, "unit_split_info", None)]
     transpose_applied = [t for t in tables if getattr(t, "transpose_info", None)]
-    pivot_applied = [t for t in tables if getattr(t, "pivot_info", None)]
+    pivot_applied = [
+        t for t in tables
+        if getattr(t, "pivot_info", None) and getattr(t, "post_pivot_df", None) is not None
+    ]
     multi_axis_applied = [t for t in tables if getattr(t, "multi_axis_info", None)]
     wide_to_long_applied = [t for t in tables if getattr(t, "wide_to_long_info", None)]
     uchi_split_applied = [t for t in tables if getattr(t, "uchi_split_info", None)]
@@ -2336,11 +2491,40 @@ def step_format():
         and not paren_split_applied
         and not hier_expand_targets
         and not external_meta_applied
+        and not tables_pending_pivot_decision
+        and not resolved_pivot_scale_tables
     )
     if nothing_done:
         st.info("全テーブルに対して整形処理はありませんでした。")
     else:
         first_section = True
+
+        # ── 変換規模の事前予測機能（大規模Pivotのブロッキング確認） ────────
+        if tables_pending_pivot_decision or resolved_pivot_scale_tables:
+            first_section = False
+            st.subheader(
+                f"⚠️ 変換規模の事前予測（対象："
+                f"{len(tables_pending_pivot_decision) + len(resolved_pivot_scale_tables)}テーブル）"
+            )
+            if tables_pending_pivot_decision:
+                st.error(
+                    f"**{len(tables_pending_pivot_decision)}** テーブルで大規模な"
+                    "Pivotが検出されました。下記で処理方法を選択するまで、これらの"
+                    "テーブルの以降の整形処理は保留されます。"
+                )
+                for t in tables_pending_pivot_decision:
+                    t_title = f"  🏷️ `{t.title}`" if t.title else ""
+                    with st.expander(
+                        f"**`{t.table_id}`**{t_title}  —  シート: {t.sheet_name}",
+                        expanded=True,
+                    ):
+                        _render_pivot_scale_prompt(t)
+            if resolved_pivot_scale_tables:
+                with st.expander(
+                    f"決定済み（{len(resolved_pivot_scale_tables)} 件）", expanded=False
+                ):
+                    for t in resolved_pivot_scale_tables:
+                        _render_pivot_scale_decision_note(t)
 
         # ── 多段ヘッダーの検出と解決機能 ──────────────────────────────
         if formatted:
@@ -2978,10 +3162,20 @@ def step_format():
     with c1:
         st.button("← 戻る", on_click=_go_to, args=(2,))
     with c2:
-        st.button(
-            "次へ：テーブル関係分析を開始 →",
-            type="primary",
-            use_container_width=True,
-            on_click=_go_to,
-            args=(4,),
-        )
+        if tables_pending_pivot_decision:
+            st.button(
+                "次へ：テーブル関係分析を開始 →",
+                type="primary", use_container_width=True, disabled=True,
+            )
+            st.caption(
+                f"⚠️ {len(tables_pending_pivot_decision)} 件のテーブルで変換規模の"
+                "決定が未完了のため、次のステップに進めません。上記で処理方法を選択してください。"
+            )
+        else:
+            st.button(
+                "次へ：テーブル関係分析を開始 →",
+                type="primary",
+                use_container_width=True,
+                on_click=_go_to,
+                args=(4,),
+            )
