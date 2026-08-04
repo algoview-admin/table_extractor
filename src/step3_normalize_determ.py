@@ -3900,13 +3900,6 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         if wtl_info:
             t.pre_wide_to_long_df = t.df
             t.wide_to_long_info = wtl_info
-            t.col_name_gen_log.append({
-                "context": "wide_to_long",
-                "column_kind": "axis",
-                "generated_name": wtl_info.get("axis_var_name", ""),
-                "naming_source": wtl_info.get("axis_var_name_source", ""),
-                "naming_reason": wtl_info.get("axis_var_name_reason", ""),
-            })
             stacked = stack_wide_to_long(t.df, wtl_info)
             axis_var_name = wtl_info.get("axis_var_name", "")
             if axis_var_name and axis_var_name in stacked.columns:
@@ -3919,20 +3912,6 @@ def normalize_tables(tables: List[Any], filename: Optional[str] = None) -> None:
         info = cross_info
         if info:
             t.stack_info = info
-            t.col_name_gen_log.append({
-                "context": "cross_table",
-                "column_kind": "axis",
-                "generated_name": info.get("var_name", ""),
-                "naming_source": info.get("var_name_source", ""),
-                "naming_reason": info.get("var_name_reason", ""),
-            })
-            t.col_name_gen_log.append({
-                "context": "cross_table",
-                "column_kind": "value",
-                "generated_name": info.get("value_name", ""),
-                "naming_source": info.get("value_name_source", ""),
-                "naming_reason": info.get("value_name_reason", ""),
-            })
             stacked = stack_cross_table(t.df, info)
             var_name = info.get("var_name", "")
             if var_name and var_name in stacked.columns:

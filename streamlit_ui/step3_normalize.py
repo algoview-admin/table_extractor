@@ -1183,60 +1183,20 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
         st.markdown(_MHD_CSS + integrity_html, unsafe_allow_html=True)
 
 
-_COL_NAME_GEN_CONTEXT_LABELS = {
-    "wide_to_long": "Wide_to_long",
-    "cross_table": "クロス集計",
-}
-_COL_NAME_GEN_KIND_LABELS = {"axis": "軸", "value": "値"}
-
-
-def _col_name_gen_naming_label(entry: Dict[str, Any]) -> str:
-    """命名根拠のラベル文字列を返す（列名生成規則機能: 辞書/計算/LLM/既定の表示。
-    _render_hier_expand_body の naming_label と同じ考え方を、辞書・計算の2種類も
-    区別できるよう拡張したもの）。"""
-    source = entry.get("naming_source")
+def _naming_provenance_label(source: Optional[str], reason: Optional[str] = None) -> str:
+    """列名生成規則機能の命名根拠ラベル（辞書/データからの計算/LLM/既定名の別を
+    一言で示す）。_render_hier_expand_body の naming_label と同じ考え方を、
+    辞書・計算の2種類も区別できるよう拡張したもの。生成元の機能の説明の中に
+    そのままインラインで表示する（resolve_axis_var_name/resolve_value_col_name
+    の判定根拠、src/step3_normalize_determ.py 参照）。"""
     if source == "llm":
         return "LLM命名"
     if source == "dictionary":
         return "辞書命名"
     if source == "computed":
         return "データから自動算出"
-    reason = str(entry.get("naming_reason") or "").strip()
+    reason = str(reason or "").strip()
     return f"既定名：{_html.escape(reason)}" if reason else "既定名"
-
-
-def _col_name_gen_body_html(t: "DetectedTable") -> str:
-    """列名生成規則機能の詳細（HTML文字列版。ウィジェット版と共有）。"""
-    log = getattr(t, "col_name_gen_log", None) or []
-    items = ""
-    for entry in log:
-        context_label = _COL_NAME_GEN_CONTEXT_LABELS.get(
-            entry.get("context"), str(entry.get("context") or "")
-        )
-        kind_label = _COL_NAME_GEN_KIND_LABELS.get(
-            entry.get("column_kind"), str(entry.get("column_kind") or "")
-        )
-        name = _html.escape(str(entry.get("generated_name") or ""))
-        naming_label = _col_name_gen_naming_label(entry)
-        items += (
-            "<li style='margin:3px 0'>"
-            "<code style='background:rgba(156,163,175,0.15);border:1px solid rgba(156,163,175,0.4);"
-            "border-radius:4px;padding:1px 6px;margin-right:4px;display:inline-block'>"
-            f"{context_label} / {kind_label}列</code>"
-            f"生成カラム: 「{name}」（{naming_label}）"
-            "</li>"
-        )
-    return f"<ul style='margin:4px 0;padding-left:18px'>{items}</ul>"
-
-
-def _render_col_name_gen_body(t: "DetectedTable") -> None:
-    """列名生成規則機能の詳細（Streamlit ウィジェット版）。
-
-    Wide_to_long/クロス集計が新規に生成した軸列・値列の名前が、静的辞書・
-    データからの計算・LLM・既定名のどれで決まったかを一覧表示する
-    （resolve_axis_var_name/resolve_value_col_name の判定根拠、
-    src/step3_normalize_determ.py 参照）。"""
-    st.markdown(_col_name_gen_body_html(t), unsafe_allow_html=True)
 
 
 def _render_fill_cols_body(t: "DetectedTable") -> None:
@@ -1434,10 +1394,17 @@ def _render_stack_body(t: "DetectedTable") -> None:
             f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 列</span>"
         )
 
+    var_naming = _naming_provenance_label(
+        info.get("var_name_source"), info.get("var_name_reason")
+    )
+    value_naming = _naming_provenance_label(
+        info.get("value_name_source"), info.get("value_name_reason")
+    )
     meta_lines = [
         f"ラベル列: {label_html}",
         f"時系列カラム: {time_html}（計 {len(time_cols)} 列）",
-        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(var_name)}</b> → <b>{_html.escape(value_name)}</b>",
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(var_name)}</b>（{var_naming}） → "
+        f"<b>{_html.escape(value_name)}</b>（{value_naming}）",
     ]
     if year_ctx:
         meta_lines.append(
@@ -1506,12 +1473,19 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
             f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 列</span>"
         )
 
+    var_naming = _naming_provenance_label(
+        info.get("var_name_source"), info.get("var_name_reason")
+    )
+    value_naming = _naming_provenance_label(
+        info.get("value_name_source"), info.get("value_name_reason")
+    )
     year_line = f"<br>年コンテキスト: <b>{year_ctx}年</b>" if year_ctx else ""
     meta_html = (
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"ラベル列: {label_html}<br>"
         f"時系列カラム: {time_html}（計 {len(time_cols)} 列）<br>"
-        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(var_name)}</b> → <b>{_html.escape(value_name)}</b>"
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(var_name)}</b>（{var_naming}） → "
+        f"<b>{_html.escape(value_name)}</b>（{value_naming}）"
         f"{year_line}</div>"
     )
 
@@ -1652,11 +1626,15 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
             f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 件</span>"
         )
 
+    axis_naming = _naming_provenance_label(
+        info.get("axis_var_name_source"), info.get("axis_var_name_reason")
+    )
     meta_lines = [
         f"ラベル列: {label_html}",
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）",
         f"軸トークン（{_html.escape(axis_var_name)}）: {axis_html}（計 {len(axis_tokens)} 件）",
-        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(axis_var_name)}</b> → 指標列（{len(indicators)} 列に分離）",
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(axis_var_name)}</b>（{axis_naming}） → "
+        f"指標列（{len(indicators)} 列に分離）",
     ]
 
     st.markdown(
@@ -1720,12 +1698,16 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
             f" <span style='font-size:12px;opacity:0.7'>...他 {rest_count} 件</span>"
         )
 
+    axis_naming = _naming_provenance_label(
+        info.get("axis_var_name_source"), info.get("axis_var_name_reason")
+    )
     meta_html = (
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"ラベル列: {label_html}<br>"
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）<br>"
         f"軸トークン（{_html.escape(axis_var_name)}）: {axis_html}（計 {len(axis_tokens)} 件）<br>"
-        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(axis_var_name)}</b> → 指標列（{len(indicators)} 列に分離）"
+        f"縦持ち後の列構成: ラベル列 → <b>{_html.escape(axis_var_name)}</b>（{axis_naming}） → "
+        f"指標列（{len(indicators)} 列に分離）"
         f"</div>"
     )
 
@@ -2329,7 +2311,6 @@ def step_format():
     pivot_applied = [t for t in tables if getattr(t, "pivot_info", None)]
     multi_axis_applied = [t for t in tables if getattr(t, "multi_axis_info", None)]
     wide_to_long_applied = [t for t in tables if getattr(t, "wide_to_long_info", None)]
-    col_name_gen_applied = [t for t in tables if getattr(t, "col_name_gen_log", None)]
     uchi_split_applied = [t for t in tables if getattr(t, "uchi_split_info", None)]
     invalid_col_targets = [
         t for t in tables if getattr(t, "invalid_col_candidates", None)
@@ -2987,49 +2968,6 @@ def step_format():
                         )
                     outer_html = _MHD_CSS + _make_details_html(
                         f"その他の同様処理（{len(rest_stack)} 件）",
-                        inner_html,
-                        open=False,
-                        level=2,
-                    )
-                    st.markdown(outer_html, unsafe_allow_html=True)
-
-        # ── 列名生成規則機能 ──────────────────────────────────────
-        # Wide_to_long/クロス集計が新規に生成した軸列・値列の名前が、
-        # 静的辞書・データからの計算・LLM・既定名のどれで決まったかを表示する。
-        if col_name_gen_applied:
-            if not first_section:
-                st.divider()
-            first_section = False
-            total_names = sum(len(t.col_name_gen_log) for t in col_name_gen_applied)
-            st.subheader(
-                f"🏷️ 列名生成規則機能（対象：{len(col_name_gen_applied)}テーブル）"
-            )
-            st.success(
-                f"**{len(col_name_gen_applied)}** テーブルで新規列名を "
-                f"計 **{total_names}** 件生成しました"
-            )
-            rep_n = col_name_gen_applied[0]
-            rep_n_title = f"  🏷️ `{rep_n.title}`" if rep_n.title else ""
-            with st.expander(
-                f"**`{rep_n.table_id}`**{rep_n_title}  —  シート: {rep_n.sheet_name}",
-                expanded=True,
-            ):
-                _render_col_name_gen_body(rep_n)
-
-                rest_n = col_name_gen_applied[1:]
-                if rest_n:
-                    inner_html = ""
-                    for r in rest_n:
-                        r_title = f" 🏷️ {_html.escape(r.title)}" if r.title else ""
-                        lbl = (
-                            f"<code>{_html.escape(r.table_id)}</code>{r_title}"
-                            f" — シート: {_html.escape(r.sheet_name)}"
-                        )
-                        inner_html += _make_details_html(
-                            lbl, _col_name_gen_body_html(r), open=False, level=3
-                        )
-                    outer_html = _MHD_CSS + _make_details_html(
-                        f"その他の同様処理（{len(rest_n)} 件）",
                         inner_html,
                         open=False,
                         level=2,
