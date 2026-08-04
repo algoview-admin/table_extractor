@@ -305,7 +305,7 @@ def _dedup_columns(columns: List[str]) -> List[str]:
 PIVOT_EXCEL_MAX_COLUMNS = 16384  # Excel(.xlsx)の1シートあたり最大列数。警告文言用の
 # 予測値であり、本アプリに現状Excel書き出し機能は無いため実際の書き出し失敗を
 # 防ぐものではない。
-PIVOT_PERFORMANCE_WARNING_THRESHOLD = 200  # Pivotが生成する列数がこれを超えたら、
+PIVOT_PERFORMANCE_WARNING_THRESHOLD = 1000  # Pivotが生成する列数がこれを超えたら、
 # Excel上限よりずっと手前でも警告対象とする目安値。Step3の各結果はブラウザ上に
 # HTMLテーブルとして全列プレビュー描画されるため、実務上は数百列を超えた時点で
 # 描画・スクロールが目に見えて重くなる。要調整であれば本定数を変更する。

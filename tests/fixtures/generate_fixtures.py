@@ -219,17 +219,17 @@ def gen_step3_pivot_test():
 # 4b. step3_pivot_scale_test.xlsx（変換規模の事前予測機能: 大規模Pivot検出用）
 # ---------------------------------------------------------------------------
 def gen_step3_pivot_scale_test():
-    # PIVOT_PERFORMANCE_WARNING_THRESHOLD（200）を超える201種類の属性を持つ
-    # KVペア表。2つのキー（拠点）× 201属性 = 402行。normalize_tables()が
+    # PIVOT_PERFORMANCE_WARNING_THRESHOLD（1000）を超える1001種類の属性を持つ
+    # KVペア表。2つのキー（拠点）× 1001属性 = 2002行。normalize_tables()が
     # このテーブルのPivotを保留し、以降のStep3処理を完全にスキップすることを
     # end-to-endで検証するためのフィクスチャ。
     wb = _new_wb()
     ws = wb.create_sheet("PivotScale")
-    n_attrs = 201
+    n_attrs = 1001
     rows = [["拠点", "属性", "値"]]
     for key in ["拠点A", "拠点B"]:
         for i in range(n_attrs):
-            rows.append([key, f"属性{i:03d}", i])
+            rows.append([key, f"属性{i:04d}", i])
     _write_rows(ws, rows)
     wb.save(_path("step3_pivot_scale_test.xlsx"))
 

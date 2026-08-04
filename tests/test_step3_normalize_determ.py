@@ -123,11 +123,11 @@ def test_normalize_tables_blocks_large_pivot(monkeypatch):
     det.normalize_tables(all_tables, "step3_pivot_scale_test.xlsx")
 
     assert t.pivot_scale_warning is not None
-    assert t.pivot_scale_warning["n_attrs"] == 201
+    assert t.pivot_scale_warning["n_attrs"] == 1001
     assert t.pivot_scale_warning["needs_warning"] is True
     assert t.pivot_decision is None
     assert list(t.df.columns) == ["拠点", "属性", "値"]
-    assert len(t.df) == 402
+    assert len(t.df) == 2002
     assert t.uchi_split_info is None
     assert t.invalid_col_candidates is None
     assert t.wide_to_long_info is None
