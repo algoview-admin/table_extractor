@@ -100,6 +100,22 @@ def test_apply_external_metadata_avoids_non_dimension_column_collision():
     assert out["サービス名"].tolist() == ["新規"]
 
 
+def test_apply_external_metadata_does_not_mutate_input_df():
+    # 回帰テスト: resolve_generated_column_names が衝突無しの場合に .copy() を
+    # 省略すると、呼び出し元が保持する変換前スナップショット（pre_external_meta_df
+    # 等）まで新規列で書き換わってしまうバグがあった。
+    import pandas as pd
+
+    source = pd.DataFrame({"区分": ["A"], "値": [1]})
+    pre_snapshot = source  # normalize_tables() の t.pre_external_meta_df = t.df と同じ状況
+    items = [{"column_name": "サービス名", "value": "X", "source": "filename",
+              "is_year": False, "anchor": None, "position": None}]
+
+    det.apply_external_metadata(source, items, dim_cols=["区分"], axis_name="年")
+
+    assert list(pre_snapshot.columns) == ["区分", "値"]
+
+
 # --- D3: 括弧書き注釈・階層レベルの命名 ---------------------------------------
 
 

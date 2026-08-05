@@ -738,10 +738,55 @@ def detect_multi_axis_header(
     }
 
 
+def _resolve_multi_axis_collisions(
+    label_col_names: List[str],
+    candidate_names: List[str],
+    title: Optional[str],
+    client: Any,
+    model: Optional[str],
+) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
+    """多段ヘッダーの検出と解決機能（軸展開）で新規生成する列名（軸名・値列名・
+    指標列名）がラベル列と衝突する場合を列衝突検出機能で解決する。
+
+    apply_multi_axis_header はDataFrameへの代入ではなくdictからレコードを
+    組み立てる方式のため、resolve_generated_column_names（DataFrame前提）
+    ではなく、ラベル列名のリストを直接書き換えるこの専用処理を使う。
+
+    Returns: (退避後のlabel_col_names, candidate_namesの最終名リスト, 監査ログ)
+    """
+    existing = set(label_col_names)
+    resolved_labels = list(label_col_names)
+    final_names: List[str] = []
+    logs: List[Dict[str, Any]] = []
+    for name in candidate_names:
+        if name in existing:
+            existing_new, final, source, reason = resolve_column_collision(
+                name, existing, title=title, client=client, model=model,
+                new_col_context="多段ヘッダーの軸展開で生成した列",
+            )
+            if existing_new:
+                idx = resolved_labels.index(name)
+                resolved_labels[idx] = existing_new
+                existing.discard(name)
+                existing.add(existing_new)
+            logs.append({"original_name": name, "existing_new_name": existing_new,
+                         "new_col_final_name": final, "naming_source": source,
+                         "naming_reason": reason})
+        else:
+            final = name
+        final_names.append(final)
+        existing.add(final)
+    return resolved_labels, final_names, logs
+
+
 def apply_multi_axis_header(
     df: Any,
     info: Dict[str, Any],
     axis_result: Dict[str, Any],
+    title: Optional[str] = None,
+    client: Any = None,
+    model: Optional[str] = None,
+    collision_log_out: Optional[List[Dict[str, Any]]] = None,
 ) -> Any:
     """LLMが確定した軸名・値列名で、多軸クロス集計形式の多段ヘッダーを
     tidy形式（各軸を列として展開し値を縦持ちに変換）に展開する。
@@ -816,6 +861,19 @@ def apply_multi_axis_header(
                 indicator_values.append(v)
         indicator_cols = {v: f"{v}{unit_suffix}" for v in indicator_values}
 
+        other_axis_names = [ax_name for ax_name, _ in other_axis_pairs]
+        candidate_names = other_axis_names + list(indicator_cols.values())
+        label_col_names, resolved_names, collision_log = _resolve_multi_axis_collisions(
+            label_col_names, candidate_names, title, client, model,
+        )
+        if collision_log_out is not None:
+            collision_log_out.extend(collision_log)
+        n_axes = len(other_axis_names)
+        other_axis_pairs = [
+            (new_name, ri) for (_, ri), new_name in zip(other_axis_pairs, resolved_names[:n_axes])
+        ]
+        indicator_cols = dict(zip(indicator_values, resolved_names[n_axes:]))
+
         grouped: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
         group_order: List[Tuple[Any, ...]] = []
         for _, row in df.iterrows():
@@ -834,6 +892,15 @@ def apply_multi_axis_header(
 
         records = [grouped[k] for k in group_order]
         return pd.DataFrame(records).reset_index(drop=True)
+
+    candidate_names = list(axis_names) + [value_name]
+    label_col_names, resolved_names, collision_log = _resolve_multi_axis_collisions(
+        label_col_names, candidate_names, title, client, model,
+    )
+    if collision_log_out is not None:
+        collision_log_out.extend(collision_log)
+    axis_names = resolved_names[:-1]
+    value_name = resolved_names[-1]
 
     records: List[Dict[str, Any]] = []
     for _, row in df.iterrows():
@@ -1786,7 +1853,11 @@ def detect_uchi_breakdown(df: Any) -> Optional[Dict[str, Any]]:
 
 
 def apply_uchi_split(
-    df: Any, info: Dict[str, Any]
+    df: Any, info: Dict[str, Any],
+    title: Optional[str] = None,
+    client: Any = None,
+    model: Optional[str] = None,
+    collision_log_out: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Any, Any, set, List[Dict[str, Any]]]:
     """detect_uchi_breakdown の検出結果を使って、うち内訳行をメインテーブルから
     除去し、親子関係を保った内訳テーブルを生成する。
@@ -1847,22 +1918,54 @@ def apply_uchi_split(
     integrity_check = verify_hierarchy_integrity(df, integrity_checks)
 
     main_df = df.drop(index=list(dropped)).reset_index(drop=True)
+
+    # 列衝突検出機能: 新規生成する親子列名（parent_col_name/child_col_name）が
+    # 内訳テーブルにそのまま残る他の列（other_cols）と衝突する場合を解決する。
+    # main_df は label_col の行を除去するだけで列構成自体は変えないため、
+    # ここでの退避は breakdown_df（新規に構築する派生テーブル）内でのみ完結する。
+    other_col_rename: Dict[str, str] = {}
+    final_names: List[str] = []
+    existing = set(other_cols)
+    collision_log: List[Dict[str, Any]] = []
+    for name in (parent_col_name, child_col_name):
+        if name in existing:
+            existing_new, final, source, reason = resolve_column_collision(
+                name, existing, title=title, client=client, model=model,
+                new_col_context="「うち」書きの内訳分離で生成した親子列",
+            )
+            if existing_new:
+                other_col_rename[name] = existing_new
+                existing.discard(name)
+                existing.add(existing_new)
+            collision_log.append({"original_name": name, "existing_new_name": existing_new,
+                                   "new_col_final_name": final, "naming_source": source,
+                                   "naming_reason": reason})
+        else:
+            final = name
+        final_names.append(final)
+        existing.add(final)
+    parent_col_name, child_col_name = final_names
+    if collision_log_out is not None:
+        collision_log_out.extend(collision_log)
+
     breakdown_rows = []
     for idx, (parent_value, child_label) in rows.items():
         row = df.loc[idx]
         new_row = {parent_col_name: parent_value, child_col_name: child_label}
         for c in other_cols:
-            new_row[c] = row[c]
+            new_row[other_col_rename.get(c, c)] = row[c]
         breakdown_rows.append(new_row)
 
     breakdown_df = pd.DataFrame(breakdown_rows)
 
     # 列順: label_col があった位置に親/子列を配置し、他の列は元の順序を維持
-    cols = list(df.columns)
-    label_pos = cols.index(label_col)
-    ordered_cols = (
-        cols[:label_pos] + [parent_col_name, child_col_name] + cols[label_pos + 1 :]
-    )
+    # （other_col_rename で退避した列は出力名に置き換える）。
+    ordered_cols: List[str] = []
+    for c in df.columns:
+        if c == label_col:
+            ordered_cols.extend([parent_col_name, child_col_name])
+        else:
+            ordered_cols.append(other_col_rename.get(c, c))
     breakdown_df = breakdown_df[ordered_cols].reset_index(drop=True)
 
     return main_df, breakdown_df, protected_indices, integrity_check
@@ -2228,7 +2331,11 @@ def resolve_generated_column_names(
     if df is None:
         return df, list(candidate_names), [], {}
     excluded = {str(c) for c in (excluded_existing or set())}
-    out = df
+    # 呼び出し元（apply_external_metadata等）はこの戻り値に対して
+    # out[name] = value のような列追加を直接行うため、衝突が1件も無い場合
+    # でも必ず独立したコピーを返す（さもないと呼び出し元が保持する
+    # 変換前スナップショット（pre_external_meta_df等）まで書き換わってしまう）。
+    out = df.copy()
     existing = {str(c) for c in out.columns if str(c) not in excluded}
     resolved: List[str] = []
     logs: List[Dict[str, Any]] = []
@@ -3471,6 +3578,7 @@ def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str
         t.title,
         llm_client,
         llm_model,
+        existing_columns=[c for c in df.columns if str(c) != detection["source_col"]],
     )
     if level_names:
         naming_source = "llm"
@@ -3823,14 +3931,32 @@ def _apply_post_pivot_pipeline(
             )
             if axis_result is not None:
                 t.pre_multi_axis_df = df
-                df = apply_multi_axis_header(df, axis_info, axis_result)
+                multi_axis_collision_log: List[Dict[str, Any]] = []
+                df = apply_multi_axis_header(
+                    df, axis_info, axis_result,
+                    title=t.title, client=llm_client, model=llm_model,
+                    collision_log_out=multi_axis_collision_log,
+                )
+                # collision_renames の new_col_final_name で axis_names/value_name
+                # を更新する（衝突していれば apply_multi_axis_header が実際に
+                # 出力したdf.columnsと一致させるため。指標軸自身の名前は
+                # そもそも列名候補として渡していないため対象外のまま）。
+                def _reconcile(name: str) -> str:
+                    return next(
+                        (e["new_col_final_name"] for e in multi_axis_collision_log
+                         if e["original_name"] == name),
+                        name,
+                    )
                 t.multi_axis_info = {
                     **axis_result,
+                    "axis_names": [_reconcile(n) for n in axis_result["axis_names"]],
+                    "value_name": _reconcile(axis_result["value_name"]),
                     "dropped_labels": [
                         axis_info["values"][i][0]
                         for i in axis_info["dropped_idxs"]
                         if axis_info["values"][i]
                     ],
+                    "collision_renames": multi_axis_collision_log,
                 }
             else:
                 # 軸候補は構造的に見つかったが、LLMが独立軸として妥当と
@@ -3886,7 +4012,8 @@ def _apply_post_pivot_pipeline(
     paren_result = detect_paren_annotations(df)
     if paren_result:
         named = detect_annotation_column_names(
-            paren_result["columns"], t.title, llm_client, llm_model
+            paren_result["columns"], t.title, llm_client, llm_model,
+            existing_columns=list(df.columns),
         )
         if named:
             # 分離元の列は残るので、同名の新設列がある場合も既存側を安全に
@@ -3940,10 +4067,27 @@ def _apply_post_pivot_pipeline(
     uchi_protected_indices: set = set()
     if uchi_info:
         t.pre_uchi_split_df = df
+        uchi_collision_log: List[Dict[str, Any]] = []
         df, breakdown_df, uchi_protected_indices, uchi_integrity = apply_uchi_split(
-            df, uchi_info
+            df, uchi_info,
+            title=t.title, client=llm_client, model=llm_model,
+            collision_log_out=uchi_collision_log,
         )
-        t.uchi_split_info = uchi_info
+        # collision_renames の new_col_final_name で parent/child_col_name を
+        # 更新する（衝突していれば breakdown_df の実際の列名と一致させるため。
+        # UI（_render_uchi_split_body）はこの2キーをそのまま列名として使う）。
+        final_parent, final_child = uchi_info["parent_col_name"], uchi_info["child_col_name"]
+        for entry in uchi_collision_log:
+            if entry["original_name"] == uchi_info["parent_col_name"]:
+                final_parent = entry["new_col_final_name"]
+            elif entry["original_name"] == uchi_info["child_col_name"]:
+                final_child = entry["new_col_final_name"]
+        t.uchi_split_info = {
+            **uchi_info,
+            "parent_col_name": final_parent,
+            "child_col_name": final_child,
+            "collision_renames": uchi_collision_log,
+        }
         t.uchi_breakdown_df = breakdown_df
         t.uchi_integrity_check = uchi_integrity
 

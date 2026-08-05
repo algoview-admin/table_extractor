@@ -1758,6 +1758,7 @@ def _render_multi_axis_body(t: "DetectedTable") -> None:
 
     axis_html = " ".join(_badge(c, "167,139,250") for c in axis_names) or "（なし）"
 
+    st.markdown(_collision_warning_html(info.get("collision_renames")), unsafe_allow_html=True)
     st.markdown(
         "<div style='margin:4px 0 12px;line-height:2'>"
         f"検出された軸: {axis_html}<br>"
@@ -1805,6 +1806,7 @@ def _render_multi_axis_body_html(t: "DetectedTable") -> str:
 
     axis_html = " ".join(_badge(c, "167,139,250") for c in axis_names) or "（なし）"
     meta_html = (
+        _collision_warning_html(info.get("collision_renames")) +
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"検出された軸: {axis_html}<br>"
         f"値列: {_badge(value_name, '52,211,153')}<br>"
@@ -1997,6 +1999,7 @@ def _render_uchi_split_body(t: "DetectedTable") -> None:
         f"分離後の構成: メインテーブル（内訳行を除去）＋ "
         f"内訳テーブル（<b>{_html.escape(parent_col_name)}</b>, <b>{_html.escape(child_col_name)}</b>）",
     ]
+    st.markdown(_collision_warning_html(info.get("collision_renames")), unsafe_allow_html=True)
     st.markdown(
         "<div style='margin:4px 0 12px;line-height:2'>"
         + "<br>".join(meta_lines)
@@ -2056,6 +2059,7 @@ def _render_uchi_split_body_html(t: "DetectedTable") -> str:
         )
 
     meta_html = (
+        _collision_warning_html(info.get("collision_renames")) +
         "<div style='margin:4px 0 12px;line-height:2'>"
         f"対象列: {_badge(label_col, '156,163,175')}<br>"
         f"検出された内訳行: {match_count} 件<br>"

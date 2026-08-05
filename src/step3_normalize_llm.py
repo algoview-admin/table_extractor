@@ -778,6 +778,7 @@ _PAREN_ANNOTATION_USER_PROMPT = """以下は、ある表の中で「値の末尾
 
 {columns_block}
 {title_line}
+既存のカラム名（分離後もそのまま残る列）: {existing_columns}
 
 【判定基準】
 - 括弧内の値が、元の値を分類する独立した属性（例: 支店の"本社/支店"区分、
@@ -786,6 +787,9 @@ _PAREN_ANNOTATION_USER_PROMPT = """以下は、ある表の中で「値の末尾
   言えない場合は is_valid=false としてください。
 - is_valid=true の場合、column_name には分離後の注釈列につける日本語の列名を
   設定してください（例: 元列が"支店"で注釈が"本社"等の場合は"支店種別"）。
+- column_name は上記の既存のカラム名と同じ、または紛らわしい名前を避けて
+  ください。既に同じ意味の列が存在する場合は、既存列と区別できる具体的な
+  名前にするか、区別できないなら is_valid=false としてください。
 - 少しでも判断に迷う場合は is_valid=false としてよい。
 
 JSON形式で回答してください:
@@ -797,6 +801,7 @@ def detect_annotation_column_names(
     title: Optional[str],
     client: Any,
     model: str,
+    existing_columns: Optional[List[str]] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """括弧書き注釈の分離候補列について、分離の妥当性と新カラム名を LLM で判定する。
 
@@ -804,6 +809,12 @@ def detect_annotation_column_names(
       （{source_col, position, mapping, distinct_annotations, match_count,
        str_count, label_samples} を含む）。1テーブルあたり1回の呼び出しで
       全候補列をまとめて判定する。
+
+    existing_columns: 分離時点で表に既に存在する列名一覧。LLMに渡し、既存列と
+    同名・紛らわしい名前を避けさせる（それでも衝突した場合の機械的な
+    退避は resolve_column_collision/resolve_generated_column_names が担う。
+    ここでのプロンプト側の配慮は、その後段処理に頼らずとも最初から
+    自然で重複の無い名前を選ばせるためのもの）。
 
     ネットワークエラー・JSON パース失敗・想定外の構造等は握りつぶして None を
     返し、1テーブルの失敗が検出処理全体を落とさないようにする。
@@ -833,7 +844,8 @@ def detect_annotation_column_names(
         {
             "role": "user",
             "content": _PAREN_ANNOTATION_USER_PROMPT.format(
-                columns_block=columns_block, title_line=title_line
+                columns_block=columns_block, title_line=title_line,
+                existing_columns=[str(c) for c in (existing_columns or [])],
             ),
         },
     ]
@@ -890,6 +902,8 @@ _HIER_LEVEL_NAMING_USER_PROMPT = """以下は、ある表で「1カラムに階�
 階層パスのサンプル（浅い階層 > 深い階層の順）:
 {sample_paths}
 {title_line}
+既存のカラム名（展開後もそのまま残る列。元カラム自体は展開により置き換わる
+ため含まない）: {existing_columns}
 
 【判定基準】
 - 各階層レベルの内容から、そのレベルが何を表す分類かを判断できる場合のみ
@@ -898,6 +912,9 @@ _HIER_LEVEL_NAMING_USER_PROMPT = """以下は、ある表で「1カラムに階�
 - level_names は浅い階層から深い階層の順で、必ず {depth} 個にしてください。
 - 内容から意味づけが困難な場合（特定分野の専門知識やマスタ辞書がないと
   分類の意味が判断できない場合を含む）は is_valid=false としてください。
+- level_names は上記の既存のカラム名と同じ、または紛らわしい名前を避けて
+  ください。既に同じ意味の列が存在する場合は、既存列と区別できる具体的な
+  名前にしてください。
 - 少しでも判断に迷う場合は is_valid=false としてよい。
 
 JSON形式で回答してください:
@@ -911,11 +928,17 @@ def detect_hierarchy_level_names(
     title: Optional[str],
     client: Any,
     model: str,
+    existing_columns: Optional[List[str]] = None,
 ) -> Tuple[Optional[List[str]], str]:
     """階層圧縮カラムの展開候補について、各階層レベルのカラム名を LLM で判定する。
 
     sample_paths: "東日本 > 神奈川事業部 > 横浜支店" のような、浅い階層から
     深い階層順の文字列のリスト（detect_hierarchy_expansion が生成したサンプル）。
+
+    existing_columns: 展開時点で表に既に存在する列名一覧（展開により消える
+    source_col 自身は呼び出し側で除いて渡すこと）。LLMに渡し、既存列と
+    同名・紛らわしい名前を避けさせる（それでも衝突した場合の機械的な退避は
+    resolve_column_collision/resolve_generated_column_names が担う）。
 
     ネットワークエラー・JSON パース失敗・想定外の構造・長さ不一致等は
     握りつぶして (None, 理由) を返す。呼び出し側（_apply_hier_expand_defaults）は
@@ -944,6 +967,7 @@ def detect_hierarchy_level_names(
                 depth=depth,
                 sample_paths=paths_block,
                 title_line=title_line,
+                existing_columns=[str(c) for c in (existing_columns or [])],
             ),
         },
     ]

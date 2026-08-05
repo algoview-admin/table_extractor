@@ -165,6 +165,26 @@ def test_apply_multi_axis_header_with_hand_built_axis_result():
     assert set(row["列"]) == {"2024年", "2025年"}
 
 
+def test_apply_multi_axis_header_collision_preserves_both_columns():
+    # 列衝突検出機能: 新規生成する軸名（今回は意図的に既存ラベル列と同じ
+    # "列" を指定）が既存ラベル列と衝突しても、双方のデータが失われない
+    # ことをclient未指定（LLMなし）のフォールバック経路で確認する。
+    t = _table("step3_multiaxis_header_test.xlsx")
+    info = det.detect_multi_axis_header(t.raw_header_rows, t.raw_header_roles)
+    axis_result = {
+        "axis_names": ["科目", "列"],
+        "value_name": "値",
+        "indicator_axis_index": 0,
+    }
+    log = []
+    out = det.apply_multi_axis_header(t.df, info, axis_result, collision_log_out=log)
+    assert log and log[0]["original_name"] == "列"
+    assert log[0]["existing_new_name"] == "列_1"
+    assert set(out.columns) == {"列_1", "列", "売上", "原価"}
+    assert set(out["列_1"]) == {"2024年", "2025年"}  # 既存ラベル列のデータは保持
+    assert set(out["列"]) == {"東京", "大阪"}  # 新規軸列のデータ
+
+
 # --- C4: カラム名内階層区切りの分離 -------------------------------------------
 
 
@@ -278,6 +298,28 @@ def test_detect_and_apply_uchi_breakdown():
     assert "うち女性" not in main_df["区分"].tolist()
     assert breakdown_df.shape[0] == 4
     assert set(breakdown_df["子区分"]) == {"男性", "女性"}
+
+
+def test_apply_uchi_split_collision_preserves_both_columns():
+    # 列衝突検出機能: 新規生成する親列名（親区分）が、内訳テーブルに
+    # そのまま残る他の既存列と衝突しても、双方のデータが失われないことを
+    # client未指定（LLMなし）のフォールバック経路で確認する。
+    t = _table("step3_fill_uchi_aggregate_test.xlsx", "うち分離")
+    filled_df, _ = det.fill_grouping_cols(t.df)
+    info = det.detect_uchi_breakdown(filled_df)
+    assert info["parent_col_name"] == "親区分"
+    # 既存の「支店」列を、生成される親列名と同じ名前に強制的に衝突させる
+    forced_df = filled_df.rename(columns={"支店": "親区分"})
+
+    log = []
+    main_df, breakdown_df, protected, integrity = det.apply_uchi_split(
+        forced_df, info, collision_log_out=log
+    )
+    assert log and log[0]["original_name"] == "親区分"
+    assert log[0]["existing_new_name"] == "親区分_1"
+    assert set(breakdown_df.columns) == {"親区分_1", "親区分", "子区分", "人数"}
+    assert set(breakdown_df["親区分_1"]) == {"東京", "大阪"}  # 既存列のデータは保持
+    assert set(breakdown_df["親区分"]) == {"社員"}  # 新規生成の親列のデータ
 
 
 # --- C10: 集計行・集計列の除去 + 階層整合性検証 -------------------------------
