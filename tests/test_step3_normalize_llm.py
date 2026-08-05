@@ -82,8 +82,22 @@ def test_apply_external_metadata_anchor_ordering():
         {"column_name": "オプション種別", "value": "拡張サポート", "source": "sheet_name",
          "is_year": False, "anchor": "サービス名", "position": "after"},
     ]
-    out, ordered = llm.apply_external_metadata(t.df, items, dim_cols=["区分1"], axis_name="4月")
+    out, ordered = det.apply_external_metadata(t.df, items, dim_cols=["区分1"], axis_name="4月")
     assert ordered == ["区分1", "サービス名", "オプション種別"]
+
+
+def test_apply_external_metadata_avoids_non_dimension_column_collision():
+    import pandas as pd
+
+    source = pd.DataFrame({"区分": ["A"], "サービス名": ["既存"], "値": [1]})
+    items = [{"column_name": "サービス名", "value": "新規", "source": "filename",
+              "is_year": False, "anchor": "区分", "position": "after"}]
+
+    out, ordered = det.apply_external_metadata(source, items, dim_cols=["区分"], axis_name="年")
+
+    assert ordered == ["区分", "サービス名"]
+    assert out["サービス名_1"].tolist() == ["既存"]
+    assert out["サービス名"].tolist() == ["新規"]
 
 
 # --- D3: 括弧書き注釈・階層レベルの命名 ---------------------------------------

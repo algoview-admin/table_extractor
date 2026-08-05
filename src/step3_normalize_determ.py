@@ -33,7 +33,6 @@ from .keywords import (
     VAR_NAME_FALLBACK as _VAR_NAME_FALLBACK,
 )
 from .step3_normalize_llm import (
-    apply_external_metadata,
     apply_transpose,
     detect_annotation_column_names,
     detect_category_axis,
@@ -2174,6 +2173,7 @@ def resolve_column_collision(
     title: Optional[str] = None,
     client: Any = None,
     model: Optional[str] = None,
+    new_col_context: Optional[str] = None,
 ) -> Tuple[Optional[str], str, str, str]:
     """新規生成列名（candidate_name）が既存列名（existing_columns）と衝突する
     かを判定し、衝突する場合は列衝突検出機能として双方の最終列名を解決する。
@@ -2201,7 +2201,8 @@ def resolve_column_collision(
 
     if client is not None:
         result = detect_column_collision_rename(
-            candidate_name, axis_var_name, title, client, model
+            candidate_name, axis_var_name, title, client, model,
+            new_col_context_override=new_col_context,
         )
         if result:
             return (
@@ -2215,6 +2216,115 @@ def resolve_column_collision(
         "LLMが利用できない、または意味的な区別を提案できなかったため、"
         "既存列名を機械的に一意化して退避しました",
     )
+
+
+def resolve_generated_column_names(
+    df: Any,
+    candidate_names: List[str],
+    collision_resolver: Any = None,
+    excluded_existing: Optional[set] = None,
+) -> Tuple[Any, List[str], List[Dict[str, Any]], Dict[str, str]]:
+    """Step3で生成する列名を一括解決し、既存列を安全に退避する共通処理。"""
+    if df is None:
+        return df, list(candidate_names), [], {}
+    excluded = {str(c) for c in (excluded_existing or set())}
+    out = df
+    existing = {str(c) for c in out.columns if str(c) not in excluded}
+    resolved: List[str] = []
+    logs: List[Dict[str, Any]] = []
+    renamed: Dict[str, str] = {}
+    for raw_name in candidate_names:
+        name = str(raw_name).strip() or "列"
+        if name in resolved:
+            final = resolve_column_name_collision(name, existing | set(resolved))
+            logs.append({"original_name": name, "existing_new_name": None,
+                         "new_col_final_name": final, "naming_source": "fallback",
+                         "naming_reason": "同時に生成する列名が重複したため連番を付与しました"})
+        elif name in existing:
+            if collision_resolver:
+                existing_new, final, source, reason = collision_resolver(name, set(existing))
+            else:
+                existing_new, final, source = None, name, "fallback"
+                reason = "意味的なリネームが利用できないため、既存列名を機械的に退避しました"
+            other = existing - {name}
+            existing_new = str(existing_new).strip() if existing_new else ""
+            if not existing_new:
+                existing_new = resolve_column_name_collision(name, existing | set(resolved))
+            elif existing_new in other or existing_new in resolved:
+                existing_new = resolve_column_name_collision(name, other | set(resolved))
+            if final in other or final in resolved or final == existing_new:
+                final = resolve_column_name_collision(name, other | {existing_new} | set(resolved))
+            out = out.rename(columns={name: existing_new})
+            existing.remove(name)
+            existing.add(existing_new)
+            renamed[name] = existing_new
+            logs.append({"original_name": name, "existing_new_name": existing_new,
+                         "new_col_final_name": final, "naming_source": source,
+                         "naming_reason": reason})
+        else:
+            final = name
+        resolved.append(final)
+        existing.add(final)
+    return out, resolved, logs, renamed
+
+
+def apply_external_metadata(
+    df: Any, items: List[Dict[str, Any]], dim_cols: List[str], axis_name: str,
+    title: Optional[str] = None, client: Any = None, model: Optional[str] = None,
+    collision_log_out: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Any, List[str]]:
+    """外部メタデータ列を挿入する決定論的処理（衝突解決・アンカー順序を含む）。"""
+    if not items:
+        return df, list(dim_cols)
+    def collision(name: str, existing: set) -> Tuple[Optional[str], str, str, str]:
+        if client is not None:
+            result = detect_column_collision_rename(
+                name, axis_name, title, client, model,
+                new_col_context_override="ファイル名・シート名から抽出した付帯情報の列",
+            )
+            if result:
+                return result["existing_name"], result["new_name"], "llm", result.get("reasoning", "")
+        return None, name, "fallback", "LLMが利用できない、または意味的な区別を提案できなかったため、既存列名を機械的に退避しました"
+    out, names, logs, renamed = resolve_generated_column_names(
+        df, [item["column_name"] for item in items], collision_resolver=collision,
+    )
+    if collision_log_out is not None:
+        collision_log_out.extend(logs)
+    name_map = {item["column_name"]: name for item, name in zip(items, names)}
+    pending = [{**item, "column_name": name} for item, name in zip(items, names)]
+    dim_cols = [renamed.get(str(c), str(c)) for c in dim_cols]
+    primary = dim_cols[0] if dim_cols else None
+    ordered = list(dim_cols)
+    after_cursor: Dict[str, int] = {}
+    for _ in range(len(pending) + 1):
+        if not pending:
+            break
+        unresolved: List[Dict[str, Any]] = []
+        progressed = False
+        for item in pending:
+            anchor = name_map.get(item.get("anchor"), item.get("anchor"))
+            position = item.get("position")
+            if anchor == primary and position == "before":
+                position = "after"
+            if not anchor or anchor == axis_name or position not in ("before", "after"):
+                ordered.append(item["column_name"]); progressed = True; continue
+            if anchor in ordered:
+                index = after_cursor[anchor] if position == "after" and anchor in after_cursor else ordered.index(anchor)
+                insert_at = index if position == "before" else index + 1
+                ordered.insert(insert_at, item["column_name"])
+                if position == "after": after_cursor[anchor] = insert_at
+                progressed = True
+            else:
+                unresolved.append(item)
+        pending = unresolved
+        if not progressed:
+            break
+    ordered.extend(item["column_name"] for item in pending)
+    for item, name in zip(items, names):
+        out[name] = item["value"]
+    new_names = set(names)
+    other_cols = [c for c in out.columns if c not in dim_cols and c not in new_names]
+    return out[ordered + other_cols], ordered
 
 
 def _classify_columns_by_delimiter(
@@ -3374,8 +3484,21 @@ def _apply_hier_expand_defaults(t: Any, df: Any, llm_client: Any, llm_model: str
         "naming_source": naming_source,
         "naming_reason": naming_reason,
     }
-    t.hier_expand_detection = detection
     t.pre_hier_expand_df = df
+    # 展開元は置き換わるため衝突対象から除外し、残る既存列との衝突だけを
+    # 既存の列衝突検出機能で解消する。
+    collision_resolver = lambda name, existing: resolve_column_collision(
+        name, existing, title=t.title, client=llm_client, model=llm_model,
+        new_col_context="階層圧縮カラムを展開して生成した分類列",
+    )
+    df, level_names, collision_log, _ = resolve_generated_column_names(
+        df, level_names, collision_resolver=collision_resolver,
+        excluded_existing={detection["source_col"]},
+    )
+    detection["level_names"] = level_names
+    if collision_log:
+        detection["collision_renames"] = collision_log
+    t.hier_expand_detection = detection
 
     expanded = expand_hierarchy_column(df, detection, level_names)
     rollup_indices, rollup_metadata, hier_integrity = find_hierarchy_rollup_rows(
@@ -3766,7 +3889,25 @@ def _apply_post_pivot_pipeline(
             paren_result["columns"], t.title, llm_client, llm_model
         )
         if named:
+            # 分離元の列は残るので、同名の新設列がある場合も既存側を安全に
+            # 退避する。apply_paren_annotations 単体利用時の連番フォールバック
+            # ではなく、通常経路では意味的なリネームを試みる。
             t.pre_paren_split_df = df
+            collision_resolver = lambda name, existing: resolve_column_collision(
+                name, existing, title=t.title, client=llm_client, model=llm_model,
+                new_col_context="括弧書き注釈から分離して生成した分類列",
+            )
+            df, resolved_names, collision_log, renamed_sources = resolve_generated_column_names(
+                df, [c["new_col"] for c in named], collision_resolver=collision_resolver,
+            )
+            named = [
+                {
+                    **candidate,
+                    "source_col": renamed_sources.get(candidate["source_col"], candidate["source_col"]),
+                    "new_col": resolved,
+                }
+                for candidate, resolved in zip(named, resolved_names)
+            ]
             df = apply_paren_annotations(df, named)
             t.paren_split_info = {
                 "columns": [
@@ -3778,7 +3919,8 @@ def _apply_post_pivot_pipeline(
                         "reasoning": c["reasoning"],
                     }
                     for c in named
-                ]
+                ],
+                "collision_renames": collision_log,
             }
             t.post_paren_split_df = df
 
@@ -3926,14 +4068,18 @@ def _apply_cross_table_detection(
     meta_items = meta_result.get("items") if meta_result else None
     if meta_items:
         t.pre_external_meta_df = t.df
+        external_collision_log: List[Dict[str, Any]] = []
         t.df, ordered_label_cols = apply_external_metadata(
-            t.df, meta_items, target_info["label_cols"], axis_name
+            t.df, meta_items, target_info["label_cols"], axis_name,
+            title=t.title, client=llm_client, model=llm_model,
+            collision_log_out=external_collision_log,
         )
         t.external_meta_info = {
             "columns": meta_items,
             "filename": filename,
             "sheet_name": t.sheet_name,
             "reasoning": meta_result.get("reasoning", "") if meta_result else "",
+            "collision_renames": external_collision_log,
         }
         target_info["label_cols"] = ordered_label_cols
         # ファイル外メタデータから年度を抽出済みの場合、既存のクロス集計側の年補完

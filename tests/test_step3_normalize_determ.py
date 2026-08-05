@@ -518,6 +518,33 @@ def test_resolve_column_collision_fallback_renames_existing():
     assert reason
 
 
+def test_resolve_generated_column_names_preserves_existing_column_without_llm():
+    import pandas as pd
+
+    source = pd.DataFrame({"支店種別": ["既存"], "支店": ["東京"]})
+    out, names, log, renamed = det.resolve_generated_column_names(source, ["支店種別"])
+
+    assert names == ["支店種別"]
+    assert list(out.columns) == ["支店種別_1", "支店"]
+    assert out["支店種別_1"].tolist() == ["既存"]
+    assert log[0]["naming_source"] == "fallback"
+    assert renamed == {"支店種別": "支店種別_1"}
+
+
+def test_resolve_generated_column_names_ignores_replaced_source_column():
+    import pandas as pd
+
+    source = pd.DataFrame({"地域": ["東日本"], "売上": [100]})
+    out, names, log, renamed = det.resolve_generated_column_names(
+        source, ["地域", "事業部"], excluded_existing={"地域"}
+    )
+
+    assert names == ["地域", "事業部"]
+    assert list(out.columns) == ["地域", "売上"]
+    assert log == []
+    assert renamed == {}
+
+
 def test_wide_to_long_collision_preserves_both_columns_without_llm():
     # 実データ相当: 既存の「合計」列とWide_to_long指標「合計」が衝突する
     # ケースで、client未指定（LLMなし）でも双方のデータが失われないことを

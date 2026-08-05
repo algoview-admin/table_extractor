@@ -25,6 +25,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+
 # ---------------------------------------------------------------------------
 # Transpose（行列逆転）の検出と変換
 # ---------------------------------------------------------------------------
@@ -514,6 +515,7 @@ def detect_column_collision_rename(
     title: Optional[str],
     client: Any,
     model: str,
+    new_col_context_override: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """既存列と新規生成列が同名で衝突する場合に、双方が区別できる意味の異なる
     列名をLLMに提案させる。axis_var_name は新規列が属する軸名（例: "年"）で、
@@ -527,7 +529,7 @@ def detect_column_collision_rename(
       判定不能な場合: None
     """
     axis_hint = axis_var_name or "区分ごとの"
-    new_col_context = (
+    new_col_context = new_col_context_override or (
         f"「{axis_var_name}」ごとに縦持ち変換で分解された値"
         if axis_var_name
         else "縦持ち変換で新たに分解された値"
@@ -571,9 +573,8 @@ def detect_column_collision_rename(
 # 表データ本体（列名・値）には現れない付帯情報が含まれることがある。
 # どのトークンがそうした意味のあるメタデータで、どれが「販売月報」「一覧」の
 # ような単なる文書種別を表す定型語かは意味理解が必要なため LLM を用いる。
-# 抽出結果を定数列としてデータに埋め込む処理自体（apply_external_metadata）は
-# 決定論的な薄い処理のため、detect/apply の対を Transpose 等と同じくこの
-# ファイルにまとめて置く。
+# 抽出結果を定数列としてデータに埋め込む処理は決定論的なため、
+# step3_normalize_determ.apply_external_metadata が担う。
 
 _EXTERNAL_META_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
 ファイル名・シート名に含まれる、表データ本体（列名・値）には現れない付帯情報
@@ -600,13 +601,20 @@ _EXTERNAL_META_USER_PROMPT = """以下のファイル名・シート名から、
 - 指標名: そのシート／表全体が集計対象とする数値の種類・単位を表す語。
   シート名が「◯◯別（△△）」のような形式の場合、末尾の括弧内 "△△" が
   該当することが多い
-- 年度: 西暦4桁の数字
+- 年度: 表全体を通じて一律に成り立つ単一の西暦4桁の数字（例:「2024年度」）。
+  「2023〜2026年度」のような複数年にまたがる範囲表記は対象外
+  （下記「抽出してはいけないもの」参照）
 
 【抽出してはいけないもの】
 - 既存の列名に既に含まれる情報
 - 「販売月報」「エリア別」「一覧」のような、文書の種類・体裁を表すだけの汎用語
 - ファイル管理上の記号（バージョン番号、年度以外の連番など）で表の値として
   意味を持たないもの
+- 「2023〜2026年度」「FY22-24」のような年・期間の範囲表記。範囲は表の全行に
+  一律で成り立つ固定値ではなく、集計軸列（{axis_name}）が時系列（年・年度等）
+  を表す場合はその軸が扱う期間そのものを言い換えているだけであることが多い
+  （集計軸へ展開後の値としてすでに表本体に現れる情報のため、範囲の両端を
+  別々の固定値として抽出しないこと）
 - 少しでも判断に迷うものは抽出しない（抽出しすぎより、何も抽出しない方が安全）
 
 【column_name について】
@@ -745,106 +753,6 @@ def extract_external_metadata(
         )
 
     return {"items": cleaned, "reasoning": str(raw.get("reasoning") or "")}
-
-
-def apply_external_metadata(
-    df: Any, items: List[Dict[str, Any]], dim_cols: List[str], axis_name: str
-) -> Tuple[Any, List[str]]:
-    """extract_external_metadata が抽出したメタデータ列を、各項目の anchor/position
-    （既存区分列・集計軸・他項目との包含関係）に基づいて区分列の並びに差し込む
-    （決定論処理）。
-
-    dim_cols: 縦持ち変換後もそのまま残る既存の区分列（横持ち時の左→右の順）。
-    axis_name: 集計軸列名（時系列等が畳まれる列。区分列より右に来る）。
-    anchor がその時点で未配置の他メタ項目を指している場合は複数パスで解決する
-    （チェーン解決）。anchor が無効・null・循環参照等でどうしても解決できない
-    場合は集計軸の直前（＝区分列の末尾）に置く（安全側のフォールバック）。
-
-    Returns:
-      (派生列を挿入した df, 新しい区分列の並び順のリスト)
-    """
-    if not items:
-        return df, list(dim_cols)
-
-    # 1. 列名の重複回避（既存区分列・集計軸・相互）。anchor が他項目の
-    # （採番前の）column_name を指している場合に実際の名前へ引き直せるよう
-    # 対応表を作る。
-    used = set(dim_cols) | {axis_name}
-    name_map: Dict[str, str] = {}
-    resolved: List[Dict[str, Any]] = []
-    for item in items:
-        base = item["column_name"]
-        name = base
-        n = 1
-        while name in used:
-            n += 1
-            name = f"{base}_{n}"
-        used.add(name)
-        name_map[base] = name
-        resolved.append({**item, "column_name": name})
-
-    # 2. anchor / position を解決し、区分列の並び順を決める（チェーン解決）。
-    # 既存区分列の先頭列（この表のデフォルトの主軸）は常に一番左を維持する。
-    # プロンプト側にも同じ制約を明示しているが、LLMが誤って先頭列への
-    # position="before" を返した場合に備え、ここでも決定論的に補正する
-    # （安全側フォールバックとして "after" に読み替える）。
-    primary_axis = dim_cols[0] if dim_cols else None
-    ordered = list(dim_cols)
-    pending = list(resolved)
-    # 同一 anchor に対して複数項目が position="after" で挿入される場合の
-    # 直近挿入位置を記録する（anchor 名 -> ordered 上のインデックス）。
-    # 「anchor の直後」へ毎回 index() で挿入すると、後から処理した項目が
-    # 先に挿入済みの項目より anchor に近い位置へ割り込み、LLM が items で
-    # 示した順序（＝広い区分→狭い区分の意図）が反転してしまうため、
-    # 同一 anchor への2件目以降は「直近に挿入した項目の直後」に積み増す。
-    # position="before" 側は index() を毎回引き直しても anchor 自体が
-    # 挿入のたびに右へ動くため、既存の同anchor項目は自然に左側に残り
-    # 順序が反転しない（この非対称性のため after 側のみ対応が必要）。
-    after_cursor: Dict[str, int] = {}
-    for _ in range(len(pending) + 1):
-        if not pending:
-            break
-        still_pending: List[Dict[str, Any]] = []
-        progressed = False
-        for item in pending:
-            raw_anchor = item.get("anchor")
-            anchor = name_map.get(raw_anchor, raw_anchor) if raw_anchor else None
-            position = item.get("position")
-            if anchor is not None and primary_axis is not None and anchor == primary_axis and position == "before":
-                position = "after"
-            if not anchor or anchor == axis_name or position not in ("before", "after"):
-                ordered.append(item["column_name"])
-                progressed = True
-                continue
-            if anchor in ordered:
-                if position == "after" and anchor in after_cursor:
-                    idx = after_cursor[anchor]
-                else:
-                    idx = ordered.index(anchor)
-                insert_at = idx if position == "before" else idx + 1
-                ordered.insert(insert_at, item["column_name"])
-                if position == "after":
-                    after_cursor[anchor] = insert_at
-                progressed = True
-                continue
-            # anchor が他の未配置メタ項目を指している → 次パスへ持ち越す
-            still_pending.append(item)
-        pending = still_pending
-        if not progressed:
-            break
-    # 循環参照等でどうしても解決できなかった残りは末尾（集計軸の直前）に追加
-    for item in pending:
-        ordered.append(item["column_name"])
-
-    # 3. 実データへ反映。新規列を追加してから、区分列を ordered の並びに
-    # 並べ替える（区分列以外の列は元の順序を保つ）。
-    out = df.copy()
-    for item in resolved:
-        out[item["column_name"]] = item["value"]
-    other_cols = [c for c in df.columns if c not in dim_cols]
-    out = out[ordered + other_cols]
-
-    return out, ordered
 
 
 # ---------------------------------------------------------------------------
