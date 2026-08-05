@@ -38,6 +38,7 @@ class DetectedTable:
     pre_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 前 DataFrame（ffill 適用時のみ）
     post_fill_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # ffill 直後（後続ステップ適用前）の DataFrame スナップショット
     stack_info: Optional[Dict[str, Any]] = field(default=None)          # クロス集計検出情報
+    pre_stack_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # クロス集計変換前 DataFrame（列衝突検出機能による退避リネーム前のスナップショット。UI「変換前」表示専用）
     stacked_df: Optional[pd.DataFrame] = field(default=None, repr=False)   # 縦持ち変換後 DataFrame
     pre_unit_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 単位分離前 DataFrame（単位混在検出時のみ）
     post_unit_split_df: Optional[pd.DataFrame] = field(default=None, repr=False)  # 単位分離直後（後続ステップ適用前）の DataFrame スナップショット

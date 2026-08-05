@@ -4253,6 +4253,7 @@ def _apply_cross_table_detection(
 
     info = cross_info
     if info:
+        t.pre_stack_df = t.df
         rename_map, collision_log = _resolve_stacking_collisions(
             t, info["label_cols"],
             [n for n in [info.get("var_name"), info.get("value_name")] if n],

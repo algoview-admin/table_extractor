@@ -1580,7 +1580,7 @@ def _render_external_meta_body_html(t: "DetectedTable") -> str:
 def _render_stack_body(t: "DetectedTable") -> None:
     """クロス集計→縦持ち変換の詳細（Streamlit ウィジェット版）。"""
     info = t.stack_info
-    wide = t.df
+    wide = t.pre_stack_df if t.pre_stack_df is not None else t.df
     long_df = t.stacked_df
     if not info or wide is None or long_df is None:
         return
@@ -1667,7 +1667,7 @@ def _render_stack_body(t: "DetectedTable") -> None:
 def _render_stack_body_html(t: "DetectedTable") -> str:
     """クロス集計→縦持ち変換の詳細（HTML 文字列版）。"""
     info = t.stack_info
-    wide = t.df
+    wide = t.pre_stack_df if t.pre_stack_df is not None else t.df
     long_df = t.stacked_df
     if not info or wide is None or long_df is None:
         return ""
