@@ -59,6 +59,7 @@ def _df_to_html(
     highlight_col_names: Optional[set] = None,
     unit_col_names: Optional[set] = None,
     green_col_names: Optional[set] = None,
+    purple_col_names: Optional[set] = None,
 ) -> str:
     """DataFrameをモダンなスタイルのHTMLテーブルに変換する。
     max_height を指定すると縦スクロール可能なコンテナで包む。
@@ -67,8 +68,9 @@ def _df_to_html(
     amber_row_indices: 黄色強調する行の位置インデックス集合（破棄はされず、
       列名として採用される行。highlight_row_indices と重複する場合は赤を優先）。
     highlight_col_names: オレンジ色ヘッダーで示す除去列名集合。
-    unit_col_names: 紫色ヘッダーで示す単位付加列名集合。
-    green_col_names: 緑色ヘッダーで示す前方補完列名集合。"""
+    unit_col_names / purple_col_names: 紫色ヘッダーで示す列名集合
+      （単位付加列名、または列衝突検出機能でリネームされた既存列名など）。
+    green_col_names: 緑色ヘッダーで示す前方補完・変換で生まれた列名集合。"""
     col_names = list(df.columns)
     orange_pos: set = {
         j
@@ -78,7 +80,8 @@ def _df_to_html(
     purple_pos: set = {
         j
         for j, c in enumerate(col_names)
-        if unit_col_names and str(c) in unit_col_names
+        if (unit_col_names and str(c) in unit_col_names)
+        or (purple_col_names and str(c) in purple_col_names)
     }
     green_pos: set = {
         j
@@ -924,7 +927,10 @@ def _paren_split_meta_html(t: "DetectedTable") -> str:
             f"{_html.escape(c.get('reasoning', ''))}</span>"
             "</div>"
         )
-    return f"<div style='margin:4px 0 12px;line-height:1.8'>{rows_html}</div>"
+    return (
+        _collision_warning_html((info or {}).get("collision_renames"))
+        + f"<div style='margin:4px 0 12px;line-height:1.8'>{rows_html}</div>"
+    )
 
 
 def _render_paren_split_body(t: "DetectedTable") -> None:
@@ -938,6 +944,9 @@ def _render_paren_split_body(t: "DetectedTable") -> None:
     columns = info.get("columns", [])
     source_cols = {c["source_col"] for c in columns}
     new_cols = {c["new_col"] for c in columns}
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (info.get("collision_renames") or []) if c.get("existing_new_name")
+    }
 
     st.markdown(_paren_split_meta_html(t), unsafe_allow_html=True)
 
@@ -954,10 +963,12 @@ def _render_paren_split_body(t: "DetectedTable") -> None:
     with col_a:
         st.markdown(
             f"**変換後**（{len(after.columns)} 列 × {len(after)} 行 / "
-            f"緑列 = 分離で生まれた注釈カラム）"
+            f"緑列 = 分離で生まれた注釈カラム{_purple_caption_suffix(renamed_col_set)}）"
         )
         st.markdown(
-            _df_to_html(after, max_height=340, green_col_names=new_cols),
+            _df_to_html(
+                after, max_height=340, green_col_names=new_cols, purple_col_names=renamed_col_set,
+            ),
             unsafe_allow_html=True,
         )
 
@@ -973,14 +984,19 @@ def _render_paren_split_body_html(t: "DetectedTable") -> str:
     columns = info.get("columns", [])
     source_cols = {c["source_col"] for c in columns}
     new_cols = {c["new_col"] for c in columns}
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (info.get("collision_renames") or []) if c.get("existing_new_name")
+    }
 
     meta_html = _paren_split_meta_html(t)
     pre_html = _df_to_html(before, max_height=340, highlight_col_names=source_cols)
-    post_html = _df_to_html(after, max_height=340, green_col_names=new_cols)
+    post_html = _df_to_html(
+        after, max_height=340, green_col_names=new_cols, purple_col_names=renamed_col_set,
+    )
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
         f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before.columns)} 列 × {len(before)} 行 / オレンジ列 = 注釈を含むカラム）</p>{pre_html}</div>"
-        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 分離で生まれた注釈カラム）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 分離で生まれた注釈カラム{_purple_caption_suffix(renamed_col_set)}）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -1314,6 +1330,7 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
         naming_label = (
             f"既定名：{_html.escape(naming_reason)}" if naming_reason else "既定名"
         )
+    st.markdown(_collision_warning_html(detection.get("collision_renames")), unsafe_allow_html=True)
     st.markdown(
         f"<p style='margin:4px 0 6px'>検出カラム: "
         f"<code style='background:rgba(156,163,175,0.15);border:1px solid rgba(156,163,175,0.4);"
@@ -1337,6 +1354,9 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
     if display_after is None:
         display_after = t.df
     green_cols = set(level_names)
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (detection.get("collision_renames") or []) if c.get("existing_new_name")
+    }
 
     pre_display = pre.astype(str)
     if mode == "indent" and source_col in pre_display.columns:
@@ -1356,11 +1376,12 @@ def _render_hier_expand_body(t: "DetectedTable") -> None:
     with col_a:
         st.markdown(
             f"**変換後**（{len(display_after.columns)} 列 × {len(display_after)} 行 / "
-            f"緑列 = 展開で生まれた階層カラム）"
+            f"緑列 = 展開で生まれた階層カラム{_purple_caption_suffix(renamed_col_set)}）"
         )
         st.markdown(
             _df_to_html(
-                display_after.astype(str), max_height=340, green_col_names=green_cols
+                display_after.astype(str), max_height=340, green_col_names=green_cols,
+                purple_col_names=renamed_col_set,
             ),
             unsafe_allow_html=True,
         )
@@ -1411,6 +1432,12 @@ def _collision_warning_html(collision_renames: Optional[List[Dict[str, Any]]]) -
             "</div>"
         )
     return "".join(lines)
+
+
+def _purple_caption_suffix(renamed_col_names: Optional[set]) -> str:
+    """「変換後」テーブルのキャプションに付ける、列衝突検出機能でリネームされた
+    既存列（紫色ヘッダー）の凡例。衝突が実際に発生した場合のみ表示する。"""
+    return " / 紫列 = 列衝突検出機能でリネームされた既存列" if renamed_col_names else ""
 
 
 def _axis_position_note_html(axis_position: Optional[Dict[str, Any]]) -> str:
@@ -1524,6 +1551,7 @@ def _render_external_meta_body(t: "DetectedTable") -> None:
 
     cols_html = " ".join(_badge(c) for c in columns) or "（なし）"
 
+    st.markdown(_collision_warning_html(info.get("collision_renames")), unsafe_allow_html=True)
     st.markdown(
         "<div style='margin:4px 0 12px;line-height:2'>"
         f"抽出元ファイル名: <code>{_html.escape(filename)}</code><br>"
@@ -1538,16 +1566,20 @@ def _render_external_meta_body(t: "DetectedTable") -> None:
     )
 
     new_col_set = {str(c.get("column_name", "")) for c in columns}
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (info.get("collision_renames") or []) if c.get("existing_new_name")
+    }
     col_b, col_a = st.columns(2)
     with col_b:
         st.markdown(f"**変換前**（{len(before.columns)} 列 × {len(before)} 行）")
         st.markdown(_df_to_html(before, max_height=340), unsafe_allow_html=True)
     with col_a:
         st.markdown(
-            f"**変換後**（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 追加された派生列）"
+            f"**変換後**（{len(after.columns)} 列 × {len(after)} 行 / "
+            f"緑列 = 追加された派生列{_purple_caption_suffix(renamed_col_set)}）"
         )
         st.markdown(
-            _df_to_html(after, max_height=340, green_col_names=new_col_set),
+            _df_to_html(after, max_height=340, green_col_names=new_col_set, purple_col_names=renamed_col_set),
             unsafe_allow_html=True,
         )
 
@@ -1577,6 +1609,7 @@ def _render_external_meta_body_html(t: "DetectedTable") -> str:
 
     cols_html = " ".join(_badge(c) for c in columns) or "（なし）"
     meta_html = (
+        _collision_warning_html(info.get("collision_renames")) +
         "<div style='margin:4px 0 12px;line-height:2'>"
         f"抽出元ファイル名: <code>{_html.escape(filename)}</code><br>"
         f"抽出元シート名: <code>{_html.escape(sheet_name)}</code><br>"
@@ -1586,12 +1619,17 @@ def _render_external_meta_body_html(t: "DetectedTable") -> str:
     )
 
     new_col_set = {str(c.get("column_name", "")) for c in columns}
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (info.get("collision_renames") or []) if c.get("existing_new_name")
+    }
     pre_html = _df_to_html(before, max_height=340)
-    post_html = _df_to_html(after, max_height=340, green_col_names=new_col_set)
+    post_html = _df_to_html(
+        after, max_height=340, green_col_names=new_col_set, purple_col_names=renamed_col_set,
+    )
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
         f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before.columns)} 列 × {len(before)} 行）</p>{pre_html}</div>"
-        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 追加された派生列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after.columns)} 列 × {len(after)} 行 / 緑列 = 追加された派生列{_purple_caption_suffix(renamed_col_set)}）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -1665,6 +1703,9 @@ def _render_stack_body(t: "DetectedTable") -> None:
     new_col_set = {_final_name(var_name), _final_name(value_name)}
     if year_ctx and info.get("time_kind") == "month":
         new_col_set.add("年")
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (collision_renames or []) if c.get("existing_new_name")
+    }
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -1677,10 +1718,14 @@ def _render_stack_body(t: "DetectedTable") -> None:
         )
     with col_b:
         st.markdown(
-            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）"
+            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / "
+            f"緑列 = 変換で生まれた列{_purple_caption_suffix(renamed_col_set)}）"
         )
         st.markdown(
-            _df_to_html(long_df, max_height=340, green_col_names=new_col_set),
+            _df_to_html(
+                long_df, max_height=340, green_col_names=new_col_set,
+                purple_col_names=renamed_col_set,
+            ),
             unsafe_allow_html=True,
         )
 
@@ -1745,13 +1790,18 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     new_col_set = {_final_name(var_name), _final_name(value_name)}
     if year_ctx and info.get("time_kind") == "month":
         new_col_set.add("年")
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (collision_renames or []) if c.get("existing_new_name")
+    }
 
     pre_html = _df_to_html(wide, max_height=340, highlight_col_names=time_col_set)
-    post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
+    post_html = _df_to_html(
+        long_df, max_height=340, green_col_names=new_col_set, purple_col_names=renamed_col_set,
+    )
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
         f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 時系列カラム）</p>{pre_html}</div>"
-        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列{_purple_caption_suffix(renamed_col_set)}）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -1791,6 +1841,9 @@ def _render_multi_axis_body(t: "DetectedTable") -> None:
     )
 
     new_col_set = set(axis_names) | {value_name}
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (info.get("collision_renames") or []) if c.get("existing_new_name")
+    }
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -1798,10 +1851,14 @@ def _render_multi_axis_body(t: "DetectedTable") -> None:
         st.markdown(_df_to_html(wide, max_height=340), unsafe_allow_html=True)
     with col_b:
         st.markdown(
-            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 展開で生まれた列）"
+            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / "
+            f"緑列 = 展開で生まれた列{_purple_caption_suffix(renamed_col_set)}）"
         )
         st.markdown(
-            _df_to_html(long_df, max_height=340, green_col_names=new_col_set),
+            _df_to_html(
+                long_df, max_height=340, green_col_names=new_col_set,
+                purple_col_names=renamed_col_set,
+            ),
             unsafe_allow_html=True,
         )
 
@@ -1837,12 +1894,17 @@ def _render_multi_axis_body_html(t: "DetectedTable") -> str:
     )
 
     new_col_set = set(axis_names) | {value_name}
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (info.get("collision_renames") or []) if c.get("existing_new_name")
+    }
     pre_html = _df_to_html(wide, max_height=340)
-    post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
+    post_html = _df_to_html(
+        long_df, max_height=340, green_col_names=new_col_set, purple_col_names=renamed_col_set,
+    )
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
         f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（多段ヘッダー / {len(wide.columns)} 列 × {len(wide)} 行）</p>{pre_html}</div>"
-        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 展開で生まれた列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 展開で生まれた列{_purple_caption_suffix(renamed_col_set)}）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -1906,6 +1968,9 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
         (c.get("new_col_final_name") or c.get("original_name")) for c in (collision_renames or [])
     } | (set(indicators) - {c.get("original_name") for c in (collision_renames or [])})
     new_col_set = {axis_var_name} | final_indicators
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (collision_renames or []) if c.get("existing_new_name")
+    }
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -1918,10 +1983,14 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
         )
     with col_b:
         st.markdown(
-            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）"
+            f"**変換後**（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / "
+            f"緑列 = 変換で生まれた列{_purple_caption_suffix(renamed_col_set)}）"
         )
         st.markdown(
-            _df_to_html(long_df, max_height=340, green_col_names=new_col_set),
+            _df_to_html(
+                long_df, max_height=340, green_col_names=new_col_set,
+                purple_col_names=renamed_col_set,
+            ),
             unsafe_allow_html=True,
         )
 
@@ -1979,13 +2048,18 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
         (c.get("new_col_final_name") or c.get("original_name")) for c in (collision_renames or [])
     } | (set(indicators) - {c.get("original_name") for c in (collision_renames or [])})
     new_col_set = {axis_var_name} | final_indicators
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (collision_renames or []) if c.get("existing_new_name")
+    }
 
     pre_html = _df_to_html(wide, max_height=340, highlight_col_names=compound_col_set)
-    post_html = _df_to_html(long_df, max_height=340, green_col_names=new_col_set)
+    post_html = _df_to_html(
+        long_df, max_height=340, green_col_names=new_col_set, purple_col_names=renamed_col_set,
+    )
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
         f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（横持ち / {len(wide.columns)} 列 / オレンジ列 = 軸+指標の複合列）</p>{pre_html}</div>"
-        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（縦持ち / {len(long_df.columns)} 列 × {len(long_df)} 行 / 緑列 = 変換で生まれた列{_purple_caption_suffix(renamed_col_set)}）</p>{post_html}</div>"
         "</div>"
     )
     return meta_html + grid_html
@@ -2038,10 +2112,14 @@ def _render_uchi_split_body(t: "DetectedTable") -> None:
             _df_to_html(before, max_height=340, highlight_row_indices=removed_positions),
             unsafe_allow_html=True,
         )
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (info.get("collision_renames") or []) if c.get("existing_new_name")
+    }
     with col_b:
-        st.markdown(f"**変換後**（{len(after)} 行 / 内訳行を除去済み）")
+        caption = f"**変換後**（{len(after)} 行 / 内訳行を除去済み{_purple_caption_suffix(renamed_col_set)}）"
+        st.markdown(caption)
         st.markdown(
-            _df_to_html(after, max_height=340),
+            _df_to_html(after, max_height=340, purple_col_names=renamed_col_set),
             unsafe_allow_html=True,
         )
 
@@ -2092,12 +2170,18 @@ def _render_uchi_split_body_html(t: "DetectedTable") -> str:
         "</div>"
     )
 
+    renamed_col_set = {
+        c.get("existing_new_name") for c in (info.get("collision_renames") or []) if c.get("existing_new_name")
+    }
+    post_label = "変換後（{n} 行 / 内訳行を除去済み{suffix}）".format(
+        n=len(after), suffix=_purple_caption_suffix(renamed_col_set)
+    )
     pre_html = _df_to_html(before, max_height=340, highlight_row_indices=removed_positions)
-    post_html = _df_to_html(after, max_height=340)
+    post_html = _df_to_html(after, max_height=340, purple_col_names=renamed_col_set)
     grid_html = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px'>"
         f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換前（{len(before)} 行 / 赤色 {len(removed_positions)} 行 = 内訳行）</p>{pre_html}</div>"
-        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>変換後（{len(after)} 行 / 内訳行を除去済み）</p>{post_html}</div>"
+        f"<div style='min-width:0'><p style='margin:0 0 6px;font-weight:600'>{post_label}</p>{post_html}</div>"
         "</div>"
     )
     breakdown_html = _df_to_html(
