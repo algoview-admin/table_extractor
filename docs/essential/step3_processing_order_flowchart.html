@@ -119,14 +119,14 @@ body {
   <div class="hero">
     <div>
       <h1>Step3 処理順フローチャート</h1>
-      <p>Step3（テーブル整形）が最初に適用する多段ヘッダーの単純統合を先頭に、正規化パイプラインの実際の実行順（① 単純統合→Pivot→Transpose→② 軸展開→カラム名内階層区切りの分離→括弧書き注釈の分離→階層圧縮カラムの展開→グルーピング列前方補完→「うち」書き分離→集計行除去→単位混在の分離→無効カラム削除→Wide_to_long→クロス集計→ファイル外メタデータ）で並べた全15機能のフローと、変換前後のテーブルサンプル。①②はどちらも「多段ヘッダーの検出と解決機能」の2フェーズ（Transposeを挟むため別カード）</p>
+      <p>Step3（テーブル整形）が最初に適用する多段ヘッダーの単純統合を先頭に、正規化パイプラインの実際の実行順（① 単純統合→Pivot→変換規模の事前予測→Transpose→② 軸展開→カラム名内階層区切りの分離→括弧書き注釈の分離→階層圧縮カラムの展開→グルーピング列前方補完→「うち」書き分離→集計行除去→単位混在の分離→無効カラム削除→Wide_to_long→クロス集計→ファイル外メタデータ）で並べた全16機能のフローと、変換前後のテーブルサンプル。①②はどちらも「多段ヘッダーの検出と解決機能」の2フェーズ（Transposeを挟むため別カード）</p>
     </div>
     <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
       <a href="index.html" class="other-btn">📋 ドキュメント一覧</a>
       <a href="step3_additional_features_flowchart.html" class="other-btn">追加機能ページを見る →</a>
     </div>
   </div>
-  <nav class="nav"><a href="#header_merge" class="nav-lnk">1. 多段ヘッダーの検出と解決機能（① 単純統合）</a><a href="#pivot" class="nav-lnk">2. Pivot検出と変換機能</a><a href="#transpose" class="nav-lnk">3. Transpose検出と変換機能</a><a href="#multiaxis" class="nav-lnk">4. 多段ヘッダーの検出と解決機能（② 軸展開）</a><a href="#colsplit" class="nav-lnk">5. カラム名内階層区切りの分離機能</a><a href="#parensplit" class="nav-lnk">6. 括弧書き注釈の分離機能</a><a href="#hierexpand" class="nav-lnk">7. 階層圧縮カラムの展開機能</a><a href="#fillcol" class="nav-lnk">8. グルーピング列の前方補完機能</a><a href="#uchi" class="nav-lnk">9. 「うち」書き識別と別テーブル分離機能</a><a href="#aggregate" class="nav-lnk">10. 集計行の検出・削除・メタデータ保存機能</a><a href="#unit" class="nav-lnk">11. 単位混在の分離機能</a><a href="#invalidcol" class="nav-lnk">12. 無効カラムの検出と削除機能</a><a href="#wtl" class="nav-lnk">13. Wide_to_long検出と変換機能</a><a href="#crosstab" class="nav-lnk">14. クロス集計形式の検出と縦持ち変換機能</a><a href="#externalmeta" class="nav-lnk">15. ファイル外メタデータからの派生カラム生成機能</a><a href="#integritycheck" class="nav-lnk">🔗 階層整合性検証と原因判別機能（サブ機能）</a></nav>
+  <nav class="nav"><a href="#header_merge" class="nav-lnk">1. 多段ヘッダーの検出と解決機能（① 単純統合）</a><a href="#pivot" class="nav-lnk">2. Pivot検出と変換機能</a><a href="#pivotscale" class="nav-lnk">3. 変換規模の事前予測機能</a><a href="#transpose" class="nav-lnk">4. Transpose検出と変換機能</a><a href="#multiaxis" class="nav-lnk">5. 多段ヘッダーの検出と解決機能（② 軸展開）</a><a href="#colsplit" class="nav-lnk">6. カラム名内階層区切りの分離機能</a><a href="#parensplit" class="nav-lnk">7. 括弧書き注釈の分離機能</a><a href="#hierexpand" class="nav-lnk">8. 階層圧縮カラムの展開機能</a><a href="#fillcol" class="nav-lnk">9. グルーピング列の前方補完機能</a><a href="#uchi" class="nav-lnk">10. 「うち」書き識別と別テーブル分離機能</a><a href="#aggregate" class="nav-lnk">11. 集計行の検出・削除・メタデータ保存機能</a><a href="#unit" class="nav-lnk">12. 単位混在の分離機能</a><a href="#invalidcol" class="nav-lnk">13. 無効カラムの検出と削除機能</a><a href="#wtl" class="nav-lnk">14. Wide_to_long検出と変換機能</a><a href="#crosstab" class="nav-lnk">15. クロス集計形式の検出と縦持ち変換機能</a><a href="#externalmeta" class="nav-lnk">16. ファイル外メタデータからの派生カラム生成機能</a><a href="#integritycheck" class="nav-lnk">🔗 階層整合性検証と原因判別機能（サブ機能）</a><a href="#columnnaming" class="nav-lnk">🔗 列名生成規則機能（サブ機能）</a><a href="#collisiondetect" class="nav-lnk">🔗 列衝突検出機能（サブ機能）</a></nav>
 
 <section class="feature" id="header_merge">
   <div class="feature-hd">
@@ -205,9 +205,47 @@ body {
 </g></svg></div>
   </div>
 </section>
-<section class="feature" id="transpose">
+<section class="feature" id="pivotscale">
   <div class="feature-hd">
     <span class="feature-num">3</span>
+    <div>
+      <h2>変換規模の事前予測機能</h2>
+      <p class="feature-desc">Pivotが生成する列数（属性の種類数）を実行前に見積もり、Excel列上限や処理速度への影響が大きい場合は自動適用せず、続行／上位N種のみ／中止をユーザーに選ばせて処理を保留する</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">Pivot検出結果（属性が1000種類超）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">顧客ID</th><th class="">属性</th><th class="">値</th></tr></thead><tbody><tr><td>C001</td><td>商品0001</td><td>1200</td></tr><tr><td>C001</td><td>商品0002</td><td>800</td></tr><tr><td>…</td><td>…（属性1000種超）</td><td>…</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">事前予測</span></div><div class="sample-block"><div class="sample-label">警告と選択肢の提示</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="hl">属性数</th><th class="hl">生成列数</th><th class="">Excel上限</th></tr></thead><tbody><tr><td>1000超</td><td>1000超</td><td>超えない（処理速度は低下）</td></tr></tbody></table></div><div class="sample-note">続行／上位N種のみPivot／中止 の3択をユーザーに提示し、選択が確定するまでこの表の以降の整形処理を保留する</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 582" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">Pivot検出結果を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">生成される列数（属性数）が</tspan><tspan x="280" dy="23">閾値（既定1000列）を超えるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま自動で</tspan><tspan x="660" dy="22">Pivotを適用</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="354.0" width="320" height="76"/><text x="280" y="398.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">警告を表示して処理を保留し、</tspan><tspan x="280" dy="22">続行/上位N種のみ/中止を提示</tspan></text>
+<line class="fc-arrow" x1="280" y1="430" x2="280" y2="488" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="488.0" width="340" height="64" rx="32.0"/><text x="280" y="526.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">選択に応じて次の処理へ</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="385" width="48" height="22" rx="11"/>
+<text x="692" y="402" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,427 678,438 654,449 630,438"/>
+<text x="692" y="444" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="469" width="48" height="22"/>
+<text x="692" y="486" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="transpose">
+  <div class="feature-hd">
+    <span class="feature-num">4</span>
     <div>
       <h2>Transpose検出と変換機能</h2>
       <p class="feature-desc">表の行と列が意味的に入れ替わっていないかを判定し、正しい向きに変換する</p>
@@ -245,7 +283,7 @@ body {
 </section>
 <section class="feature" id="multiaxis">
   <div class="feature-hd">
-    <span class="feature-num">4</span>
+    <span class="feature-num">5</span>
     <div>
       <h2>多段ヘッダーの検出と解決機能（② 軸展開）</h2>
       <p class="feature-desc">①単純統合の結果を、多段ヘッダーが独立した複数カテゴリ軸の交差と判定できる場合にのみ縦持ち展開で置き換える（指標にあたる軸はWide_to_long同様、列として維持する）</p>
@@ -289,7 +327,7 @@ body {
 </section>
 <section class="feature" id="colsplit">
   <div class="feature-hd">
-    <span class="feature-num">5</span>
+    <span class="feature-num">6</span>
     <div>
       <h2>カラム名内階層区切りの分離機能</h2>
       <p class="feature-desc">カラム名に階層区切り文字（"/"「・」等）が埋め込まれ、かつセル値も同じ区切り・個数で分割できる列を検出し、複数カラムに分離する（決定論的・LLM不使用）</p>
@@ -333,7 +371,7 @@ body {
 </section>
 <section class="feature" id="parensplit">
   <div class="feature-hd">
-    <span class="feature-num">6</span>
+    <span class="feature-num">7</span>
     <div>
       <h2>括弧書き注釈の分離機能</h2>
       <p class="feature-desc">セル値末尾の括弧書き注釈（"東京(本社)"等）を検出し、注釈を別カラムに分離する（単位付き数値の注記は対象外・LLMが新カラム名を命名）</p>
@@ -377,7 +415,7 @@ body {
 </section>
 <section class="feature" id="hierexpand">
   <div class="feature-hd">
-    <span class="feature-num">7</span>
+    <span class="feature-num">8</span>
     <div>
       <h2>階層圧縮カラムの展開機能</h2>
       <p class="feature-desc">階層カテゴリがインデントまたはセル内の階層区切り文字で1カラムに圧縮された表を検出し、レベルごとのカラムに展開する（LLMがレベル名を命名、失敗時は既定名「大分類/中分類/小分類」にフォールバック）。展開直後、子行群の合計と数値が一致するロールアップ行（親レベルの小計・合計）は本機能自身が検出・除去する</p>
@@ -416,7 +454,7 @@ body {
 </section>
 <section class="feature" id="fillcol">
   <div class="feature-hd">
-    <span class="feature-num">8</span>
+    <span class="feature-num">9</span>
     <div>
       <h2>グルーピング列の前方補完機能</h2>
       <p class="feature-desc">Excelの視覚的セル結合による空白を、直前の値で前方補完する</p>
@@ -460,7 +498,7 @@ body {
 </section>
 <section class="feature" id="uchi">
   <div class="feature-hd">
-    <span class="feature-num">9</span>
+    <span class="feature-num">10</span>
     <div>
       <h2>「うち」書き識別と別テーブル分離機能</h2>
       <p class="feature-desc">「うち男性」等の内訳行を検出し、親子関係を保ったまま別テーブルへ分離する</p>
@@ -504,7 +542,7 @@ body {
 </section>
 <section class="feature" id="aggregate">
   <div class="feature-hd">
-    <span class="feature-num">10</span>
+    <span class="feature-num">11</span>
     <div>
       <h2>集計行の検出・削除・メタデータ保存機能</h2>
       <p class="feature-desc">「計」「合計」等の集計行を検出し、冗長性を確認できた場合のみ除去する</p>
@@ -548,7 +586,7 @@ body {
 </section>
 <section class="feature" id="unit">
   <div class="feature-hd">
-    <span class="feature-num">11</span>
+    <span class="feature-num">12</span>
     <div>
       <h2>単位混在の分離機能</h2>
       <p class="feature-desc">指標名へ単位が埋め込まれた列を検出し、指標マスタへ分離する</p>
@@ -592,7 +630,7 @@ body {
 </section>
 <section class="feature" id="invalidcol">
   <div class="feature-hd">
-    <span class="feature-num">12</span>
+    <span class="feature-num">13</span>
     <div>
       <h2>無効カラムの検出と削除機能</h2>
       <p class="feature-desc">全欠損列・無名列（プレースホルダ列名）を検出し、全欠損列は既定で削除する（ユーザーがチェックボックスで復元・追加削除を調整可能）</p>
@@ -636,7 +674,7 @@ body {
 </section>
 <section class="feature" id="wtl">
   <div class="feature-hd">
-    <span class="feature-num">13</span>
+    <span class="feature-num">14</span>
     <div>
       <h2>Wide_to_long検出と変換機能</h2>
       <p class="feature-desc">軸（時系列軸・支店軸等）と指標名が1つの列名に合成された表を検出し、軸について縦持ちに変換する（指標は列として維持する）。<br>決定論的な手段（時系列語彙・区切り文字）を優先し、それでも判定できない場合のみLLMで確認する。</p>
@@ -686,7 +724,7 @@ body {
 </section>
 <section class="feature" id="crosstab">
   <div class="feature-hd">
-    <span class="feature-num">14</span>
+    <span class="feature-num">15</span>
     <div>
       <h2>クロス集計形式の検出と縦持ち変換機能</h2>
       <p class="feature-desc">月・四半期・年度等の時系列パターンそのものが列名になっている表を縦持ちに変換する</p>
@@ -730,7 +768,7 @@ body {
 </section>
 <section class="feature" id="externalmeta">
   <div class="feature-hd">
-    <span class="feature-num">15</span>
+    <span class="feature-num">16</span>
     <div>
       <h2>ファイル外メタデータからの派生カラム生成機能</h2>
       <p class="feature-desc">ファイル名・シート名から表本体に現れない付帯情報をLLMで抽出し、既存列のどの列と関連が深いか（前後どちらに置くべきか）を判定し、その位置に定数列として埋め込む</p>
@@ -777,7 +815,7 @@ body {
     <span class="feature-num" style="background:var(--decision-line);">🔗</span>
     <div>
       <h2>階層整合性検証と原因判別機能（サブ機能）</h2>
-      <p class="feature-desc">単独のステップではなく、行を削除する3つの処理（7. 階層圧縮カラムの展開のロールアップ行除去／9. 「うち」書き識別と別テーブル分離／10. 集計行の検出・削除）が削除を実行する直前に共通で呼び出すサブ機能。集計値と対応する明細行群の合計を突き合わせ、一致すれば PASS、不一致なら差分の方向から原因を判別して監査用メタデータとして記録する。判定結果は削除の可否には一切影響しない</p>
+      <p class="feature-desc">単独のステップではなく、行を削除する3つの処理（8. 階層圧縮カラムの展開のロールアップ行除去／10. 「うち」書き識別と別テーブル分離／11. 集計行の検出・削除）が削除を実行する直前に共通で呼び出すサブ機能。集計値と対応する明細行群の合計を突き合わせ、一致すれば PASS、不一致なら差分の方向から原因を判別して監査用メタデータとして記録する。判定結果は削除の可否には一切影響しない</p>
     </div>
   </div>
   <div class="feature-body">
@@ -789,7 +827,7 @@ body {
   <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
     <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
   </marker>
-</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">削除実行直前（7・9・10 から呼び出し）</tspan></text>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">削除実行直前（8・10・11 から呼び出し）</tspan></text>
 <line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
 <polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">明細行群の合計は集計値と</tspan><tspan x="280" dy="23">一致するか？（許容誤差1%）</tspan></text>
 <line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
@@ -800,6 +838,94 @@ body {
 <rect class="sh-process" x="120.0" y="354.0" width="320" height="76"/><text x="280" y="398.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">PASSとして記録</tspan><tspan x="280" dy="22">（削除はそのまま実行される）</tspan></text>
 <line class="fc-arrow" x1="280" y1="430" x2="280" y2="488" marker-end="url(#arrowhead)"/>
 <rect class="sh-terminal" x="110.0" y="488.0" width="340" height="64" rx="32.0"/><text x="280" y="526.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">呼び出し元の削除処理へ戻る</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="385" width="48" height="22" rx="11"/>
+<text x="692" y="402" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,427 678,438 654,449 630,438"/>
+<text x="692" y="444" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="469" width="48" height="22"/>
+<text x="692" y="486" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="columnnaming">
+  <div class="feature-hd">
+    <span class="feature-num" style="background:var(--decision-line);">🔗</span>
+    <div>
+      <h2>列名生成規則機能（サブ機能）</h2>
+      <p class="feature-desc">単独のステップではなく、新規列名を生成する処理（5. 多段ヘッダーの検出と解決機能の軸展開／14. Wide_to_long検出と変換／15. クロス集計形式の検出と縦持ち変換）が軸名・値列名を決定する際に共通で呼び出すサブ機能。命名辞書（年・売上等の頻出語彙）による照合を最優先し、次に軸トークン間の共通接頭辞・接尾辞からの自動算出を試み、どちらでも決まらない場合のみLLMに命名を確認する（LLM未設定・失敗時は「区分」「値」等の既定名にフォールバック）。決定した名称にはどの根拠で命名したか（辞書命名／計算命名／LLM命名／既定名）を記録し、UI上に表示する</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">命名根拠サンプル</div>
+      <div class="sample-group-label first">① 命名辞書に一致</div><div class="sample-block"><div class="sample-label">変換前（横持ち）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="">2023年</th><th class="">2024年</th></tr></thead><tbody><tr><td>東京</td><td>100</td><td>120</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">命名して縦持ち化</span></div><div class="sample-block"><div class="sample-label">変換後（軸名「年」を採用）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="hl">年</th><th class="">売上</th></tr></thead><tbody><tr><td>東京</td><td>2023</td><td>100</td></tr><tr><td>東京</td><td>2024</td><td>120</td></tr></tbody></table></div><div class="sample-note">タイトル・列名の語彙が命名辞書に一致するため「年」をそのまま採用（辞書命名）</div></div><div class="sample-group-label">② 軸トークンの共通接尾辞から自動算出</div><div class="sample-block"><div class="sample-label">変換前（横持ち）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">商品</th><th class="">東京支社_売上</th><th class="">大阪支社_売上</th></tr></thead><tbody><tr><td>家電</td><td>100</td><td>80</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">命名して縦持ち化</span></div><div class="sample-block"><div class="sample-label">変換後（軸名「支社」を採用）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">商品</th><th class="hl">支社</th><th class="">売上</th></tr></thead><tbody><tr><td>家電</td><td>東京支社</td><td>100</td></tr><tr><td>家電</td><td>大阪支社</td><td>80</td></tr></tbody></table></div><div class="sample-note">軸トークン共通の接尾辞「支社」を軸名として自動算出（計算命名）</div></div><div class="sample-group-label">③ LLM命名／既定名フォールバック</div><div class="sample-block"><div class="sample-label">変換前（横持ち、共通部分なし）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">月</th><th class="">ゴールド利用額</th><th class="">シルバー利用額</th></tr></thead><tbody><tr><td>4月</td><td>500</td><td>300</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">命名して縦持ち化</span></div><div class="sample-block"><div class="sample-label">変換後（LLMが「会員ランク」と命名）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">月</th><th class="hl">会員ランク</th><th class="">利用額</th></tr></thead><tbody><tr><td>4月</td><td>ゴールド</td><td>500</td></tr><tr><td>4月</td><td>シルバー</td><td>300</td></tr></tbody></table></div><div class="sample-note">LLM未設定・失敗時は軸名「区分」・値名「値」の既定名にフォールバックする</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 1010" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">新規列の命名候補を解決（5・14・15 から呼び出し）</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">列名/タイトルの語彙が</tspan><tspan x="280" dy="23">命名辞書に一致するか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">辞書の名称を採用</tspan><tspan x="660" dy="22">（辞書命名）</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<polygon class="sh-decision" points="280,354.0 450.0,432.0 280,510.0 110.0,432.0"/><text x="280" y="438.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">軸トークン間に共通の</tspan><tspan x="280" dy="23">接頭辞・接尾辞があるか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="432.0" x2="500.0" y2="432.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="416.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="500.0" y="394.0" width="320" height="76"/><text x="660" y="438.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">共通部分を採用</tspan><tspan x="660" dy="22">（計算命名）</tspan></text>
+<line class="fc-arrow" x1="280" y1="510" x2="280" y2="568" marker-end="url(#arrowhead)"/>
+<text x="312" y="539.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<polygon class="sh-decision" points="280,568.0 450.0,646.0 280,724.0 110.0,646.0"/><text x="280" y="652.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">LLMによる命名が</tspan><tspan x="280" dy="23">確認できたか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="646.0" x2="500.0" y2="646.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="630.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="608.0" width="320" height="76"/><text x="660" y="652.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">既定名（区分/値等）を</tspan><tspan x="660" dy="22">採用</tspan></text>
+<line class="fc-arrow" x1="280" y1="724" x2="280" y2="782" marker-end="url(#arrowhead)"/>
+<text x="312" y="753.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="782.0" width="320" height="76"/><text x="280" y="826.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">LLMが提案した意味のある</tspan><tspan x="280" dy="22">名称を採用（LLM命名）</tspan></text>
+<line class="fc-arrow" x1="280" y1="858" x2="280" y2="916" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="916.0" width="340" height="64" rx="32.0"/><text x="280" y="954.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">命名根拠とともに呼び出し元へ戻る</tspan></text>
+<g class="legend-grp">
+<rect class="sh-terminal" x="630" y="813" width="48" height="22" rx="11"/>
+<text x="692" y="830" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
+<polygon class="sh-decision" points="654,855 678,866 654,877 630,866"/>
+<text x="692" y="872" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">条件</text>
+<rect class="sh-process" x="630" y="897" width="48" height="22"/>
+<text x="692" y="914" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">処理</text>
+</g></svg></div>
+  </div>
+</section>
+<section class="feature" id="collisiondetect">
+  <div class="feature-hd">
+    <span class="feature-num" style="background:var(--decision-line);">🔗</span>
+    <div>
+      <h2>列衝突検出機能（サブ機能）</h2>
+      <p class="feature-desc">単独のステップではなく、新規列を追加する処理（5. 多段ヘッダーの検出と解決機能の軸展開／6. カラム名内階層区切りの分離／7. 括弧書き注釈の分離／8. 階層圧縮カラムの展開／10. 「うち」書き識別と別テーブル分離／14. Wide_to_long検出と変換／15. クロス集計形式の検出と縦持ち変換／16. ファイル外メタデータからの派生カラム生成）が列を確定する直前に共通で呼び出すサブ機能。新規生成列名が既存列と衝突する場合を検出し、LLM使用時は双方が区別できる意味の異なる名称を提案する。LLM未設定・失敗時は既存列側を機械的にリネームし、新規列は元の候補名をそのまま使う（データの上書き事故を避けるため、フォールバック時は必ず既存列側をリネームする）</p>
+    </div>
+  </div>
+  <div class="feature-body">
+    <div class="sample-pane">
+      <div class="sample-pane-title">テーブルサンプル</div>
+      <div class="sample-block"><div class="sample-label">変換前（既存に「合計」列あり）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="">2023年合計</th><th class="">2024年合計</th><th class="hl">合計</th></tr></thead><tbody><tr><td>東京</td><td>5000</td><td>5500</td><td>21000</td></tr></tbody></table></div></div><div class="down-arrow">▼<span class="da-txt">縦持ち化で新規「合計」列が衝突</span></div><div class="sample-block"><div class="sample-label">変換後（双方をリネームして両立）</div><div class="sample-tbl-wrap"><table class="sample-tbl"><thead><tr><th class="">支店</th><th class="">年</th><th class="hl">年別合計</th><th class="hl">全期間合計</th></tr></thead><tbody><tr><td>東京</td><td>2023</td><td>5000</td><td>21000</td></tr><tr><td>東京</td><td>2024</td><td>5500</td><td>21000</td></tr></tbody></table></div><div class="sample-note">LLM使用時は「年別合計」「全期間合計」のように意味の異なる名称を提案。LLM未使用時は既存列を「合計_1」等に機械的にリネームする</div></div>
+    </div>
+    <div class="flow-pane"><svg viewBox="90 0 750 582" xmlns="http://www.w3.org/2000/svg" class="flow-svg"><defs>
+  <marker id="arrowhead" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+    <polygon points="0 0, 9 4, 0 8" class="fc-arrow-head"/>
+  </marker>
+</defs><rect class="sh-terminal" x="110.0" y="18.0" width="340" height="64" rx="32.0"/><text x="280" y="56.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">新規生成列名の候補を入力</tspan></text>
+<line class="fc-arrow" x1="280" y1="82" x2="280" y2="140" marker-end="url(#arrowhead)"/>
+<polygon class="sh-decision" points="280,140.0 450.0,218.0 280,296.0 110.0,218.0"/><text x="280" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.5">候補名が既存列と</tspan><tspan x="280" dy="23">衝突するか？</tspan></text>
+<line class="fc-arrow" x1="450.0" y1="218.0" x2="500.0" y2="218.0" marker-end="url(#arrowhead)"/>
+<text x="475.0" y="202.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">No</text>
+<rect class="sh-process" x="500.0" y="180.0" width="320" height="76"/><text x="660" y="224.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="660" dy="-11.0">そのまま候補名を</tspan><tspan x="660" dy="22">採用</tspan></text>
+<line class="fc-arrow" x1="280" y1="296" x2="280" y2="354" marker-end="url(#arrowhead)"/>
+<text x="312" y="325.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic',sans-serif">Yes</text>
+<rect class="sh-process" x="120.0" y="354.0" width="320" height="76"/><text x="280" y="398.0" text-anchor="middle" font-size="14" font-weight="600" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="-11.0">LLM使用時は双方に意味の異なる</tspan><tspan x="280" dy="22">名称を提案。未使用時は既存列を機械的にリネーム</tspan></text>
+<line class="fc-arrow" x1="280" y1="430" x2="280" y2="488" marker-end="url(#arrowhead)"/>
+<rect class="sh-terminal" x="110.0" y="488.0" width="340" height="64" rx="32.0"/><text x="280" y="526.0" text-anchor="middle" font-size="14" font-weight="700" fill="#202020" font-family="'Yu Gothic','Hiragino Sans',sans-serif"><tspan x="280" dy="0.0">確定した列名で呼び出し元へ戻る</tspan></text>
 <g class="legend-grp">
 <rect class="sh-terminal" x="630" y="385" width="48" height="22" rx="11"/>
 <text x="692" y="402" font-size="14" font-weight="700" fill="var(--tx2)" font-family="'Yu Gothic',sans-serif">開始・終了</text>
