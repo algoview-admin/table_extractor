@@ -35,6 +35,7 @@ from .keywords import (
 from .step3_normalize_llm import (
     apply_transpose,
     detect_annotation_column_names,
+    detect_axis_group_position,
     detect_category_axis,
     detect_column_collision_rename,
     detect_dimension_axes,
@@ -961,6 +962,37 @@ def _is_agg_label(s: str) -> bool:
     return False
 
 
+def _agg_label_residual(s: str) -> Optional[str]:
+    """集計ラベルの判定に使ったキーワードを除いた接頭辞部分を返す。
+
+    _is_agg_label と同じ基準（完全一致・末尾一致・括弧注記除去後の再判定）で
+    集計ラベルと判定できる場合のみ値を返し、判定できなければ None を返す。
+    例: "合計" → ""（接頭辞なし、集計語そのもの）、"2023年合計" → "2023年"
+    remove_aggregates の列集計検出で、「合計」のような集計語そのものの列と
+    「2023年合計」のような接頭辞付き列を関連付けるために使う。
+    """
+    s = _normalize_label(str(s))
+    if not s:
+        return None
+    sl = s.lower()
+    if any(sl == kw.lower() for kw in AGG_KEYWORDS):
+        return ""
+    # 末尾一致するキーワードのうち最長のものを採用する。
+    # AGG_KEYWORDS には汎用的な短いキーワード（"計"）とより具体的な長い
+    # キーワード（"合計"）が混在しており、短い方を先に見つけて残りを切り出すと
+    # 「2023年合計」から誤って「2023年合」を残してしまう（"計"は"合計"の末尾
+    # 1文字にも一致するため）。
+    matched_kw_len = max(
+        (len(kw) for kw in AGG_KEYWORDS if sl.endswith(kw.lower())), default=None
+    )
+    if matched_kw_len is not None:
+        return s[: len(s) - matched_kw_len]
+    stripped = _TRAILING_BRACKET_RE.sub("", s).strip()
+    if stripped and stripped != s:
+        return _agg_label_residual(stripped)
+    return None
+
+
 def _detect_covariates(df: Any, cols: List[str]) -> Dict[str, set]:
     """一方が他方を一意に決定する列ペア（コード↔ラベルなど）を検出する。
 
@@ -1385,6 +1417,9 @@ def remove_aggregates(
     他の列が2列以上存在し、かつ行ごとの値がそれらの合計と一致する場合の
     みを実際の集計列とみなす。これにより、「現金給与総額」のように内訳列
     が存在しない単独指標が、列名だけを理由に誤って除去されることを防ぐ。
+    候補が集計語そのもの（接頭辞なし。例:「合計」）で上記の検証に失敗した
+    場合は、同じ集計語に接頭辞が付いた列（例:「2023年合計」）を内訳候補
+    として追加で試す（年別小計群→期間合計、のような構造に対応するため）。
     """
     agg_col_candidates = [col for col in all_value_cols if _is_agg_label(str(col))]
     removed_cols: List[str] = []
@@ -1397,7 +1432,25 @@ def remove_aggregates(
             and c not in agg_col_candidates
             and _agg_column_group_key(c) == group_key
         ]
-        if _is_column_sum_verified(df, cand, siblings):
+        verified = _is_column_sum_verified(df, cand, siblings)
+        if not verified and _agg_label_residual(str(cand)) == "":
+            """
+            候補列名が集計語そのもの（接頭辞なし。例:「合計」）の場合のみ、
+            同じ集計語に別の接頭辞が付いた列（例:「2023年合計」「2024年合計」）
+            も内訳候補として試す。この形の列は自身も agg_col_candidates に
+            含まれるため上の siblings では除外されているが、「年別小計群→
+            期間合計」のような構造ではこれらが真の内訳列であるため
+            （逆に接頭辞付き候補同士は関連づけない。無関係な集計列を偶然の
+            数値一致で内訳と誤認するリスクを避けるため、接頭辞なしの
+            「総合計」役の列からの参照時のみ許可する）。
+            """
+            prefixed_siblings = [
+                c
+                for c in agg_col_candidates
+                if c != cand and (_agg_label_residual(str(c)) or "") != ""
+            ]
+            verified = _is_column_sum_verified(df, cand, prefixed_siblings)
+        if verified:
             removed_cols.append(cand)
 
     value_cols: List[str] = [col for col in all_value_cols if col not in removed_cols]
@@ -4156,6 +4209,46 @@ def _resolve_stacking_collisions(
     return rename_map, collision_log
 
 
+def _split_labels_around_axis(
+    label_cols: List[str], anchor: Optional[str], position: Optional[str]
+) -> Tuple[List[str], List[str]]:
+    """label_cols を、集計軸列より前に残す列と後ろに回す列に分割する。
+
+    anchor/position が解決できない場合は全列を前に残す（集計軸・指標列を
+    全区分列の後ろに置く従来のデフォルト挙動）。先頭列は常に前側に残す
+    （anchor が先頭列かつ position="before" の場合は "after" に読み替える。
+    detect_axis_group_position 側でも同じ制約をプロンプトで指示しているが、
+    LLMの判定ミスに備えてここでも保険をかける）。
+    """
+    if not anchor or position not in ("before", "after") or anchor not in label_cols:
+        return list(label_cols), []
+    idx = label_cols.index(anchor)
+    if idx == 0 and position == "before":
+        position = "after"
+    split_at = idx if position == "before" else idx + 1
+    return list(label_cols[:split_at]), list(label_cols[split_at:])
+
+
+def _reorder_stacked_with_axis_position(
+    stacked: Any, before_labels: List[str], after_labels: List[str]
+) -> Any:
+    """stack_wide_to_long/stack_cross_table の出力列を、_split_labels_around_axis
+    の判定結果に従って並べ替える（集計軸・指標列のまとまりは元の並びを維持した
+    まま before_labels と after_labels の間に挿入する）。after_labels が空
+    （デフォルト挙動）の場合は並べ替えを行わない。
+    """
+    if not after_labels:
+        return stacked
+    label_set = set(before_labels) | set(after_labels)
+    axis_group_cols = [c for c in stacked.columns if c not in label_set]
+    ordered = (
+        [c for c in before_labels if c in stacked.columns]
+        + axis_group_cols
+        + [c for c in after_labels if c in stacked.columns]
+    )
+    return stacked[ordered]
+
+
 def _apply_cross_table_detection(
     t: Any,
     llm_client: Any,
@@ -4239,6 +4332,22 @@ def _apply_cross_table_detection(
         )
         if collision_log:
             wtl_info["collision_renames"] = collision_log
+        axis_position = detect_axis_group_position(
+            wtl_info["label_cols"], wtl_info.get("axis_var_name") or "",
+            list(wtl_info.get("indicators", [])), t.title, llm_client, llm_model,
+        )
+        before_labels, after_labels = _split_labels_around_axis(
+            wtl_info["label_cols"],
+            axis_position.get("anchor") if axis_position else None,
+            axis_position.get("position") if axis_position else None,
+        )
+        if after_labels:
+            wtl_info["axis_position"] = {
+                "anchor": axis_position.get("anchor"),
+                "position": axis_position.get("position"),
+                "naming_source": "llm",
+                "naming_reason": axis_position.get("reasoning", ""),
+            }
         t.wide_to_long_info = wtl_info
         stacked = stack_wide_to_long(t.df, wtl_info)
         if rename_map:
@@ -4248,6 +4357,7 @@ def _apply_cross_table_detection(
             agg_mask = stacked[axis_var_name].astype(str).apply(_is_agg_label)
             if agg_mask.any():
                 stacked = stacked[~agg_mask].reset_index(drop=True)
+        stacked = _reorder_stacked_with_axis_position(stacked, before_labels, after_labels)
         t.stacked_df = stacked
         return
 
@@ -4261,6 +4371,23 @@ def _apply_cross_table_detection(
         )
         if collision_log:
             info["collision_renames"] = collision_log
+        axis_position = detect_axis_group_position(
+            info["label_cols"], info.get("var_name") or "",
+            [n for n in [info.get("var_name"), info.get("value_name")] if n],
+            t.title, llm_client, llm_model,
+        )
+        before_labels, after_labels = _split_labels_around_axis(
+            info["label_cols"],
+            axis_position.get("anchor") if axis_position else None,
+            axis_position.get("position") if axis_position else None,
+        )
+        if after_labels:
+            info["axis_position"] = {
+                "anchor": axis_position.get("anchor"),
+                "position": axis_position.get("position"),
+                "naming_source": "llm",
+                "naming_reason": axis_position.get("reasoning", ""),
+            }
         t.stack_info = info
         stacked = stack_cross_table(t.df, info)
         if rename_map:
@@ -4270,6 +4397,7 @@ def _apply_cross_table_detection(
             agg_mask = stacked[var_name].astype(str).apply(_is_agg_label)
             if agg_mask.any():
                 stacked = stacked[~agg_mask].reset_index(drop=True)
+        stacked = _reorder_stacked_with_axis_position(stacked, before_labels, after_labels)
         t.stacked_df = stacked
 
 

@@ -1,5 +1,9 @@
 """Step3 決定論的パイプラインのテスト（C1〜C14、LLM不使用）。
 
+一部、列衝突検出機能がLLM命名成功時にのみ発生させる衝突を検証するテストは、
+実APIを呼ばずdetect_*関数をもっともらしい応答でスタブ化している
+（末尾の「LLM命名が成功した場合の統合テスト」セクション参照）。
+
 対応する実装チェックリスト（src/step3_normalize_determ.py）:
   C1.  多段ヘッダー単純統合（merge_header_rows）
   C2.  Pivot検出と変換
@@ -345,6 +349,62 @@ def test_remove_aggregates_integrity_check_pass_and_fail_causes():
     assert by_branch["福岡"]["cause"] == "内訳あり（未表示項目）"
 
 
+def test_remove_aggregates_detects_period_total_over_yearly_subtotal_columns():
+    """「2023年合計」等の年別小計と、無関係な「達成率」列が混在する表で、
+    接頭辞なしの「合計」列（年別小計の期間合計）が正しく除去されることを確認する。
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "支店": ["東京支店", "大阪支店"],
+            "2023年合計": [5000, 3000],
+            "2023年達成率": [105, 101],
+            "2024年合計": [5500, 3200],
+            "2024年達成率": [98, 96],
+            "合計": [10500, 6200],
+        }
+    )
+    cleaned, _, cols_removed, _, _, col_meta, _ = det.remove_aggregates(df)
+    assert cols_removed == ["合計"]
+    assert "合計" not in cleaned.columns
+    # 内訳列・無関係な達成率列はそのまま残る
+    assert set(cleaned.columns) == {"支店", "2023年合計", "2023年達成率", "2024年合計", "2024年達成率"}
+    assert {m["removed_column"] for m in col_meta} == {"合計"}
+
+
+def test_remove_aggregates_flat_breakdown_columns_still_detected():
+    """接頭辞なしの内訳列＋合計列という従来から動作していたパターンが
+    引き続き検出されることを確認する（回帰防止）。
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "地域": ["全社"],
+            "東京": [100],
+            "大阪": [80],
+            "福岡": [60],
+            "合計": [240],
+        }
+    )
+    cleaned, _, cols_removed, _, _, _, _ = det.remove_aggregates(df)
+    assert cols_removed == ["合計"]
+    assert set(cleaned.columns) == {"地域", "東京", "大阪", "福岡"}
+
+
+def test_remove_aggregates_keeps_standalone_indicator_without_breakdown():
+    """内訳列が存在しない単独指標は、列名が集計キーワードに一致しても
+    除去されないことを確認する（現金給与総額のようなケース）。
+    """
+    import pandas as pd
+
+    df = pd.DataFrame({"地域": ["東京", "大阪"], "現金給与総額": [500, 400]})
+    cleaned, _, cols_removed, _, _, _, _ = det.remove_aggregates(df)
+    assert cols_removed == []
+    assert "現金給与総額" in cleaned.columns
+
+
 # --- C11: 単位混在の分離 -----------------------------------------------------
 
 
@@ -587,6 +647,60 @@ def test_resolve_generated_column_names_ignores_replaced_source_column():
     assert renamed == {}
 
 
+def test_split_labels_around_axis_no_anchor_keeps_all_before():
+    # anchor/position が解決できない場合は全ラベル列を前側に残す
+    # （集計軸・指標列を全区分列の後ろに置く従来のデフォルト挙動）。
+    before, after = det._split_labels_around_axis(["支店", "合計"], None, None)
+    assert before == ["支店", "合計"]
+    assert after == []
+
+
+def test_split_labels_around_axis_splits_at_anchor():
+    before, after = det._split_labels_around_axis(["支店", "合計", "備考"], "合計", "before")
+    assert before == ["支店"]
+    assert after == ["合計", "備考"]
+
+    before, after = det._split_labels_around_axis(["支店", "合計", "備考"], "合計", "after")
+    assert before == ["支店", "合計"]
+    assert after == ["備考"]
+
+
+def test_split_labels_around_axis_keeps_first_column_before():
+    # 先頭列を anchor に position="before" が指定された場合は "after" に読み替え、
+    # 先頭列は必ず前側に残す（detect_axis_group_position のプロンプト制約への保険）。
+    before, after = det._split_labels_around_axis(["支店", "合計"], "支店", "before")
+    assert before == ["支店"]
+    assert after == ["合計"]
+
+
+def test_reorder_stacked_with_axis_position_moves_trailing_labels_after_axis_group():
+    import pandas as pd
+
+    stacked = pd.DataFrame(
+        {"支店": ["東京"], "合計_1": [21800], "年": ["2023年"], "合計": [5000], "達成率": [105]}
+    )
+    reordered = det._reorder_stacked_with_axis_position(stacked, ["支店"], ["合計_1"])
+    assert list(reordered.columns) == ["支店", "年", "合計", "達成率", "合計_1"]
+
+
+def test_reorder_stacked_with_axis_position_noop_when_no_trailing_labels():
+    import pandas as pd
+
+    stacked = pd.DataFrame({"支店": ["東京"], "合計_1": [21800], "年": ["2023年"], "合計": [5000]})
+    reordered = det._reorder_stacked_with_axis_position(stacked, ["支店", "合計_1"], [])
+    assert reordered is stacked
+
+
+def test_wide_to_long_collision_without_llm_keeps_default_column_order():
+    # client未指定（LLMなし）の場合、集計軸・指標列の挿入位置判定は行われず、
+    # 従来通り「全ラベル列 → 軸列 → 指標列」の順序が維持されることを確認する
+    # （detect_axis_group_position が None を返すフォールバック経路の回帰防止）。
+    t = _table("step3_column_collision_test.xlsx", "Wide_to_long衝突")
+    det._apply_cross_table_detection(t, None, None, "step3_column_collision_test.xlsx", {})
+    assert "axis_position" not in t.wide_to_long_info
+    assert list(t.stacked_df.columns) == ["合計_1", "年", "合計", "件数"]
+
+
 def test_wide_to_long_collision_preserves_both_columns_without_llm():
     # 実データ相当: 既存の「合計」列とWide_to_long指標「合計」が衝突する
     # ケースで、client未指定（LLMなし）でも双方のデータが失われないことを
@@ -605,6 +719,118 @@ def test_wide_to_long_collision_preserves_both_columns_without_llm():
     # 既存列（合計_1）の値は元の300のまま、指標列（合計）は年ごとの値を保持
     assert (stacked["合計_1"] == 300).all()
     assert sorted(stacked["合計"].tolist()) == [120, 180]
+
+
+# --- 列衝突検出機能: LLM命名が成功した場合の統合テスト（LLM応答をスタブ化） ----
+#
+# 括弧書き注釈の分離・階層圧縮カラムの展開は、新規カラム名の決定自体をLLMに
+# 委ねており決定論的フォールバックが無い（前者）、またはフォールバック名が
+# 常に元カラム名を接頭辞に持つため既存列と偶然衝突しない設計になっている
+# （後者）。そのため、この2機能の列衝突検出は実際にLLMが命名に成功した
+# 場合の経路でしか発生せず、上記の「client未指定」テストでは検証できない。
+# 実APIは呼ばず、detect_annotation_column_names/detect_hierarchy_level_names/
+# detect_column_collision_rename をもっともらしい応答でスタブ化し、
+# 衝突解決（既存列の退避リネーム・データの完全な保持）が正しく動くことを
+# 確認する。
+
+
+def test_wide_to_long_collision_uses_llm_naming(monkeypatch):
+    # Wide_to_long/クロス集計自体（軸名解決）は既存フィクスチャのまま辞書命名
+    # （LLM不使用）で発火するが、列衝突検出機能の衝突解決はclientの有無で
+    # 独立して分岐する。client指定時にLLM命名パス（naming_source="llm"）が
+    # 正しく使われることを確認する。
+    t = _table("step3_column_collision_test.xlsx", "Wide_to_long衝突")
+
+    def stub_collision(colliding_name, axis_var_name, title, client, model, new_col_context_override=None):
+        return {"existing_name": "全期間累計", "new_name": "年別合計", "reasoning": "スタブ: 既存は全期間累計、新規は年別内訳"}
+
+    monkeypatch.setattr(det, "detect_column_collision_rename", stub_collision)
+    det._apply_cross_table_detection(t, object(), "stub", "step3_column_collision_test.xlsx", {})
+
+    collisions = t.wide_to_long_info.get("collision_renames")
+    assert collisions and collisions[0]["naming_source"] == "llm"
+    assert collisions[0]["existing_new_name"] == "全期間累計"
+    assert collisions[0]["new_col_final_name"] == "年別合計"
+
+    stacked = t.stacked_df
+    assert set(stacked.columns) == {"全期間累計", "年", "年別合計", "件数"}
+    assert (stacked["全期間累計"] == 300).all()
+    assert sorted(stacked["年別合計"].tolist()) == [120, 180]
+
+
+def test_cross_table_collision_uses_llm_naming(monkeypatch):
+    t = _table("step3_column_collision_test.xlsx", "クロス集計衝突")
+
+    def stub_collision(colliding_name, axis_var_name, title, client, model, new_col_context_override=None):
+        return {"existing_name": "基準年度", "new_name": "対象年", "reasoning": "スタブ: 既存は基準年度、新規は縦持ち化した対象年"}
+
+    monkeypatch.setattr(det, "detect_column_collision_rename", stub_collision)
+    det._apply_cross_table_detection(t, object(), "stub", "step3_column_collision_test.xlsx", {})
+
+    collisions = t.stack_info.get("collision_renames")
+    assert collisions and collisions[0]["naming_source"] == "llm"
+    assert collisions[0]["existing_new_name"] == "基準年度"
+    assert collisions[0]["new_col_final_name"] == "対象年"
+
+    stacked = t.stacked_df
+    assert set(stacked.columns) == {"基準年度", "対象年", "値"}
+    assert (stacked["基準年度"] == "基準年").all()
+    assert sorted(stacked["値"].tolist()) == [100, 120, 140]
+
+
+def test_apply_paren_annotations_collision_preserves_both_columns(monkeypatch):
+    t = _table("step3_column_collision_test.xlsx", "括弧注釈衝突")
+
+    def stub_names(candidates, title, client, model, existing_columns=None):
+        return [{**c, "new_col": "拠点種別", "reasoning": "スタブ: 拠点の所在区分"} for c in candidates]
+
+    def stub_collision(colliding_name, axis_var_name, title, client, model, new_col_context_override=None):
+        return {"existing_name": "運営形態", "new_name": "拠点区分", "reasoning": "スタブ: 既存は運営形態、新規は所在区分"}
+
+    monkeypatch.setattr(det, "detect_annotation_column_names", stub_names)
+    monkeypatch.setattr(det, "detect_column_collision_rename", stub_collision)
+
+    new_tables = []
+    det._apply_post_pivot_pipeline(
+        t, t.df, pivot_fired=False, llm_client=object(), llm_model="stub", new_tables=new_tables
+    )
+
+    assert set(t.df.columns) == {"拠点", "拠点区分", "運営形態", "売上"}
+    collisions = t.paren_split_info.get("collision_renames")
+    assert collisions and collisions[0]["original_name"] == "拠点種別"
+    assert collisions[0]["existing_new_name"] == "運営形態"
+    assert collisions[0]["new_col_final_name"] == "拠点区分"
+    # 既存列（運営形態）の値は元の直営/代理店のまま、新規列（拠点区分）は括弧内の値を保持
+    assert t.df["運営形態"].tolist() == ["直営", "代理店"]
+    assert t.df["拠点区分"].tolist() == ["本社", "支社"]
+
+
+def test_expand_hierarchy_column_collision_preserves_both_columns(monkeypatch):
+    t = _table("step3_column_collision_test.xlsx", "階層圧縮衝突")
+
+    def stub_levels(source_col, depth, sample_paths, title, client, model, existing_columns=None):
+        return (["地域", "支社"], "スタブ")
+
+    def stub_collision(colliding_name, axis_var_name, title, client, model, new_col_context_override=None):
+        return {"existing_name": "営業エリア", "new_name": "地域", "reasoning": "スタブ: 既存は営業エリア、新規は組織階層上の地域"}
+
+    monkeypatch.setattr(det, "detect_hierarchy_level_names", stub_levels)
+    monkeypatch.setattr(det, "detect_column_collision_rename", stub_collision)
+
+    new_tables = []
+    det._apply_post_pivot_pipeline(
+        t, t.df, pivot_fired=False, llm_client=object(), llm_model="stub", new_tables=new_tables
+    )
+
+    assert set(t.df.columns) == {"地域", "支社", "営業エリア", "売上"}
+    collisions = t.hier_expand_detection.get("collision_renames")
+    assert collisions and collisions[0]["original_name"] == "地域"
+    assert collisions[0]["existing_new_name"] == "営業エリア"
+    assert collisions[0]["new_col_final_name"] == "地域"
+    # 既存列（営業エリア）の値は元の首都圏/関西圏のまま保持される
+    assert set(t.df["営業エリア"]) == {"首都圏", "関西圏"}
+    # 新規列（地域）は組織階層の最上位レベルの値を保持する
+    assert set(t.df["地域"]) == {"東日本", "西日本"}
 
 
 def test_cross_table_collision_preserves_both_columns_without_llm():

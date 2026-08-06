@@ -1413,6 +1413,26 @@ def _collision_warning_html(collision_renames: Optional[List[Dict[str, Any]]]) -
     return "".join(lines)
 
 
+def _axis_position_note_html(axis_position: Optional[Dict[str, Any]]) -> str:
+    """Wide_to_long/クロス集計: 集計軸・指標列の挿入位置判定（detect_axis_group_position、
+    src/step3_normalize_determ.py 参照）の結果、既定（全ラベル列の直後に挿入）から
+    位置が変更された場合のみ注記を表示する。"""
+    if not axis_position:
+        return ""
+    anchor = _html.escape(str(axis_position.get("anchor") or ""))
+    position = axis_position.get("position")
+    naming = _naming_provenance_label(
+        axis_position.get("naming_source"), axis_position.get("naming_reason")
+    )
+    where = f"「{anchor}」の{'前' if position == 'before' else '後ろ'}"
+    return (
+        "<div style='margin:4px 0 10px;padding:6px 10px;background:rgba(56,189,248,0.10);"
+        "border:1px solid rgba(56,189,248,0.35);border-radius:4px;font-size:13px'>"
+        f"📍 集計軸・指標列の挿入位置を調整: {where}に配置（{naming}）"
+        "</div>"
+    )
+
+
 def _render_fill_cols_body(t: "DetectedTable") -> None:
     """グルーピング列 ffill の詳細（Streamlit ウィジェット版）。"""
     pre = t.pre_fill_df
@@ -1627,6 +1647,7 @@ def _render_stack_body(t: "DetectedTable") -> None:
         )
 
     st.markdown(_collision_warning_html(collision_renames), unsafe_allow_html=True)
+    st.markdown(_axis_position_note_html(info.get("axis_position")), unsafe_allow_html=True)
     st.markdown(
         "<div style='margin:4px 0 12px;line-height:2'>"
         + "<br>".join(meta_lines)
@@ -1705,6 +1726,7 @@ def _render_stack_body_html(t: "DetectedTable") -> str:
     year_line = f"<br>年コンテキスト: <b>{year_ctx}年</b>" if year_ctx else ""
     meta_html = (
         _collision_warning_html(collision_renames) +
+        _axis_position_note_html(info.get("axis_position")) +
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"ラベル列: {label_html}<br>"
         f"時系列カラム: {time_html}（計 {len(time_cols)} 列）<br>"
@@ -1871,6 +1893,7 @@ def _render_wide_to_long_body(t: "DetectedTable") -> None:
     ]
 
     st.markdown(_collision_warning_html(collision_renames), unsafe_allow_html=True)
+    st.markdown(_axis_position_note_html(info.get("axis_position")), unsafe_allow_html=True)
     st.markdown(
         "<div style='margin:4px 0 12px;line-height:2'>"
         + "<br>".join(meta_lines)
@@ -1941,6 +1964,7 @@ def _render_wide_to_long_body_html(t: "DetectedTable") -> str:
     collision_renames = info.get("collision_renames")
     meta_html = (
         _collision_warning_html(collision_renames) +
+        _axis_position_note_html(info.get("axis_position")) +
         f"<div style='margin:4px 0 12px;line-height:2'>"
         f"ラベル列: {label_html}<br>"
         f"検出された指標: {indicator_html}（計 {len(indicators)} 種類）<br>"

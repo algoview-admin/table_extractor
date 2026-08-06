@@ -219,3 +219,29 @@ def test_resolve_column_collision_uses_llm_when_available(llm_client):
     if source == "llm":
         assert existing_new is not None and existing_new != "合計"
         assert new_final != "合計"
+
+
+# --- Wide_to_long/クロス集計: 集計軸列・指標列の挿入位置判定（LLM） -----------
+
+
+def test_detect_axis_group_position(llm_client):
+    client, model = llm_client
+    # 「全期間累計」は軸（年）と無関係な値のため、軸・指標列より後ろに
+    # 置くのが自然、というケース。
+    result = llm.detect_axis_group_position(
+        ["支店", "全期間累計"], "年", ["年別合計", "達成率"], None, client, model,
+    )
+    assert result is not None
+    assert result["anchor"] in ("支店", "全期間累計", None)
+    assert result["position"] in ("before", "after", None)
+    if result["anchor"] == "支店":
+        assert result["position"] == "after"
+
+
+def test_detect_axis_group_position_returns_none_without_client():
+    assert llm.detect_axis_group_position(["支店", "合計"], "年", ["値"], None, None, "") is None
+
+
+def test_detect_axis_group_position_returns_none_with_single_label(llm_client):
+    client, model = llm_client
+    assert llm.detect_axis_group_position(["支店"], "年", ["値"], None, client, model) is None

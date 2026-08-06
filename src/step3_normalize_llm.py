@@ -756,6 +756,106 @@ def extract_external_metadata(
 
 
 # ---------------------------------------------------------------------------
+# Wide_to_long/クロス集計: 集計軸列・指標列の挿入位置判定
+# ---------------------------------------------------------------------------
+#
+# stack_wide_to_long/stack_cross_table は、区分列（label_cols）＋集計軸列＋
+# 指標列という構造で縦持ち表を組み立てる。区分列の中に、集計軸の各水準とは
+# 無関係に表全体で意味を持つ値（列衝突検出機能で退避リネームされた
+# 「全期間累計」のような列など）が混ざっている場合、それを集計軸・指標列の
+# 手前に置くより後ろ（値に近い位置）に置く方が自然な場合がある。
+# extract_external_metadata の anchor/position 判定と同じ考え方で、
+# LLMに区分列のどこを境に集計軸・指標列を挿入すべきか判定させる。
+
+_AXIS_POSITION_SYSTEM_PROMPT = """あなたは表データ構造の分析専門家です。
+横持ち表を縦持ちに変換する際に新たに生成される集計軸列・指標列を、既存の
+区分列のどの位置に挿入すべきか判定して、指定された JSON 形式のみで
+回答してください（説明文は不要）。"""
+
+_AXIS_POSITION_USER_PROMPT = """以下の表を縦持ちに変換します。新たに生成される
+集計軸列（および指標列）を、既存の区分列のどの位置に挿入すべきか判定して
+ください。
+
+{title_line}既存の区分列（変換後も残る列。左→右の順）: {label_cols}
+新たに生成される集計軸列: {axis_name}
+新たに生成される指標列: {indicator_names}
+
+集計軸列・指標列は必ず連続したまとまりとして挿入されます（分割して挿入する
+ことはできません）。
+
+区分列の中に、集計軸の各水準（{axis_name}の値）とは無関係に表全体で意味を
+持つ値（例: 軸をまたいだ全期間の累計・総合計のような値）が含まれる場合、
+その列は集計軸・指標列より右側（値に近い位置）に置く方が自然です。それ以外の、
+行を一意に識別するための区分列（例: 支店名・商品名）は、集計軸より左側に
+残してください。
+
+区分列のうち、どの列を境に集計軸・指標列を挿入すべきか、anchor（隣接させる
+区分列名）と position（"before"=その列の左に挿入／"after"=その列の右に挿入）
+で答えてください。区分列の先頭列は常に一番左を維持し、先頭列を anchor に
+position="before" を指定してはいけません。
+判断に迷う場合、または区分列がすべて行の識別用（軸と無関係な値が無い）場合は
+anchor=null, position=null としてください（この場合は全区分列の直後に
+集計軸・指標列が挿入されます＝現状のデフォルト）。
+
+JSON形式で回答してください:
+{{"anchor": "区分列名またはnull", "position": "before または after または null", "reasoning": "判断理由（日本語、1〜2文）"}}"""
+
+
+def detect_axis_group_position(
+    label_cols: List[str],
+    axis_name: str,
+    indicator_names: List[str],
+    title: Optional[str],
+    client: Any,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """Wide_to_long/クロス集計が生成する集計軸列(+指標列)を、区分列のどの
+    位置に挿入すべきかを LLM で判定する。
+
+    label_cols が2列未満（判断の余地がない）、または client 未指定の場合は
+    LLM を呼ばず None を返す（呼び出し側は全区分列の後ろに軸列を挿入する
+    デフォルト挙動にフォールバックする）。
+    ネットワークエラー・JSON パース失敗等は握りつぶして None を返し、
+    1テーブルの失敗が検出処理全体を落とさないようにする。
+
+    Returns:
+      判定できた場合: {"anchor": Optional[str], "position": Optional["before"|"after"],
+        "reasoning": str}
+      判定不能な場合: None
+    """
+    if client is None or len(label_cols) < 2:
+        return None
+
+    title_line = f"表タイトル: {title}\n" if title else ""
+    messages = [
+        {"role": "system", "content": _AXIS_POSITION_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _AXIS_POSITION_USER_PROMPT.format(
+                title_line=title_line,
+                label_cols=[str(c) for c in label_cols],
+                axis_name=axis_name,
+                indicator_names=[str(c) for c in indicator_names],
+            ),
+        },
+    ]
+    try:
+        content = _call_transpose_api(client, model, messages)
+        raw = json.loads(content)
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    anchor_raw = raw.get("anchor")
+    anchor = anchor_raw.strip() if isinstance(anchor_raw, str) and anchor_raw.strip() else None
+    position = raw.get("position") if raw.get("position") in ("before", "after") else None
+    if anchor not in label_cols or position is None:
+        anchor, position = None, None
+    return {"anchor": anchor, "position": position, "reasoning": str(raw.get("reasoning") or "")}
+
+
+# ---------------------------------------------------------------------------
 # 括弧書き注釈の分離（命名・妥当性判定）
 # ---------------------------------------------------------------------------
 #
